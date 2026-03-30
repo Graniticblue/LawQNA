@@ -1,0 +1,24 @@
+# 환경변수 (API 키)
+.env
+
+# ChromaDB 바이너리 (재생성 가능)
+data/chroma_db/
+
+# 대용량 원본 데이터 (Git LFS 또는 별도 관리)
+seoul_reasoning_v6_with_original.jsonl
+data/qa_report.pdf
+data/qa_report.html
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Claude Code 로컬 설정
+.claude/settings.local.json
+
+# 임시 출력 파일
+*.txt
+!prompt.md
