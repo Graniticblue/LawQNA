@@ -706,17 +706,6 @@ else:
 
 # ── 입력 영역 ────────────────────────────────────────────────
 
-# 예시 칩
-st.markdown('<div style="margin-bottom:4px">', unsafe_allow_html=True)
-chip_cols = st.columns(len(EXAMPLES))
-for col, ex in zip(chip_cols, EXAMPLES):
-    with col:
-        st.markdown('<div class="chip-btn">', unsafe_allow_html=True)
-        if st.button(ex, key=f"chip_{ex[:10]}", use_container_width=True):
-            st.session_state.pending_query = ex
-            st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-st.markdown('</div>', unsafe_allow_html=True)
 
 # 입력 폼
 with st.container():
