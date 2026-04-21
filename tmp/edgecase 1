@@ -1,0 +1,5 @@
+{"id": "CASE_001", "category": "Legal_Interpretation_Conflict", "issue": "주택법 시행령 제16조 제1항 제2호의 '저당권등의 권리자'에 저당권부 채권 가압류권자가 포함되는지 여부", "conflict_type": "Civil_Law_Logic_vs_Public_Law_Policy"}
+{"id": "CASE_001", "subject": "Problem_Analysis", "user_logic": "가압류권자는 채권자일 뿐 대지에 대한 물권자가 아님. 따라서 문언상 '저당권등의 권리자'에 해당하지 않음 (범주 오류)", "moleg_logic": "저당권 말소 시 가압류권자의 승낙이 필수적이므로 실질적 통제권을 가짐. 입주자 보호를 위해 범위를 넓게 해석해야 함 (실질적 위험 관리)"}
+{"id": "CASE_001", "subject": "Cause_Analysis", "primary_cause": "사법(민법)의 '권리 형식주의'와 공법(주택법)의 '결과 책임주의' 간의 우선순위 차이", "secondary_cause": "부동산등기법상 부기등기된 가압류권자의 승낙 없이는 주등기(저당권) 말소가 불가능하다는 실무적 절차의 구속성"}
+{"id": "CASE_001", "subject": "AI_Logic_Strategy", "recommendation": "규제 검토 AI는 '보수적 판정'을 기본값으로 설정해야 함. 논리적 오류가 있더라도 행정청의 해석(법제처)을 우선 반영하되, 사용자에게는 '민법상 쟁점 소지 있음'을 주석으로 제공할 것"}
+{"id": "CASE_001", "subject": "Key_Keywords", "tags": ["주택법", "공동사업주체", "저당권부채권가압류", "설권적처분", "부기등기", "입주예정자보호"]}

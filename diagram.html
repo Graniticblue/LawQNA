@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>건축법규 RAG 시스템 구조도</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Pretendard', -apple-system, sans-serif;
+    background: #0f1117;
+    color: #e0e0e0;
+    min-height: 100vh;
+    padding: 32px;
+  }
+  h1 {
+    text-align: center;
+    font-size: 18px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 32px;
+    letter-spacing: -0.5px;
+  }
+
+  /* ── 전체 레이아웃 ── */
+  .diagram {
+    display: grid;
+    grid-template-columns: 220px 40px 220px 40px 260px 40px 320px;
+    grid-template-rows: auto;
+    gap: 0;
+    align-items: start;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  /* ── 컬럼 헤더 ── */
+  .col-header {
+    text-align: center;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 6px 10px;
+    border-radius: 6px;
+    margin-bottom: 12px;
+  }
+  .ch-raw    { background: #1e2a1a; color: #6fcf6f; }
+  .ch-idx    { background: #1a1f2e; color: #6aacff; }
+  .ch-ret    { background: #1e1a2e; color: #b06aff; }
+  .ch-out    { background: #2e1a1a; color: #ff8a6a; }
+  .arrow-col { display: flex; align-items: flex-start; justify-content: center; padding-top: 36px; }
+
+  /* ── 노드 박스 ── */
+  .node {
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    font-size: 12px;
+    line-height: 1.5;
+    position: relative;
+  }
+  .node-title {
+    font-weight: 700;
+    font-size: 11px;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .node-body {
+    font-size: 11px;
+    color: #aaa;
+    line-height: 1.6;
+  }
+  .node-body span { color: #ccc; }
+
+  /* 색상별 노드 */
+  .n-file   { background: #1a2418; border: 1px solid #3a5c30; }
+  .n-file .node-title { color: #7ed96b; }
+  .n-script { background: #1e2030; border: 1px solid #3a4a70; }
+  .n-script .node-title { color: #7aa8f0; }
+  .n-db     { background: #1e1830; border: 1px solid #4a3a70; }
+  .n-db .node-title { color: #b07af0; }
+  .n-claude { background: #2a1818; border: 1px solid #6a3030; }
+  .n-claude .node-title { color: #f07a7a; }
+  .n-out    { background: #1e2818; border: 1px solid #3a6040; }
+  .n-out .node-title { color: #7af0aa; }
+  .n-warn   { background: #2a2010; border: 1px dashed #6a5020; }
+  .n-warn .node-title { color: #f0c060; }
+
+  /* ── 배지 ── */
+  .badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    margin: 1px 2px 1px 0;
+  }
+  .b-green  { background: #1a3a1a; color: #7ed96b; border: 1px solid #3a6a30; }
+  .b-blue   { background: #1a2a3a; color: #7aaaf0; border: 1px solid #2a4a6a; }
+  .b-purple { background: #2a1a3a; color: #c07af0; border: 1px solid #4a2a6a; }
+  .b-red    { background: #3a1a1a; color: #f07a7a; border: 1px solid #6a2a2a; }
+  .b-orange { background: #3a2a0a; color: #f0b060; border: 1px solid #6a4a1a; }
+  .b-gray   { background: #252525; color: #888; border: 1px solid #444; }
+
+  /* ── 화살표 ── */
+  .arrow-down {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin: 2px 0;
+    gap: 2px;
+  }
+  .arrow-down .line { width: 2px; height: 12px; background: #444; }
+  .arrow-down .head { width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid #444; }
+  .arrow-right {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    height: 100%;
+    justify-content: center;
+  }
+  .arrow-right .line { height: 2px; width: 20px; background: #555; }
+  .arrow-right .head { width: 0; height: 0;
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+    border-left: 7px solid #555; }
+  .arrow-dashed .line { background: transparent;
+    border-top: 2px dashed #444; width: 20px; height: 0; }
+
+  /* ── 섹션 분리선 ── */
+  .section-divider {
+    grid-column: 1 / -1;
+    height: 1px;
+    background: #2a2a2a;
+    margin: 20px 0;
+  }
+
+  /* ── 쿼리 파이프라인 풀 너비 ── */
+  .pipeline-section {
+    grid-column: 1 / -1;
+    margin-top: 8px;
+  }
+  .pipeline-header {
+    text-align: center;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #f0b060;
+    background: #2a1e0a;
+    border-radius: 6px;
+    padding: 6px 12px;
+    margin-bottom: 16px;
+    display: inline-block;
+  }
+  .pipeline-row {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    margin-bottom: 8px;
+  }
+  .p-node {
+    flex: 1;
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 11px;
+    min-width: 0;
+  }
+  .p-arrow {
+    display: flex;
+    align-items: center;
+    padding: 0 4px;
+    flex-shrink: 0;
+  }
+  .p-arrow svg { display: block; }
+
+  /* Pass 박스 */
+  .pass1-box { background: #1e1e2e; border: 1.5px solid #4a4a8a; }
+  .pass1-box .p-title { color: #a0a0f0; font-weight: 700; font-size: 12px; margin-bottom: 6px; }
+  .ret-box   { background: #1e1a30; border: 1.5px solid #5a3a8a; }
+  .ret-box .p-title { color: #c07af0; font-weight: 700; font-size: 12px; margin-bottom: 6px; }
+  .pass2-box { background: #2a1818; border: 1.5px solid #8a3a3a; }
+  .pass2-box .p-title { color: #f08080; font-weight: 700; font-size: 12px; margin-bottom: 6px; }
+  .out-box   { background: #182818; border: 1.5px solid #3a7a4a; }
+  .out-box .p-title { color: #70e090; font-weight: 700; font-size: 12px; margin-bottom: 6px; }
+
+  .track { padding: 5px 8px; border-radius: 6px; margin-bottom: 4px; font-size: 11px; }
+  .t1 { background: #1a2a3a; color: #88bbff; }
+  .t2 { background: #1a2a1a; color: #88dd88; }
+  .t3 { background: #2a1a2a; color: #dd88ff; }
+  .t4 { background: #2a2a1a; color: #ffcc66; }
+
+  .result-row { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .result-pill {
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .rp-green  { background: #1a3a20; color: #70e090; border: 1px solid #2a6a30; }
+  .rp-yellow { background: #2a2a10; color: #f0cc60; border: 1px solid #5a5a20; }
+  .rp-red    { background: #2a1a1a; color: #f08080; border: 1px solid #6a2a2a; }
+
+  .q-box {
+    background: #1e2830;
+    border: 1.5px solid #3a5a7a;
+    border-radius: 10px;
+    padding: 10px 16px;
+    margin-bottom: 12px;
+    font-size: 13px;
+    color: #88bbff;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .mini-col { display: flex; flex-direction: column; gap: 4px; }
+  .mini-node {
+    background: #1a1a2a;
+    border: 1px solid #3a3a5a;
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 10px;
+    color: #8888cc;
+  }
+
+  .db-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: #1a1a2a;
+    border: 1px solid #3a3a6a;
+    border-radius: 6px;
+    padding: 3px 7px;
+    font-size: 10px;
+    color: #a0a0e0;
+    margin: 2px;
+  }
+
+  .gap-note {
+    background: #2a1a08;
+    border: 1px dashed #6a4a18;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 10px;
+    color: #c09040;
+    margin-top: 4px;
+  }
+</style>
+</head>
+<body>
+
+<h1>🏛 건축법규 RAG 시스템 — 판단 구조 & 데이터 흐름</h1>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- 상단: 데이터 구축 파이프라인 -->
+<!-- ══════════════════════════════════════════════ -->
+
+<div class="diagram">
+
+  <!-- 컬럼 헤더 -->
+  <div class="col-header ch-raw">① 원시 데이터</div>
+  <div></div>
+  <div class="col-header ch-idx">② 전처리 스크립트</div>
+  <div></div>
+  <div class="col-header ch-idx">③ 구조화 데이터</div>
+  <div></div>
+  <div class="col-header ch-ret">④ 벡터 인덱스 (ChromaDB)</div>
+
+  <!-- Row: PDF -->
+  <div>
+    <div class="node n-file">
+      <div class="node-title">📄 서울시 질의회신집.pdf</div>
+      <div class="node-body">서울특별시 건축법·건축조례<br>질의회신집 (수천 건)</div>
+    </div>
+  </div>
+  <div class="arrow-col">
+    <div class="arrow-right"><div class="line"></div><div class="head"></div></div>
+  </div>
+  <div>
+    <div class="node n-script">
+      <div class="node-title">⚙ 00_PDF_QA_Extractor.py</div>
+      <div class="node-body">질문/답변 추출<br><span>→ extracted_qa.jsonl</span></div>
+    </div>
+    <div class="arrow-down"><div class="line"></div><div class="head"></div></div>
+    <div class="node n-script">
+      <div class="node-title">⚙ split_multi_question.py</div>
+      <div class="node-body">복수 질문 분리<br><span>→ clean_single.jsonl</span></div>
+    </div>
+    <div class="arrow-down"><div class="line"></div><div class="head"></div></div>
+    <div class="node n-script">
+      <div class="node-title">⚙ label_relation_type.py</div>
+      <div class="node-body">관계유형 라벨링<br><span>→ labeled.jsonl</span></div>
+    </div>
+    <div class="arrow-down"><div class="line"></div><div class="head"></div></div>
+    <div class="node n-script">
+      <div class="node-title">⚙ enrich_labeled.py</div>
+      <div class="node-body">doc_ref 매칭<br><span>→ labeled_with_doc.jsonl</span></div>
+    </div>
+  </div>
+  <div class="arrow-col" style="padding-top:160px">
+    <div class="arrow-right"><div class="line"></div><div class="head"></div></div>
+  </div>
+  <div style="padding-top:120px">
+    <div class="node n-file">
+      <div class="node-title">📋 labeled_with_doc.jsonl</div>
+      <div class="node-body">
+        <span class="badge b-green">question</span>
+        <span class="badge b-blue">final_answer</span><br>
+        <span class="badge b-purple">relation_type</span>
+        <span class="badge b-orange">doc_ref</span><br>
+        <span class="badge b-gray">doc_agency / doc_date</span><br>
+        ~1,888건
+      </div>
+    </div>
+  </div>
+  <div class="arrow-col" style="padding-top:150px">
+    <div class="arrow-right"><div class="line"></div><div class="head"></div></div>
+  </div>
+  <div style="padding-top:100px">
+    <div class="node n-db">
+      <div class="node-title">🗄 qa_precedents</div>
+      <div class="node-body">
+        임베딩: ko-sroberta-multitask<br>
+        메타: question / answer_head<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;doc_ref / doc_agency<br>
+        검색: vector (min 0.60)<br>
+        <br>
+        <span class="badge b-purple">~1,888 벡터</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row: 법령 API -->
+  <div style="margin-top:20px">
+    <div class="node n-file">
+      <div class="node-title">🌐 법제처 Open API</div>
+      <div class="node-body">law.go.kr DRF<br>target=law<br>LAW_API_KEY</div>
+    </div>
+  </div>
+  <div class="arrow-col" style="padding-top:20px">
+    <div class="arrow-right"><div class="line"></div><div class="head"></div></div>
+  </div>
+  <div style="margin-top:20px">
+    <div class="node n-script">
+      <div class="node-title">⚙ law_api_fetcher.py</div>
+      <div class="node-body">법령 전문 캐시<br>TTL 30일<br><span>→ data/law_cache/</span></div>
+    </div>
+    <div class="arrow-down"><div class="line"></div><div class="head"></div></div>
+    <div class="node n-script">
+      <div class="node-title">⚙ 02_Indexer_BASE.py</div>
+      <div class="node-body">법령 조문 파싱·청킹<br>임베딩 생성<br>ChromaDB 저장</div>
+    </div>
+  </div>
+  <div class="arrow-col" style="padding-top:80px">
+    <div class="arrow-right"><div class="line"></div><div class="head"></div></div>
+  </div>
+  <div style="margin-top:20px">
+    <div class="node n-file">
+      <div class="node-title">📋 법령 조문 데이터</div>
+      <div class="node-body">
+        건축법 / 건축법 시행령<br>
+        건축법 시행규칙 / 별표<br>
+        주택법 / 도시계획법 등
+      </div>
+    </div>
+  </div>
+  <div class="arrow-col" style="padding-top:50px">
+    <div class="arrow-right"><div class="line"></div><div class="head"></div></div>
+  </div>
+  <div style="margin-top:20px">
+    <div class="node n-db">
+      <div class="node-title">🗄 law_articles</div>
+      <div class="node-body">
+        임베딩: ko-sroberta-multitask<br>
+        메타: law_name / article_no<br>
+        검색: vector + BM25 → RRF<br>
+        <span class="badge b-blue">조문 전문</span>
+      </div>
+    </div>
+    <div style="margin-top:8px">
+    <div class="node n-warn">
+      <div class="node-title">⚠ court_cases</div>
+      <div class="node-body">판례 컬렉션 — 미구축<br>현재 검색 결과 없음</div>
+    </div>
+    </div>
+  </div>
+
+  <!-- 라우팅 보조 -->
+  <div style="margin-top:20px">
+    <div class="node n-file">
+      <div class="node-title">🗺 라우팅 보조 데이터</div>
+      <div class="node-body">
+        keyword_law_map.json<br>
+        &nbsp;키워드 → 법령명 매핑<br><br>
+        article_graph.json<br>
+        &nbsp;조문 간 참조 그래프
+      </div>
+    </div>
+  </div>
+  <div></div>
+  <div></div>
+  <div></div>
+  <div></div>
+  <div></div>
+  <div></div>
+
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- 구분선 -->
+<!-- ══════════════════════════════════════════════ -->
+<div style="max-width:1400px;margin:28px auto;border-top:1px solid #2a2a2a;position:relative;">
+  <div style="position:absolute;top:-10px;left:50%;transform:translateX(-50%);background:#0f1117;padding:0 16px;font-size:11px;color:#666;letter-spacing:0.1em;text-transform:uppercase;">Query Pipeline</div>
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- 하단: 쿼리 파이프라인 -->
+<!-- ══════════════════════════════════════════════ -->
+<div style="max-width:1400px;margin:0 auto;">
+
+  <!-- 사용자 질문 -->
+  <div class="q-box">
+    👤 사용자 질문 입력
+    <span style="font-size:11px;font-weight:400;color:#668;margin-left:auto">app.py (Streamlit)</span>
+  </div>
+
+  <!-- 파이프라인 메인 행 -->
+  <div class="pipeline-row">
+
+    <!-- Pass 1 -->
+    <div class="p-node pass1-box">
+      <div class="p-title">Pass 1 · Claude</div>
+      <div class="track t1">① 핵심 쟁점 식별</div>
+      <div class="track t1">② 질문 유형 분류<br>
+        <span style="font-size:10px;color:#668">단일조문형 / 복수조문탐색형 / 조건분기형</span>
+      </div>
+      <div class="track t1">③ 관계유형 분류 (7종)<br>
+        <span style="font-size:10px;color:#668">DEF_EXP / SCOPE_CL / REQ_INT …</span>
+      </div>
+      <div class="track t1">④ 법령 힌트 추출<br>
+        <span style="font-size:10px;color:#668">예: "건축법 제19조"</span>
+      </div>
+    </div>
+
+    <!-- 화살표 -->
+    <div class="p-arrow">
+      <svg width="32" height="24"><line x1="0" y1="12" x2="22" y2="12" stroke="#555" stroke-width="2"/><polygon points="22,7 32,12 22,17" fill="#555"/></svg>
+    </div>
+
+    <!-- Retriever -->
+    <div class="p-node ret-box" style="flex:1.3">
+      <div class="p-title">05_Retriever.py</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:6px">
+        <div class="track t3" style="font-size:10px">Layer 1<br>TOPIC_LAW_MAP<br>주제→기본 법령셋</div>
+        <div class="track t3" style="font-size:10px">Layer 2<br>keyword_law_map<br>키워드→추가 법령</div>
+      </div>
+      <div class="track t3" style="font-size:10px;margin-bottom:6px">Layer 3 · article_graph → 1-hop 조문 확장</div>
+      <div style="background:#1a1228;border:1px solid #4a2a6a;border-radius:6px;padding:6px 8px;font-size:10px;color:#c090f0">
+        HybridSearcher<br>
+        <span style="color:#888">law_articles: Vector + BM25 → RRF 병합</span><br>
+        <span style="color:#888">qa_precedents: Vector (≥ 0.60)</span><br>
+        <span style="color:#555">court_cases: ✗ 미구축</span>
+      </div>
+    </div>
+
+    <!-- 화살표 -->
+    <div class="p-arrow">
+      <svg width="32" height="24"><line x1="0" y1="12" x2="22" y2="12" stroke="#555" stroke-width="2"/><polygon points="22,7 32,12 22,17" fill="#555"/></svg>
+    </div>
+
+    <!-- Pass 2 -->
+    <div class="p-node pass2-box" style="flex:1.5">
+      <div class="p-title">Pass 2 · Claude — 3트랙 해석</div>
+      <div class="track t1">① 문언적 해석<br><span style="color:#557">조문 문언·열거 범위·체계적 맥락 → 결론</span></div>
+      <div class="track t2">② 입법취지 해석<br><span style="color:#577">신설·개정 이유, 보호 법익, 연혁상 확장 → 결론</span></div>
+      <div class="track t3">③ 목적론적 해석<br><span style="color:#757">법 전체 목적, 실질적 효과, 동질성 → 결론</span></div>
+      <div class="track t4">④ 선례 포지셔닝<br><span style="color:#775">선례가 ①②③ 중 어느 트랙을 지지하는가</span></div>
+      <div class="result-row">
+        <div class="result-pill rp-green">수렴 → 확정</div>
+        <div class="result-pill rp-yellow">부분수렴 → 조건부</div>
+        <div class="result-pill rp-red">분기 → 해석분기 + 분기점</div>
+      </div>
+    </div>
+
+    <!-- 화살표 -->
+    <div class="p-arrow">
+      <svg width="32" height="24"><line x1="0" y1="12" x2="22" y2="12" stroke="#555" stroke-width="2"/><polygon points="22,7 32,12 22,17" fill="#555"/></svg>
+    </div>
+
+    <!-- 출력 -->
+    <div class="p-node out-box">
+      <div class="p-title">앱 출력 (app.py)</div>
+      <div class="track t2" style="font-size:10px;margin-bottom:3px">📋 탭 1 · 관련 법령 조문<br><span style="color:#557">law_docs (유사도 순)</span></div>
+      <div class="track t4" style="font-size:10px;margin-bottom:3px">📋 탭 2 · 유사 질의회신 선례<br><span style="color:#557">qa_docs + doc_ref 코드</span></div>
+      <div class="track t1" style="font-size:10px;margin-bottom:3px">🔬 탭 3 · Pass 1 분석 원문</div>
+      <div style="margin-top:8px;padding:6px 8px;background:#0f1f18;border-radius:6px;font-size:10px;color:#70e090">
+        비교 분석 모드<br>
+        <span style="color:#448">이력 2건 선택 → Claude 차이점 분석</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 약점 표시 -->
+  <div style="display:flex;gap:12px;margin-top:16px">
+    <div class="gap-note" style="flex:1">
+      ⚠ <strong>약점 1</strong>: qa_precedents 범위가 서울시 건축법 질의회신만 포함 → 주택법·민법 교차 쟁점에서 ④ 선례 포지셔닝 미작동
+    </div>
+    <div class="gap-note" style="flex:1">
+      ⚠ <strong>약점 2</strong>: court_cases 미구축 → 판례 트랙 항상 공백, ④ 선례에서 법원 판결 인용 불가
+    </div>
+    <div class="gap-note" style="flex:1">
+      ⚠ <strong>약점 3</strong>: 입법취지 데이터 없음 → ② 입법취지 해석이 Claude 추론에만 의존 (실제 개정이유서 미연결)
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

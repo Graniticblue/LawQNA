@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>답변 생성 논리 구조도</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Pretendard', -apple-system, 'Apple SD Gothic Neo', sans-serif;
+    background: #0d1117;
+    color: #c9d1d9;
+    min-height: 100vh;
+    padding: 40px 32px;
+  }
+
+  h1 {
+    text-align: center;
+    font-size: 17px;
+    font-weight: 700;
+    color: #f0f6fc;
+    margin-bottom: 8px;
+    letter-spacing: -0.3px;
+  }
+  .subtitle {
+    text-align: center;
+    font-size: 12px;
+    color: #6e7681;
+    margin-bottom: 48px;
+  }
+
+  /* ── 전체 세로 흐름 ── */
+  .flow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  /* ── 공통 노드 ── */
+  .node {
+    border-radius: 10px;
+    padding: 14px 22px;
+    text-align: center;
+    position: relative;
+    width: 100%;
+  }
+  .node .label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    opacity: 0.7;
+  }
+  .node .title {
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1.4;
+  }
+  .node .desc {
+    font-size: 12px;
+    margin-top: 6px;
+    opacity: 0.75;
+    line-height: 1.6;
+  }
+
+  /* ── 화살표 ── */
+  .arrow {
+    width: 2px;
+    height: 32px;
+    background: #30363d;
+    margin: 0 auto;
+    position: relative;
+  }
+  .arrow::after {
+    content: '';
+    position: absolute;
+    bottom: -6px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 8px solid #30363d;
+  }
+  .arrow.bright {
+    background: #388bfd;
+  }
+  .arrow.bright::after {
+    border-top-color: #388bfd;
+  }
+
+  /* ── 입력 ── */
+  .node-input {
+    background: #161b22;
+    border: 1.5px solid #30363d;
+    color: #c9d1d9;
+    max-width: 420px;
+  }
+
+  /* ── PASS 1 ── */
+  .node-pass1 {
+    background: #0d1f38;
+    border: 1.5px solid #1f6feb;
+    color: #79c0ff;
+    max-width: 580px;
+  }
+  .node-pass1 .title { color: #79c0ff; }
+
+  /* ── 검색 레이어 ── */
+  .retrieval-row {
+    display: flex;
+    gap: 16px;
+    width: 100%;
+    justify-content: center;
+    max-width: 820px;
+  }
+  .node-ret {
+    flex: 1;
+    border-radius: 10px;
+    padding: 14px 16px;
+    text-align: center;
+  }
+  .node-ret .ret-title { font-size: 13px; font-weight: 700; margin-bottom: 5px; }
+  .node-ret .ret-items { font-size: 11px; line-height: 1.8; opacity: 0.75; }
+  .node-ret-law { background: #12261e; border: 1.5px solid #2ea043; color: #56d364; }
+  .node-ret-qa  { background: #1e1c0a; border: 1.5px solid #9e6a03; color: #e3b341; }
+  .node-ret-case { background: #1c1220; border: 1.5px solid #6e40c9; color: #bc8cff; opacity: 0.5; }
+
+  /* ── 검색 레이어 헤더 ── */
+  .section-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    color: #6e7681;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    text-align: center;
+  }
+
+  /* ── PASS 2 컨테이너 ── */
+  .pass2-container {
+    width: 100%;
+    max-width: 820px;
+    background: #0d1117;
+    border: 1.5px solid #30363d;
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .pass2-header {
+    background: #1a0a2e;
+    border-bottom: 1px solid #30363d;
+    padding: 14px 22px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .pass2-header .badge {
+    background: #6e40c9;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 20px;
+    letter-spacing: 0.5px;
+  }
+  .pass2-header .htitle {
+    font-size: 14px;
+    font-weight: 700;
+    color: #bc8cff;
+  }
+  .pass2-header .hdesc {
+    font-size: 11px;
+    color: #6e7681;
+    margin-left: auto;
+  }
+
+  /* ── 3트랙 ── */
+  .tracks {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 0;
+    border-bottom: 1px solid #21262d;
+  }
+  .track {
+    padding: 18px 16px;
+    border-right: 1px solid #21262d;
+  }
+  .track:last-child { border-right: none; }
+  .track .t-num {
+    font-size: 11px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    letter-spacing: 0.5px;
+  }
+  .track .t-name {
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    line-height: 1.3;
+  }
+  .track .t-items {
+    font-size: 11px;
+    line-height: 1.9;
+    opacity: 0.75;
+    color: #8b949e;
+  }
+  .track .t-output {
+    margin-top: 10px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.5;
+  }
+
+  .track-mun {
+    background: #0a1628;
+    border-top: 3px solid #1f6feb;
+  }
+  .track-mun .t-num { color: #388bfd; }
+  .track-mun .t-name { color: #79c0ff; }
+  .track-mun .t-output { background: #0d1f38; color: #79c0ff; border: 1px solid #1f6feb44; }
+
+  .track-ip {
+    background: #141208;
+    border-top: 3px solid #9e6a03;
+  }
+  .track-ip .t-num { color: #d29922; }
+  .track-ip .t-name { color: #e3b341; }
+  .track-ip .t-output { background: #1c180a; color: #e3b341; border: 1px solid #9e6a0344; }
+
+  .track-mok {
+    background: #0d1a0f;
+    border-top: 3px solid #2ea043;
+  }
+  .track-mok .t-num { color: #3fb950; }
+  .track-mok .t-name { color: #56d364; }
+  .track-mok .t-output { background: #0f1f12; color: #56d364; border: 1px solid #2ea04344; }
+
+  /* ── 선례 포지셔닝 ── */
+  .positioning {
+    padding: 16px 20px;
+    border-bottom: 1px solid #21262d;
+    background: #111318;
+  }
+  .positioning .p-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #bc8cff;
+    margin-bottom: 10px;
+  }
+  .positioning .p-tags {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .p-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .p-tag .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .p-tag-mun  { background: #0d1f38; color: #79c0ff; border: 1px solid #1f6feb44; }
+  .p-tag-ip   { background: #1c180a; color: #e3b341; border: 1px solid #9e6a0344; }
+  .p-tag-mok  { background: #0f1f12; color: #56d364; border: 1px solid #2ea04344; }
+  .p-tag-none { background: #161b22; color: #6e7681; border: 1px solid #30363d; }
+  .p-tag-mun .dot  { background: #388bfd; }
+  .p-tag-ip .dot   { background: #d29922; }
+  .p-tag-mok .dot  { background: #3fb950; }
+  .p-tag-none .dot { background: #484f58; }
+
+  /* ── 확신도 판정 ── */
+  .confidence-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 0;
+    padding: 16px 20px;
+    border-bottom: 1px solid #21262d;
+  }
+  .conf-item {
+    padding: 12px 14px;
+    border-radius: 8px;
+    margin: 0 4px;
+    text-align: center;
+  }
+  .conf-item .c-name { font-size: 13px; font-weight: 700; margin-bottom: 5px; }
+  .conf-item .c-cond { font-size: 10px; line-height: 1.6; opacity: 0.8; }
+  .conf-hwakjeong { background: #0a2a15; border: 1.5px solid #2ea043; color: #56d364; }
+  .conf-jogunbu   { background: #1a1200; border: 1.5px dashed #9e6a03; color: #e3b341; }
+  .conf-bungi     { background: #1a0a0a; border: 1.5px dashed #da3633; color: #ff7b72; }
+
+  /* ── 최종 출력 ── */
+  .output-row {
+    display: flex;
+    gap: 12px;
+    padding: 16px 20px;
+  }
+  .out-item {
+    flex: 1;
+    padding: 10px 14px;
+    border-radius: 7px;
+    font-size: 11px;
+    line-height: 1.7;
+  }
+  .out-item .o-title { font-size: 12px; font-weight: 700; margin-bottom: 5px; }
+  .out-normal { background: #0d1f38; border: 1px solid #1f6feb44; color: #79c0ff; }
+  .out-bungi  { background: #160e1e; border: 1px solid #6e40c944; color: #bc8cff; }
+
+  /* ── 최종 결론 박스 ── */
+  .node-output {
+    background: #0d1f38;
+    border: 1.5px solid #388bfd;
+    color: #79c0ff;
+    max-width: 580px;
+  }
+  .node-output .title { color: #79c0ff; }
+
+  /* ── 범례 ── */
+  .legend {
+    display: flex;
+    gap: 24px;
+    justify-content: center;
+    margin-top: 36px;
+    flex-wrap: wrap;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11px;
+    color: #6e7681;
+  }
+  .legend-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+  }
+
+  .data-note {
+    font-size: 10.5px;
+    color: #484f58;
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 6px;
+    padding: 6px 12px;
+    margin-top: 6px;
+    text-align: center;
+  }
+
+  /* ── 주의사항 박스 ── */
+  .warn {
+    width: 100%;
+    max-width: 820px;
+    background: #161008;
+    border: 1px solid #9e6a0366;
+    border-radius: 8px;
+    padding: 12px 18px;
+    font-size: 11px;
+    color: #9e6a03;
+    line-height: 1.8;
+  }
+  .warn strong { color: #e3b341; }
+</style>
+</head>
+<body>
+
+<h1>답변 생성 논리 구조도</h1>
+<div class="subtitle">건축법규 RAG 시스템 · Pass 1 → 검색 → Pass 2 (3트랙 해석)</div>
+
+<div class="flow">
+
+  <!-- ① 사용자 질의 -->
+  <div class="node node-input" style="max-width:420px;">
+    <div class="label">INPUT</div>
+    <div class="title">사용자 질의</div>
+    <div class="desc">자연어 질문 (예: "가압류채권자도 해당 조항의 대상인가?")</div>
+  </div>
+
+  <div class="arrow bright"></div>
+
+  <!-- ② PASS 1 -->
+  <div class="node node-pass1">
+    <div class="label">PASS 1 · Claude</div>
+    <div class="title">쟁점 식별 및 검색어 추출</div>
+    <div class="desc">
+      관련 법령명 파악 · 핵심 쟁점 2~3개 추출 · BM25 검색키워드 생성<br>
+      <span style="font-size:11px; opacity:0.6;">출력: law_hints, relation_types, search_query</span>
+    </div>
+  </div>
+
+  <div class="arrow"></div>
+
+  <!-- ③ 검색 레이어 -->
+  <div class="section-label">RETRIEVAL LAYER</div>
+  <div class="retrieval-row">
+    <div class="node-ret node-ret-law">
+      <div class="ret-title">법령 조문</div>
+      <div class="ret-items">
+        Vector Search (SBERT)<br>
+        BM25 키워드 검색<br>
+        RRF 병합 · 관련조 확장<br>
+        <span style="opacity:0.5;">컬렉션: law_articles</span>
+      </div>
+    </div>
+    <div class="node-ret node-ret-qa">
+      <div class="ret-title">질의회신 선례</div>
+      <div class="ret-items">
+        Vector Search (SBERT)<br>
+        유사도 ≥ 0.60 필터<br>
+        doc_ref 코드 식별<br>
+        <span style="opacity:0.5;">컬렉션: qa_precedents</span>
+      </div>
+    </div>
+    <div class="node-ret node-ret-case">
+      <div class="ret-title">판례 <span style="font-size:10px;">(미구축)</span></div>
+      <div class="ret-items">
+        대법원 · 헌재<br>
+        하급심 판결<br>
+        —<br>
+        <span style="opacity:0.4;">컬렉션: court_cases</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow bright" style="height:28px;"></div>
+
+  <!-- ④ PASS 2 -->
+  <div class="pass2-container">
+    <div class="pass2-header">
+      <span class="badge">PASS 2</span>
+      <span class="htitle">3트랙 해석 분석 · Claude CoT</span>
+      <span class="hdesc">Chain-of-Thought · 06_Generator.py</span>
+    </div>
+
+    <!-- 3트랙 -->
+    <div class="tracks">
+
+      <div class="track track-mun">
+        <div class="t-num">① 트랙</div>
+        <div class="t-name">문언적 해석</div>
+        <div class="t-items">
+          조문 문언 그대로 독해<br>
+          용어 정의 · 열거 범위<br>
+          "등" 포함 여부 판단<br>
+          문법적 구조 분석
+        </div>
+        <div class="t-output">→ 문언적 결론</div>
+      </div>
+
+      <div class="track track-ip">
+        <div class="t-num">② 트랙</div>
+        <div class="t-name">입법취지 해석</div>
+        <div class="t-items">
+          해당 조항 제정 배경<br>
+          보호 대상 · 규율 목적<br>
+          개정 경위 (데이터 미흡)*<br>
+          법령 체계 내 위치
+        </div>
+        <div class="t-output">→ 입법취지상 결론</div>
+      </div>
+
+      <div class="track track-mok">
+        <div class="t-num">③ 트랙</div>
+        <div class="t-name">목적론적 해석</div>
+        <div class="t-items">
+          법령 전체 목적 · 기능<br>
+          사회적 맥락 · 효과<br>
+          다른 조문과의 정합성<br>
+          현실적 적용 결과
+        </div>
+        <div class="t-output">→ 목적론적 결론</div>
+      </div>
+
+    </div>
+
+    <!-- 선례 포지셔닝 -->
+    <div class="positioning">
+      <div class="p-title">④ 선례 포지셔닝 — 검색된 선례를 해석 트랙별로 분류</div>
+      <div class="p-tags">
+        <span class="p-tag p-tag-mun"><span class="dot"></span>문언 지지 선례</span>
+        <span class="p-tag p-tag-ip"><span class="dot"></span>입법취지 지지 선례</span>
+        <span class="p-tag p-tag-mok"><span class="dot"></span>목적론 지지 선례</span>
+        <span class="p-tag p-tag-none"><span class="dot"></span>직접 적용 어려움</span>
+      </div>
+    </div>
+
+    <!-- 확신도 판정 -->
+    <div style="padding: 14px 20px 4px; font-size: 11px; font-weight: 700; color: #6e7681; letter-spacing: 0.8px; text-transform: uppercase;">확신도 판정</div>
+    <div class="confidence-row">
+      <div class="conf-item conf-hwakjeong">
+        <div class="c-name">[확신도: 확정]</div>
+        <div class="c-cond">3트랙 결론 일치<br>또는 문언이 명확하여<br>해석 여지 없음</div>
+      </div>
+      <div class="conf-item conf-jogunbu">
+        <div class="c-name">[확신도: 조건부]</div>
+        <div class="c-cond">조건·전제에 따라<br>결론이 달라질 수 있음<br>주요 전제 명시 필요</div>
+      </div>
+      <div class="conf-item conf-bungi">
+        <div class="c-name">[확신도: 해석분기]</div>
+        <div class="c-cond">트랙 간 결론 충돌<br>→ 해석 분기점 명시<br>양측 논거 모두 제시</div>
+      </div>
+    </div>
+
+    <!-- 출력 형태 -->
+    <div style="padding: 14px 20px 4px; font-size: 11px; font-weight: 700; color: #6e7681; letter-spacing: 0.8px; text-transform: uppercase;">출력 형태</div>
+    <div class="output-row">
+      <div class="out-item out-normal">
+        <div class="o-title">확정 / 조건부인 경우</div>
+        쟁점 분석 → 3트랙 해석 → 단일 결론<br>
+        + 근거 조문 + 선례 doc_ref 인용
+      </div>
+      <div class="out-item out-bungi">
+        <div class="o-title">해석 분기인 경우</div>
+        쟁점 분석 → 3트랙 해석<br>
+        <strong>→ 분기점 명시 + 양측 결론 병기</strong><br>
+        + "이 지점에서 판단이 갈림" 설명
+      </div>
+    </div>
+
+  </div>
+
+  <div class="arrow bright" style="height:28px;"></div>
+
+  <!-- ⑤ 최종 답변 -->
+  <div class="node node-output">
+    <div class="label">OUTPUT</div>
+    <div class="title">최종 답변</div>
+    <div class="desc">
+      결론 · 근거 조문 · 참조 선례 (doc_ref) · 확신도 표시<br>
+      해석 분기 시: 분기점 설명 + 양측 논거
+    </div>
+  </div>
+
+  <!-- 주의사항 -->
+  <div style="height:24px;"></div>
+  <div class="warn">
+    <strong>* 현재 제약</strong><br>
+    ② 입법취지 트랙은 개정이유서·국회심의록 데이터 미구축으로 인해, 현재는 법령 조문의 맥락·구조에서 유추하는 수준. 이 트랙은 ③ 목적론과 사실상 중첩될 수 있음.<br>
+    개정이유서 / 법제처 해석례 DB 투입 시 ② 트랙을 독립적으로 분리 운영 가능.
+  </div>
+
+  <!-- 범례 -->
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#388bfd;"></div> 문언적 해석</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#d29922;"></div> 입법취지 해석</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#3fb950;"></div> 목적론적 해석</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#bc8cff;"></div> PASS 2 (Claude CoT)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#388bfd; opacity:0.4;"></div> PASS 1 (Claude)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#484f58;"></div> 미구축</div>
+  </div>
+
+</div>
+
+</body>
+</html>

@@ -17,9 +17,9 @@
   context = retriever.format_context(law_docs, qa_docs, case_docs)
 
 검색 계층:
-  1층: law_articles  — 법령 조문 (법규 필터 + 하이브리드)
-  2층: qa_precedents — 질의회신 (현재 미사용, 컬렉션 재구축 후 활성화)
-  3층: court_cases   — 판례 (법규 × 유형 쌍 필터, 컬렉션 구축 후 활성화)
+  1층: law_articles  -법령 조문 (법규 필터 + 하이브리드)
+  2층: qa_precedents -질의회신 선례 (doc_ref 기반, 유사도 0.60 이상)
+  3층: court_cases   -판례 (법규 × 유형 쌍 필터, 컬렉션 구축 후 활성화)
 """
 
 import json
@@ -34,13 +34,31 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 # ============================================================
 # 경로 설정
 # ============================================================
-BASE_DIR   = Path(__file__).parent
-DATA_DIR   = BASE_DIR / "data"
-CHROMA_DIR = DATA_DIR / "chroma_db"
-MAP_PATH   = DATA_DIR / "keyword_law_map.json"
-GRAPH_PATH = DATA_DIR / "article_graph.json"
+BASE_DIR        = Path(__file__).parent
+DATA_DIR        = BASE_DIR / "data"
+CHROMA_DIR      = DATA_DIR / "chroma_db"
+MAP_PATH        = DATA_DIR / "keyword_law_map.json"
+GRAPH_PATH      = DATA_DIR / "article_graph.json"
+ARTICLE_ROLES_DIR = DATA_DIR / "article_roles"
 
 EMBED_MODEL_NAME = "jhgan/ko-sroberta-multitask"
+MEMOS_PATH      = DATA_DIR / "memos.jsonl"
+AMENDMENTS_PATH = DATA_DIR / "law_amendments" / "amendments.jsonl"
+
+# 법령명 축약어 → 정식명칭 매핑 (메모 태그 매칭용)
+LAW_ABBREV_MAP: dict[str, str] = {
+    "건축법시행령":      "건축법 시행령",
+    "건축법":           "건축법",
+    "국토계획법":       "국토의 계획 및 이용에 관한 법률",
+    "국토계획법시행령":  "국토의 계획 및 이용에 관한 법률 시행령",
+    "농지법":          "농지법",
+    "주택법":          "주택법",
+    "주택법시행령":     "주택법 시행령",
+    "소방시설법":       "소방시설 설치 및 관리에 관한 법률",
+    "다중이용업법":     "다중이용업소의 안전관리에 관한 특별법",
+    "장애인편의법":     "장애인·노인·임산부 등의 편의증진 보장에 관한 법률",
+    "주차장법":        "주차장법",
+}
 
 # 판례-법령 관계 7가지 유형 (PLAN §1)
 RELATION_TYPES: dict[str, str] = {
@@ -142,6 +160,140 @@ TOPIC_LAW_MAP: dict[str, list[str]] = {
 DEFAULT_LAWS = ["건축법", "건축법 시행령"]
 
 
+# ============================================================
+# law_hint 파서 (직접 조문 페칭용)
+# ============================================================
+
+def _parse_law_hint(hint: str) -> tuple[str, str, bool]:
+    """
+    "건축법 시행령 별표1" → ("건축법 시행령", "별표1", True)
+    "건축법 시행령 제86조제2항" → ("건축법 시행령", "제86조", False)
+    Returns: (law_name, article_prefix, is_byeolpyo)
+    """
+    hint = hint.strip().strip("「」")
+    m = re.match(r"^(.+?)\s+(별표\s*\d+)", hint)
+    if m:
+        return m.group(1).strip(), m.group(2).replace(" ", ""), True
+    m = re.match(r"^(.+?)\s+(제\d+조)", hint)
+    if m:
+        return m.group(1).strip(), m.group(2), False
+    return hint, "", False
+
+
+# ============================================================
+# 조문 해석 프레임 로더
+# ============================================================
+
+def _normalize_article_key(hint: str) -> str:
+    """
+    "건축법 시행령 제86조제2항" → "건축법시행령_제86조"
+    파일명 prefix 매칭용 키로 변환.
+    """
+    # 공백 제거 후 첫 번째 "제XX조" 이후를 잘라냄
+    key = hint.replace(" ", "").replace("「」", "")
+    m = re.match(r'([가-힣]+)(제\d+조)', key)
+    if m:
+        return f"{m.group(1)}_{m.group(2)}"
+    return key
+
+
+def load_article_roles(
+    law_hints: list[str],
+    definition_terms: Optional[list[str]] = None,
+) -> list[dict]:
+    """
+    law_hints(Pass 1 식별 조문)에 대응하는 article_roles JSON 파일을 로드.
+    파일명 prefix 매칭: "건축법시행령_제86조" → 건축법시행령_제86조*.json
+
+    definition_terms가 있으면 article_type == "정의조항"인 파일도 추가 로드.
+    """
+    if not ARTICLE_ROLES_DIR.exists():
+        return []
+
+    roles = []
+    matched_ids: set[str] = set()
+
+    for hint in law_hints:
+        prefix = _normalize_article_key(hint)
+        for fpath in ARTICLE_ROLES_DIR.glob("*.json"):
+            stem = fpath.stem
+            if stem.startswith(prefix) and stem not in matched_ids:
+                try:
+                    data = json.loads(fpath.read_text(encoding="utf-8"))
+                    roles.append(data)
+                    matched_ids.add(stem)
+                except Exception:
+                    pass
+
+    # definition_terms가 있으면 정의조항 타입 파일 추가 로드
+    if definition_terms:
+        for fpath in ARTICLE_ROLES_DIR.glob("*.json"):
+            stem = fpath.stem
+            if stem in matched_ids:
+                continue
+            try:
+                data = json.loads(fpath.read_text(encoding="utf-8"))
+                if data.get("article_type") == "정의조항":
+                    roles.append(data)
+                    matched_ids.add(stem)
+            except Exception:
+                pass
+
+    return roles
+
+
+def format_article_roles(roles: list[dict]) -> str:
+    """article_roles를 Pass 2 컨텍스트 문자열로 변환."""
+    if not roles:
+        return ""
+
+    lines = ["\n=== [조문 해석 프레임] ===",
+             "※ 아래는 해당 조문의 요건별 역할과 해석 원칙입니다. "
+             "이 프레임을 해석의 출발점으로 삼으세요.\n"]
+
+    ROLE_LABELS = {
+        "보호메커니즘": "🔴 보호메커니즘",
+        "수혜자격요건": "🔵 수혜자격요건",
+        "절차요건":    "🟡 절차요건",
+        "정량기준":    "🟢 정량기준",
+        "용도정의":    "⚪ 용도정의",
+        "적용범위획정": "🟣 적용범위획정",
+        "정의조항":    "📖 정의조항",
+    }
+    SOURCE_LABELS = {
+        "해석례": "[해석례]",
+        "판례":   "[판례]",
+        "입법취지": "[입법취지]",
+        "부칙":   "[부칙]",
+    }
+
+    for role_doc in roles:
+        lines.append(f"▶ {role_doc.get('law', '')} {role_doc.get('article_no', '')}"
+                     f" -{role_doc.get('article_summary', '')}")
+
+        for req in role_doc.get("requirements", []):
+            label = ROLE_LABELS.get(req.get("role", ""), req.get("role", ""))
+            lines.append(f"\n  요건 {req['req_id']}. {req['text']}")
+            lines.append(f"  역할: {label}")
+            lines.append(f"  이유: {req.get('role_reason', '')}")
+            for src in req.get("role_sources", []):
+                stag = SOURCE_LABELS.get(src.get("type", ""), f"[{src.get('type','')}]")
+                lines.append(f"    {stag} {src.get('ref', '')} → {src.get('point', '')}")
+
+        logic = role_doc.get("interpretation_logic", "")
+        if logic:
+            lines.append(f"\n  ■ 해석 원칙: {logic}")
+            for src in role_doc.get("interpretation_sources", []):
+                stag = SOURCE_LABELS.get(src.get("type", ""), f"[{src.get('type','')}]")
+                lines.append(f"    {stag} {src.get('ref', '')} → {src.get('point', '')}")
+
+        pc = role_doc.get("penal_connection", {})
+        if pc.get("connected"):
+            lines.append(f"\n  ⚠ 형벌법규 연결: {pc.get('basis', '')} -{pc.get('implication', '')}")
+
+    return "\n".join(lines)
+
+
 def layer1_topic_laws(query: str) -> list[str]:
     """Layer 1: 질문 키워드 → 기본 법령 세트"""
     laws = list(DEFAULT_LAWS)
@@ -196,18 +348,36 @@ def layer3_graph_expand(
 # ============================================================
 
 class HybridSearcher:
-    """BM25 + 벡터 하이브리드 검색 (law_articles + court_cases)"""
+    """BM25 + 벡터 하이브리드 검색 (law_articles + qa_precedents + court_cases)"""
 
     def __init__(self, chroma_client, embed_model):
         self._client    = chroma_client
         self._embed     = embed_model
         self._law_col   = chroma_client.get_collection("law_articles")
 
+        # qa_precedents: labeled_with_doc 인덱스
+        try:
+            self._qa_col = chroma_client.get_collection("qa_precedents")
+        except Exception:
+            self._qa_col = None
+
+        # precedents_2026_april: 법제처 해석례 추가분
+        try:
+            self._prec_col = chroma_client.get_collection("precedents_2026_april")
+        except Exception:
+            self._prec_col = None
+
         # court_cases: 판례 파이프라인 구축 후 활성화
         try:
             self._case_col = chroma_client.get_collection("court_cases")
         except Exception:
             self._case_col = None
+
+        # memos: 해석 원칙 메모 RAG (ingest_memos.py로 구축)
+        try:
+            self._memo_col = chroma_client.get_collection("memos")
+        except Exception:
+            self._memo_col = None
 
     def _embed_text(self, text: str) -> list[float]:
         return self._embed.get_text_embedding(text)
@@ -322,7 +492,158 @@ class HybridSearcher:
         return docs
 
     # ----------------------------------------------------------
-    # 판례 검색 (court_cases) — PLAN §4.2
+    # 질의회신 선례 검색 (qa_precedents)
+    # ----------------------------------------------------------
+
+    def search_qa(
+        self,
+        query: str,
+        top_k: int = 5,
+        min_score: float = 0.60,
+    ) -> list[RetrievedDoc]:
+        """qa_precedents + precedents_2026_april 벡터 검색."""
+        query_emb = self._embed_text(query)
+        docs = []
+
+        for col, label in [(self._qa_col, "qa_precedents"), (self._prec_col, "precedents_2026_april")]:
+            if col is None or col.count() == 0:
+                continue
+            n = min(top_k * 2, col.count())
+            try:
+                res = col.query(
+                    query_embeddings=[query_emb],
+                    n_results=n,
+                    include=["documents", "metadatas", "distances"],
+                )
+            except Exception:
+                continue
+            for doc_text, meta, dist in zip(
+                res["documents"][0], res["metadatas"][0], res["distances"][0]
+            ):
+                score = max(0.0, 1.0 - dist)
+                if score < min_score:
+                    continue
+                docs.append(RetrievedDoc(
+                    source=label,
+                    law_name=meta.get("doc_agency", ""),
+                    article_no=meta.get("doc_ref", meta.get("doc_code", "")),
+                    content=doc_text,
+                    score=round(score, 4),
+                    score_type="vector",
+                    metadata=dict(meta),
+                ))
+
+        docs.sort(key=lambda d: -d.score)
+        return docs[:top_k]
+
+    # ----------------------------------------------------------
+    # 직접 조문 페칭 (law_hints 특정 조문 강제 포함)
+    # ----------------------------------------------------------
+
+    def fetch_exact_articles(
+        self,
+        law_hints: list[str],
+        top_n: int = 5,
+    ) -> list["RetrievedDoc"]:
+        """
+        Pass 1 law_hints에 명시된 법령+조문/별표를 메타데이터 직접 쿼리로 가져옴.
+        벡터 유사도 순위와 무관하게 항상 포함시킬 조문 보장.
+        """
+        result: list[RetrievedDoc] = []
+        seen: set[str] = set()
+
+        for hint in law_hints:
+            law_name, art_prefix, is_byeolpyo = _parse_law_hint(hint)
+            if not law_name or not art_prefix:
+                continue
+
+            if is_byeolpyo:
+                where: dict = {"$and": [
+                    {"law_name":    {"$eq": law_name}},
+                    {"is_byeolpyo": {"$eq": "true"}},
+                ]}
+            else:
+                where = {"law_name": {"$eq": law_name}}
+
+            try:
+                res = self._law_col.get(
+                    where=where,
+                    limit=500,
+                    include=["documents", "metadatas"],
+                )
+            except Exception:
+                continue
+
+            art_key = art_prefix.replace(" ", "").replace("\u3000", "")
+            count = 0
+            for doc_text, meta in zip(res.get("documents", []), res.get("metadatas", [])):
+                art_no = meta.get("article_no", "").replace(" ", "").replace("\u3000", "")
+                if art_key not in art_no:
+                    continue
+                key = f"{meta.get('law_name')}::{meta.get('article_no')}::{doc_text[:40]}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                result.append(RetrievedDoc(
+                    source="law_articles",
+                    law_name=meta.get("law_name", ""),
+                    article_no=meta.get("article_no", ""),
+                    content=doc_text,
+                    score=2.0,          # exact match → 최우선
+                    score_type="exact",
+                    metadata=dict(meta),
+                ))
+                count += 1
+                if count >= top_n:
+                    break
+
+        return result
+
+    # ----------------------------------------------------------
+    # 메모 RAG 검색 (memos)
+    # ----------------------------------------------------------
+
+    def search_memos(
+        self,
+        query: str,
+        top_k: int = 3,
+        min_score: float = 0.45,
+    ) -> list[dict]:
+        """memos 컬렉션 벡터 검색. 유사도 min_score 이상인 메모 반환."""
+        if self._memo_col is None or self._memo_col.count() == 0:
+            return []
+        query_emb = self._embed_text(query)
+        n = min(top_k * 2, self._memo_col.count())
+        try:
+            res = self._memo_col.query(
+                query_embeddings=[query_emb],
+                n_results=n,
+                include=["documents", "metadatas", "distances"],
+            )
+        except Exception:
+            return []
+
+        results = []
+        for doc_text, meta, dist in zip(
+            res["documents"][0], res["metadatas"][0], res["distances"][0]
+        ):
+            score = max(0.0, 1.0 - dist)
+            if score < min_score:
+                continue
+            results.append({
+                "memo_id":  meta.get("memo_id", ""),
+                "title":    meta.get("title", ""),
+                "tags":     meta.get("tags", ""),
+                "linked_to": meta.get("linked_to", ""),
+                "content":  doc_text,
+                "score":    round(score, 4),
+            })
+
+        results.sort(key=lambda x: -x["score"])
+        return results[:top_k]
+
+    # ----------------------------------------------------------
+    # 판례 검색 (court_cases) -PLAN §4.2
     # ----------------------------------------------------------
 
     def search_cases_by_type(
@@ -526,10 +847,10 @@ def merge_case_results(
 
 class Retriever:
     """
-    3-Layer 법령 라우팅 + 하이브리드 검색 (법령 조문 + 판례).
+    3-Layer 법령 라우팅 + 하이브리드 검색 (법령 조문 + 질의회신 + 판례).
 
     반환: (law_docs, qa_docs, case_docs)
-      - qa_docs: 현재 [] (qa_precedents 컬렉션 재구축 후 활성화)
+      - qa_docs: qa_precedents 컬렉션에서 유사도 0.60 이상 선례 (doc_ref 포함)
       - case_docs: court_cases 구축 후 활성화, 그 전까지 []
     """
 
@@ -538,7 +859,9 @@ class Retriever:
         self.top_k_case = top_k_case
         self._kw_map    = self._load_json(MAP_PATH)
         self._graph     = self._load_json(GRAPH_PATH)
-        self._searcher  = self._init_searcher()
+        self._memos      = self._load_memos()
+        self._amendments = self._load_amendments()
+        self._searcher   = self._init_searcher()
 
     @staticmethod
     def _load_json(path: Path) -> dict:
@@ -546,6 +869,40 @@ class Retriever:
             return json.loads(path.read_text(encoding="utf-8"))
         print(f"[WARN] 파일 없음: {path}")
         return {}
+
+    @staticmethod
+    def _load_memos() -> list[dict]:
+        """memos.jsonl 전체 로드 (fetch_linked_memos용 캐시)."""
+        if not MEMOS_PATH.exists():
+            return []
+        memos = []
+        with open(MEMOS_PATH, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    memos.append(json.loads(line))
+                except Exception:
+                    pass
+        return memos
+
+    @staticmethod
+    def _load_amendments() -> list[dict]:
+        """amendments.jsonl 전체 로드 (fetch_linked_amendments용 캐시)."""
+        if not AMENDMENTS_PATH.exists():
+            return []
+        records = []
+        with open(AMENDMENTS_PATH, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except Exception:
+                    pass
+        return records
 
     def _init_searcher(self) -> HybridSearcher:
         print("임베딩 모델 로드 중...")
@@ -561,6 +918,7 @@ class Retriever:
         extra_article_nodes: Optional[list[str]] = None,
         relation_types: Optional[list[dict]] = None,
         law_hints: Optional[list[str]] = None,
+        definition_terms: Optional[list[str]] = None,
         top_k_law: Optional[int] = None,
         top_k_case: Optional[int] = None,
     ) -> tuple[list[RetrievedDoc], list[RetrievedDoc], list[RetrievedDoc]]:
@@ -605,10 +963,12 @@ class Retriever:
 
         # ── 법령 조문 하이브리드 검색 ─────────────────────
         law_filter = all_laws if all_laws else None
-        # law_hints를 검색 쿼리에 보강
+        # law_hints + definition_terms를 검색 쿼리에 보강
         search_q = query
         if law_hints:
             search_q += " " + " ".join(law_hints[:3])
+        if definition_terms:
+            search_q += " " + " ".join(definition_terms[:3])
 
         vector_law = self._searcher.search_laws(search_q, law_filter, top_k=top_k_law * 2)
         bm25_law   = self._searcher.bm25_search_laws(search_q, law_filter, top_k=top_k_law * 2)
@@ -618,10 +978,27 @@ class Retriever:
         else:
             law_docs = vector_law[:top_k_law]
 
+        # ── 직접 조문 페칭 (law_hints 명시 조문 강제 포함) ─
+        if law_hints:
+            exact_docs = self._searcher.fetch_exact_articles(law_hints, top_n=5)
+            if exact_docs:
+                existing = {
+                    f"{d.law_name}::{d.article_no}::{d.content[:40]}"
+                    for d in law_docs
+                }
+                new_exact = [
+                    d for d in exact_docs
+                    if f"{d.law_name}::{d.article_no}::{d.content[:40]}" not in existing
+                ]
+                law_docs = new_exact + law_docs   # exact match를 컨텍스트 앞에 배치
+
+        # ── 질의회신 선례 검색 (qa_precedents) ────────────
+        qa_docs = self._searcher.search_qa(search_q, top_k=5)
+
         # ── 판례 검색 (court_cases, PLAN §4.2) ────────────
         case_docs = self._search_cases(query, all_laws, relation_types, top_k_case)
 
-        return law_docs, [], case_docs
+        return law_docs, qa_docs, case_docs
 
     def _search_cases(
         self,
@@ -657,35 +1034,239 @@ class Retriever:
         bm25_docs = self._searcher.bm25_search_cases(query, top_k=top_k)
         return merge_case_results(typed_results, bm25_docs, top_k=top_k)
 
+    def retrieve_memos(self, query: str, top_k: int = 3) -> list[dict]:
+        """질의와 관련된 해석 원칙 메모 검색 (memos 컬렉션)."""
+        return self._searcher.search_memos(query, top_k=top_k)
+
+    def fetch_linked_memos(
+        self,
+        law_docs: list[RetrievedDoc],
+        qa_docs:  list[RetrievedDoc],
+        case_docs: list[RetrievedDoc],
+    ) -> list[dict]:
+        """
+        retrieved docs와 메모의 linked_to / 태그를 결정론적으로 매칭.
+        벡터 검색 없이 — 검색된 판례·선례·법령 조문이 트리거.
+
+        매칭 규칙 (OR):
+          1. memo.linked_to에 검색된 판례 case_id 또는 선례 doc_ref 포함
+          2. memo.tags의 법령+조문 코드가 검색된 law_docs에 있음
+        """
+        if not self._memos:
+            return []
+
+        # ── 검색된 ID 집합 (판례 + 선례) ─────────────────────
+        retrieved_ids: set[str] = set()
+        for d in case_docs:
+            cid = d.metadata.get("case_id", d.article_no)
+            if cid:
+                retrieved_ids.add(cid)
+        for d in qa_docs:
+            ref = d.metadata.get("doc_ref", "") or d.metadata.get("doc_code", "")
+            if ref:
+                retrieved_ids.add(ref)
+
+        # ── 검색된 법령조문 키 집합 ───────────────────────────
+        # key 형식: "<법령명(공백제거)><제XX조>"  예: "건축법제11조"
+        # LAW_ABBREV_MAP의 역방향도 포함
+        _full_to_abbrev: dict[str, str] = {
+            v.replace(" ", ""): k
+            for k, v in LAW_ABBREV_MAP.items()
+        }
+        retrieved_law_keys: set[str] = set()
+        for d in law_docs:
+            law_norm = d.law_name.replace(" ", "")
+            m = re.match(r'(제\d+조)', d.article_no.replace(" ", ""))
+            if not m:
+                continue
+            art = m.group(1)
+            retrieved_law_keys.add(law_norm + art)
+            # 알려진 축약어가 있으면 축약어 버전도 추가
+            abbrev = _full_to_abbrev.get(law_norm)
+            if abbrev:
+                retrieved_law_keys.add(abbrev + art)
+
+        # ── 메모 매칭 ─────────────────────────────────────────
+        matched: list[dict] = []
+        seen_ids: set[str] = set()
+
+        for memo in self._memos:
+            mid = memo.get("memo_id", "")
+            if mid in seen_ids:
+                continue
+
+            # 규칙 1: linked_to 매칭
+            linked_to = memo.get("linked_to", [])
+            if isinstance(linked_to, str):
+                linked_to = [linked_to]
+            if any(lt in retrieved_ids for lt in linked_to):
+                matched.append(memo)
+                seen_ids.add(mid)
+                continue
+
+            # 규칙 2: 태그 법령조문 매칭
+            tags = memo.get("tags", [])
+            if isinstance(tags, str):
+                tags = [t.strip() for t in tags.split(",")]
+            for tag in tags:
+                tag_norm = tag.replace(" ", "")
+                if any(tag_norm.startswith(key) for key in retrieved_law_keys):
+                    matched.append(memo)
+                    seen_ids.add(mid)
+                    break
+
+        return matched
+
+    def fetch_linked_amendments(
+        self,
+        law_docs: list[RetrievedDoc],
+    ) -> list[dict]:
+        """
+        검색된 law_docs의 법령명+조문번호와 amendments.jsonl의 개정조문을 매칭.
+        목적론적 해석 컨텍스트로 주입할 개정연혁 반환.
+
+        매칭 규칙:
+          amendment.law_name == doc.law_name
+          AND amendment.개정조문 중 하나가 doc.article_no의 제XX조 prefix와 일치
+        """
+        if not self._amendments or not law_docs:
+            return []
+
+        # 검색된 (법령명, 제XX조) 쌍 수집
+        retrieved_pairs: set[tuple[str, str]] = set()
+        for d in law_docs:
+            m = re.match(r'(제\d+조)', d.article_no.replace(" ", ""))
+            if m:
+                retrieved_pairs.add((d.law_name, m.group(1)))
+
+        matched: list[dict] = []
+        seen_ids: set[str] = set()
+
+        for rec in self._amendments:
+            aid = rec.get("amendment_id", "")
+            if aid in seen_ids:
+                continue
+            law_name = rec.get("law_name", "")
+            개정조문 = rec.get("개정조문", [])
+
+            for art in 개정조문:
+                art_norm = art.replace(" ", "")
+                m = re.match(r'(제\d+조)', art_norm)
+                if not m:
+                    continue
+                art_prefix = m.group(1)
+                if (law_name, art_prefix) in retrieved_pairs:
+                    matched.append(rec)
+                    seen_ids.add(aid)
+                    break
+
+        return matched
+
+    def get_article_roles(
+        self,
+        law_hints: list[str],
+        definition_terms: Optional[list[str]] = None,
+    ) -> list[dict]:
+        """law_hints + definition_terms로 조문 해석 프레임 JSON 로드."""
+        return load_article_roles(law_hints, definition_terms=definition_terms)
+
     def format_context(
         self,
         law_docs: list[RetrievedDoc],
         qa_docs: list[RetrievedDoc],
         case_docs: list[RetrievedDoc],
+        article_roles: Optional[list[dict]] = None,
+        memo_docs: Optional[list[dict]] = None,
+        amendment_docs: Optional[list[dict]] = None,
     ) -> str:
         """
         검색 결과를 Pass 2 LLM 컨텍스트로 포맷 (PLAN §2.2).
-        1층: 법령 조문 / 2층: 질의회신 선례 / 3층: 판례
+        0층: 조문 해석 프레임 / 1층: 법령 조문 / 2층: 질의회신 선례 / 3층: 판례
+        memo층: 관련 해석 원칙 메모 (always-on이 아닌 케이스-특정 원칙)
         """
         lines = []
 
+        # ── 개정연혁층: 목적론적 해석 재료 ──────────────
+        if amendment_docs:
+            lines.append("=== [관련 개정연혁] ===")
+            lines.append(
+                "※ 아래는 검색된 조문의 개정 이유 및 입법 목적입니다. "
+                "목적론적 해석 시 반드시 참조하세요."
+            )
+            for rec in amendment_docs:
+                lines.append(
+                    f"\n[{rec.get('law_name','')} {rec.get('시행일','')} "
+                    f"{rec.get('공포번호','')}]"
+                )
+                lines.append(f"개정이유: {rec.get('개정이유','')}")
+                키포인트 = rec.get('목적론적_키포인트', '')
+                if 키포인트:
+                    lines.append(f"목적론적 키포인트: {키포인트}")
+                주요내용 = rec.get('주요내용', [])
+                if 주요내용:
+                    lines.append("주요 개정 내용:")
+                    for item in 주요내용:
+                        조문 = ", ".join(item.get('조문', []))
+                        lines.append(f"  · [{조문}] {item.get('항목','')}: {item.get('내용','')}")
+                연동 = rec.get('연동_조문_주의', '')
+                if 연동:
+                    lines.append(f"※ 연동 개정: {연동}")
+
+        # ── memo층: 관련 해석 원칙 메모 ─────────────────
+        if memo_docs:
+            lines.append("=== [관련 해석 원칙 메모] ===")
+            lines.append(
+                "아래는 유사 사안에서 확립된 해석 원칙입니다. "
+                "본 건과 관련된 원칙이 있으면 적용하세요:"
+            )
+            for m in memo_docs:
+                mid   = m.get("memo_id", "")
+                title = m.get("title", "")
+                lines.append(f"\n[{mid}] {title}")
+                lines.append(m.get("content", ""))
+
+        # ── 0층: 조문 해석 프레임 ────────────────────────
+        if article_roles:
+            roles_text = format_article_roles(article_roles)
+            if roles_text:
+                lines.append(roles_text)
+
         # ── 1층: 법령 조문 ──────────────────────────────
-        if law_docs:
-            lines.append("=== [관련 법령 조문] ===")
-            for i, doc in enumerate(law_docs, 1):
+        exact_docs  = [d for d in law_docs if d.score_type == "exact"]
+        vector_docs = [d for d in law_docs if d.score_type != "exact"]
+
+        if exact_docs:
+            lines.append("=== [직접 참조 조문] ===")
+            lines.append(
+                "※ 아래는 질문에서 특정된 조문을 DB에서 직접 가져온 것입니다. "
+                "이 내용을 답변의 1차 근거로 삼으세요."
+            )
+            for i, doc in enumerate(exact_docs, 1):
+                lines.append(f"\n[직접{i}] {doc.law_name} {doc.article_no}")
+                lines.append(doc.content)
+
+        if vector_docs:
+            lines.append("\n=== [관련 법령 조문] ===")
+            for i, doc in enumerate(vector_docs, 1):
                 lines.append(f"\n[{i}] {doc.law_name} {doc.article_no}")
                 lines.append(doc.content)
 
-        # ── 2층: 질의회신 선례 (현재 미사용) ───────────
+        # ── 2층: 질의회신 선례 ──────────────────────────
         if qa_docs:
             lines.append("\n=== [유사 질의회신 선례] ===")
             for i, doc in enumerate(qa_docs, 1):
                 meta = doc.metadata
+                doc_ref    = meta.get("doc_ref", "")
+                doc_agency = meta.get("doc_agency", "")
+                doc_date   = meta.get("doc_date", "")
                 header = f"\n[선례{i}]"
-                if meta.get("question_type"):
-                    header += f" {meta['question_type']}"
-                if meta.get("verdict"):
-                    header += f" | 확신도: {meta['verdict']}"
+                if doc_ref:
+                    header += f" {doc_ref}"
+                elif doc_agency:
+                    label = doc_agency
+                    if doc_date:
+                        label += f" ({doc_date})"
+                    header += f" {label}"
                 lines.append(header)
                 if meta.get("question"):
                     lines.append(f"질문: {meta['question']}")

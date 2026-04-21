@@ -1,0 +1,52 @@
+{
+  "article_id": "건축법시행령_제3조의2",
+  "law": "건축법 시행령",
+  "article_no": "제3조의2",
+  "article_summary": "대수선의 구체적 범위를 내력벽, 기둥, 외벽 마감재료 등 다양한 구조부재 수선·변경·증설로 규정한다.",
+  "article_type": "정의조항",
+  "requirements": [
+    {
+      "req_id": "A",
+      "text": "내력벽을 증설·해체하거나 벽면적 30㎡ 이상 수선·변경(제1호)",
+      "role": "용도정의",
+      "role_reason": "대수선에 해당하는 행위 유형 중 하나를 정의하는 조건이다.",
+      "protected_interest": null,
+      "role_sources": [
+        {
+          "type": "해석례",
+          "ref": "법제처 22-0361",
+          "point": "자동 추출"
+        }
+      ]
+    },
+    {
+      "req_id": "B",
+      "text": "외벽에 사용하는 마감재료를 증설·해체하거나 벽면적 30㎡ 이상 수선·변경(제9호)",
+      "role": "용도정의",
+      "role_reason": "외벽 마감재료 관련 대수선 유형을 정의하며, 이는 대수선의 여러 유형 중 하나에 불과하여 전체 대수선 개념을 한정하지 않는다.",
+      "protected_interest": null,
+      "role_sources": [
+        {
+          "type": "해석례",
+          "ref": "법제처 22-0361",
+          "point": "자동 추출"
+        }
+      ]
+    }
+  ],
+  "interpretation_logic": "대수선은 외벽 마감재료 증설·해체 이외에도 다양한 행위를 포괄하는 개념이므로, 부칙의 '대수선허가 신청'은 모든 유형의 대수선을 포함한다.",
+  "penal_connection": {
+    "connected": false,
+    "basis": null,
+    "implication": null
+  },
+  "interpretation_sources": [
+    {
+      "type": "해석례",
+      "ref": "법제처 22-0361",
+      "point": "자동 추출"
+    }
+  ],
+  "last_updated": "자동생성",
+  "last_updated_by": "법제처 22-0361"
+}

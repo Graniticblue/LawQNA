@@ -1,0 +1,104 @@
+{
+  "indexed": [
+    {
+      "file": "seoul_reasoning_v9_final.jsonl",
+      "count": 1029,
+      "date": "2026-03-31"
+    },
+    {
+      "file": "labeled_with_doc.jsonl",
+      "count": 859,
+      "date": "2026-03-31"
+    },
+    {
+      "file": "법제처_14-0840.jsonl",
+      "count": 1,
+      "date": "2026-04-03"
+    },
+    {
+      "file": "법제처_19-0365.jsonl",
+      "count": 1,
+      "date": "2026-04-03"
+    },
+    {
+      "file": "법제처_21-0640.jsonl",
+      "count": 1,
+      "date": "2026-04-03"
+    },
+    {
+      "file": "법제처_21-0674.jsonl",
+      "count": 1,
+      "date": "2026-04-03"
+    },
+    {
+      "file": "법제처_22-0361.jsonl",
+      "count": 1,
+      "date": "2026-04-03"
+    },
+    {
+      "file": "법제처_22-0411.jsonl",
+      "count": 1,
+      "date": "2026-04-03"
+    },
+    {
+      "file": "법제처_24-0063.jsonl",
+      "count": 1,
+      "date": "2026-04-03"
+    },
+    {
+      "file": "법제처_25-0853.jsonl",
+      "count": 1,
+      "date": "2026-04-03"
+    },
+    {
+      "file": "법제처_25-0877.jsonl",
+      "count": 1,
+      "date": "2026-04-03"
+    },
+    {
+      "file": "법제처_24-0663.jsonl",
+      "count": 1,
+      "date": "2026-04-03"
+    },
+    {
+      "file": "법제처_21-0710.jsonl",
+      "count": 1,
+      "date": "2026-04-03"
+    },
+    {
+      "file": "법제처_22-0155.jsonl",
+      "count": 1,
+      "date": "2026-04-06"
+    },
+    {
+      "file": "법제처_17-0245.jsonl",
+      "count": 1,
+      "date": "2026-04-06"
+    },
+    {
+      "file": "법제처_20-0620.jsonl",
+      "count": 1,
+      "date": "2026-04-06"
+    },
+    {
+      "file": "법제처_21-0054.jsonl",
+      "count": 1,
+      "date": "2026-04-06"
+    },
+    {
+      "file": "법제처_15-0688.jsonl",
+      "count": 1,
+      "date": "2026-04-07"
+    },
+    {
+      "file": "법제처_09-0041.jsonl",
+      "count": 1,
+      "date": "2026-04-07"
+    },
+    {
+      "file": "법제처_24-0696.jsonl",
+      "count": 1,
+      "date": "2026-04-15"
+    }
+  ]
+}

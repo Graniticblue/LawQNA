@@ -36,9 +36,13 @@ CHROMA_DIR = DATA_DIR / "chroma_db"
 
 ALL_ARTICLES_PATH = DATA_DIR / "raw_laws" / "all_articles.jsonl"
 BYEOLPYO_PATH     = DATA_DIR / "raw_laws" / "byeolpyo" / "byeolpyo_chunks.jsonl"
-V9_PATH           = Path(r"D:\Workspace (0224 COT rabeling)\seoul_reasoning_v9_final.jsonl")
 QA_UPDATES_DIR    = DATA_DIR / "qa_precedents" / "updates"
 MANIFEST_PATH     = DATA_DIR / "qa_precedents" / "manifest.json"
+LABELED_WITH_DOC_PATH = DATA_DIR / "labeled_with_doc.jsonl"
+
+# 법제처 해석례 전용 컬렉션
+PRECEDENTS_ADD_COLLECTION = "precedents_2026_april"
+PRECEDENTS_MANIFEST_PATH  = DATA_DIR / "qa_precedents" / "manifest_법제처.json"
 
 # ============================================================
 # 임베딩 모델 설정
@@ -87,8 +91,6 @@ def load_law_documents() -> list:
     + byeolpyo_chunks.jsonl (별표)
     -> LlamaIndex Document 리스트
     """
-    from llama_index.core import Document
-
     docs = []
 
     # ── 1) 법령 조문 ──────────────────────────────────────────
@@ -117,11 +119,10 @@ def load_law_documents() -> list:
                     "article_title":    truncate(rec.get("article_title", ""), 200),
                     "enforcement_date": rec.get("enforcement_date", ""),
                     "source_url":       truncate(rec.get("source_url", ""), 300),
-                    "is_byeolpyo":      "false",  # Chroma metadata: bool -> str
+                    "is_byeolpyo":      "false",
                 }
-                # doc_id: 중복 방지용 고유 키
                 doc_id = f"art_{rec.get('law_id', '')}_{rec.get('article_no', '')}"
-                docs.append(Document(text=text, metadata=meta, id_=doc_id))
+                docs.append({"id": doc_id, "text": text, "meta": meta})
 
         print(f"    -> {len(docs):,}개 조문 로드 완료")
     else:
@@ -164,7 +165,7 @@ def load_law_documents() -> list:
                     "section_title":    truncate(rec.get("section_title", ""), 200),
                 }
                 doc_id = f"byp_{rec.get('law_id', '')}_{rec.get('chunk_seq', 0)}"
-                docs.append(Document(text=text, metadata=meta, id_=doc_id))
+                docs.append({"id": doc_id, "text": text, "meta": meta})
 
         added = len(docs) - byeolpyo_start
         print(f"    -> {added}개 별표 청크 로드 완료")
@@ -189,8 +190,6 @@ def load_qa_documents(jsonl_path: Path, source_label: str = "") -> list:
           {"role": "model", "parts": [{"text": "CoT 답변"}]}
       ]}
     """
-    from llama_index.core import Document
-
     docs = []
     label = source_label or jsonl_path.name
 
@@ -221,7 +220,16 @@ def load_qa_documents(jsonl_path: Path, source_label: str = "") -> list:
             # 임베딩 텍스트 구성
             # 전략: 질문을 앞에 놓고 검색태그 추가 -> 유사 질문 매칭에 최적화
             #       답변도 포함 -> 검색 결과로 전체 CoT 답변 반환 가능
+            # doc 필드 (labeled_with_doc.jsonl 등에서 존재)
+            doc_ref    = rec.get("doc_ref", "")
+            doc_agency = rec.get("doc_agency", "")
+            doc_code   = rec.get("doc_code", "")
+            doc_date   = rec.get("doc_date", "")
+            tag        = rec.get("tag", "")
+
             embed_text = f"[질문]\n{question}"
+            if doc_ref:
+                embed_text += f"\n[참조] {doc_ref}"
             if search_tags:
                 embed_text += f"\n[검색태그] {search_tags}"
             embed_text += f"\n\n[답변]\n{answer}"
@@ -230,11 +238,16 @@ def load_qa_documents(jsonl_path: Path, source_label: str = "") -> list:
                 "question":    truncate(question, 500),
                 "answer_head": truncate(answer, 300),    # 결과 미리보기용
                 "search_tags": truncate(search_tags, 300),
+                "doc_ref":     truncate(doc_ref, 100),
+                "doc_agency":  truncate(doc_agency, 50),
+                "doc_code":    truncate(doc_code, 50),
+                "doc_date":    doc_date,
+                "tag":         truncate(tag, 50),
                 "source_file": label,
                 "record_idx":  str(i),
             }
             doc_id = f"qa_{jsonl_path.stem}_{i}"
-            docs.append(Document(text=embed_text, metadata=meta, id_=doc_id))
+            docs.append({"id": doc_id, "text": embed_text, "meta": meta})
 
     return docs
 
@@ -250,42 +263,54 @@ def build_index(
     embed_model,
     reset: bool = False,
 ) -> None:
-    """Document 리스트를 Chroma 컬렉션에 임베딩 + 저장"""
-    from llama_index.core import VectorStoreIndex, StorageContext
-    from llama_index.vector_stores.chroma import ChromaVectorStore
-
+    """dict 리스트를 Chroma 컬렉션에 임베딩 + 저장 (중복 스킵)"""
     if not documents:
         print(f"  [SKIP] {collection_name}: 저장할 Document 없음")
         return
 
-    # reset 모드: 기존 컬렉션 삭제
     if reset:
         try:
             chroma_client.delete_collection(collection_name)
             print(f"  기존 컬렉션 삭제 완료: {collection_name}")
         except Exception:
-            pass  # 없으면 무시
+            pass
 
-    chroma_col   = chroma_client.get_or_create_collection(
+    col = chroma_client.get_or_create_collection(
         collection_name,
         metadata={"hnsw:space": "cosine"},
     )
-    vector_store = ChromaVectorStore(chroma_collection=chroma_col)
-    storage_ctx  = StorageContext.from_defaults(vector_store=vector_store)
 
-    print(f"  [{collection_name}] {len(documents):,}개 Document 임베딩 + 저장 중...")
+    # 기존 ID 조회 → 중복 스킵
+    existing_ids = set(col.get(limit=200_000, include=[])["ids"])
+    new_docs = [d for d in documents if d["id"] not in existing_ids]
+
+    if not new_docs:
+        print(f"  [{collection_name}] 신규 없음 (전부 중복)")
+        return
+    if len(new_docs) < len(documents):
+        skipped = len(documents) - len(new_docs)
+        print(f"  [{collection_name}] {skipped}개 중복 스킵, {len(new_docs):,}개 신규")
+
+    print(f"  [{collection_name}] {len(new_docs):,}개 임베딩 + 저장 중...")
     t0 = time.time()
 
-    VectorStoreIndex.from_documents(
-        documents,
-        storage_context=storage_ctx,
-        embed_model=embed_model,
-        show_progress=True,
-    )
+    BATCH = 50
+    added = 0
+    for i in range(0, len(new_docs), BATCH):
+        batch = new_docs[i: i + BATCH]
+        ids, embeddings, texts, metas = [], [], [], []
+        for doc in batch:
+            ids.append(doc["id"])
+            embeddings.append(embed_model.get_text_embedding(doc["text"]))
+            texts.append(doc["text"])
+            metas.append(doc["meta"])
+        col.add(ids=ids, embeddings=embeddings, documents=texts, metadatas=metas)
+        added += len(batch)
+        print(f"    {added}/{len(new_docs)} 완료", end="\r")
 
     elapsed = time.time() - t0
-    rate    = len(documents) / elapsed if elapsed > 0 else 0
-    print(f"  [{collection_name}] 완료! ({elapsed:.1f}s, {rate:.0f} docs/s)")
+    rate    = len(new_docs) / elapsed if elapsed > 0 else 0
+    print(f"\n  [{collection_name}] 완료! ({elapsed:.1f}s, {rate:.0f} docs/s)")
 
 
 # ============================================================
@@ -330,8 +355,8 @@ def main() -> None:
         help="기존 컬렉션 삭제 후 전체 재빌드",
     )
     parser.add_argument(
-        "--collection", choices=["laws", "qa", "all"], default="all",
-        help="빌드할 컬렉션 선택 (기본: all)",
+        "--collection", choices=["laws", "qa", "법제처", "all"], default="all",
+        help="빌드할 컬렉션 선택 (기본: all). 법제처: updates/ → precedents_2026_april",
     )
     args = parser.parse_args()
 
@@ -339,15 +364,12 @@ def main() -> None:
     print("패키지 임포트 중...")
     try:
         import chromadb
-        from llama_index.core import Settings
         from llama_index.embeddings.huggingface import HuggingFaceEmbedding
     except ImportError as e:
         print(f"\n[ERROR] 필요한 패키지가 없습니다: {e}")
         print(
             "\n아래 명령어로 설치하세요:\n"
-            "pip install llama-index-core "
-            "llama-index-vector-stores-chroma "
-            "llama-index-embeddings-huggingface "
+            "pip install llama-index-embeddings-huggingface "
             "chromadb sentence-transformers"
         )
         sys.exit(1)
@@ -365,8 +387,6 @@ def main() -> None:
     else:
         embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL_NAME)
 
-    # LLM 비활성화 (인덱싱에는 LLM 불필요)
-    Settings.llm = None
     print("  임베딩 모델 로드 완료")
 
     # ── Chroma 클라이언트 ─────────────────────────────────────
@@ -409,19 +429,19 @@ def main() -> None:
         qa_docs_all   = []          # 이번에 실제로 로드된 Document 모음
         loaded_files  = {}          # {fname: count} -- manifest 업데이트용
 
-        # ── 기본 v9 데이터 ────────────────────────────────────
-        v9_label = V9_PATH.name     # "seoul_reasoning_v9_final.jsonl"
-        if args.reset or v9_label not in indexed_files:
-            if V9_PATH.exists():
-                print(f"  [v9] {v9_label} 로드 중...")
-                v9_docs = load_qa_documents(V9_PATH, v9_label)
-                print(f"    -> {len(v9_docs):,}개 Q&A")
-                qa_docs_all.extend(v9_docs)
-                loaded_files[v9_label] = len(v9_docs)
+        # ── labeled_with_doc (CoT 답변 + doc_agency/code/date) ─────
+        labeled_label = LABELED_WITH_DOC_PATH.name
+        if args.reset or labeled_label not in indexed_files:
+            if LABELED_WITH_DOC_PATH.exists():
+                print(f"  [labeled] {labeled_label} 로드 중...")
+                labeled_docs = load_qa_documents(LABELED_WITH_DOC_PATH, labeled_label)
+                print(f"    -> {len(labeled_docs):,}개 Q&A (CoT + doc 필드 포함)")
+                qa_docs_all.extend(labeled_docs)
+                loaded_files[labeled_label] = len(labeled_docs)
             else:
-                print(f"  [SKIP] v9 파일 없음: {V9_PATH}")
+                print(f"  [SKIP] {labeled_label} 없음 (enrich_labeled.py 실행 필요)")
         else:
-            print(f"  [SKIP] {v9_label} 이미 인덱싱됨 (--reset 으로 재빌드 가능)")
+            print(f"  [SKIP] {labeled_label} 이미 인덱싱됨 (--reset 으로 재빌드 가능)")
 
         # ── updates/ 폴더 내 미처리 JSONL ────────────────────
         if QA_UPDATES_DIR.exists():
@@ -460,12 +480,67 @@ def main() -> None:
             print("  [SKIP] 새로 인덱싱할 Q&A 데이터 없음")
 
     # ==============================================================
+    # [3] 법제처 해석례 인덱스 (precedents_2026_april)
+    # ==============================================================
+    if args.collection == "법제처":
+        print("\n" + "=" * 60)
+        print(f"[법제처] 해석례 인덱스 ({PRECEDENTS_ADD_COLLECTION}) 빌드")
+        print("=" * 60)
+
+        # 전용 manifest 로드
+        if PRECEDENTS_MANIFEST_PATH.exists():
+            import json as _json
+            prec_manifest = _json.loads(PRECEDENTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+        else:
+            prec_manifest = {"indexed": []}
+        prec_indexed = {item["file"] for item in prec_manifest.get("indexed", [])}
+
+        prec_docs_all  = []
+        prec_loaded    = {}
+
+        if QA_UPDATES_DIR.exists():
+            update_files = sorted(QA_UPDATES_DIR.glob("*.jsonl"))
+            if update_files:
+                print(f"  updates/ 폴더 확인 ({len(update_files)}개 파일):")
+                for upd_path in update_files:
+                    fname = upd_path.name
+                    if not args.reset and fname in prec_indexed:
+                        print(f"    [SKIP] {fname} 이미 인덱싱됨")
+                        continue
+                    print(f"    [{fname}] 로드 중...")
+                    upd_docs = load_qa_documents(upd_path, fname)
+                    print(f"      -> {len(upd_docs):,}개 Q&A")
+                    prec_docs_all.extend(upd_docs)
+                    prec_loaded[fname] = len(upd_docs)
+
+        if prec_docs_all:
+            print(f"\n  총 {len(prec_docs_all):,}개 Q&A 인덱싱 시작")
+            build_index(
+                collection_name=PRECEDENTS_ADD_COLLECTION,
+                documents=prec_docs_all,
+                chroma_client=chroma_client,
+                embed_model=embed_model,
+                reset=args.reset,
+            )
+            # 전용 manifest 갱신
+            import json as _json
+            from datetime import date as _date
+            for fname, cnt in prec_loaded.items():
+                prec_manifest["indexed"] = [x for x in prec_manifest["indexed"] if x["file"] != fname]
+                prec_manifest["indexed"].append({"file": fname, "count": cnt, "date": _date.today().isoformat()})
+            PRECEDENTS_MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
+            PRECEDENTS_MANIFEST_PATH.write_text(_json.dumps(prec_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"  manifest_법제처.json 업데이트 완료: {list(prec_loaded.keys())}")
+        else:
+            print("  [SKIP] 새로 인덱싱할 법제처 해석례 없음")
+
+    # ==============================================================
     # 완료 요약
     # ==============================================================
     print("\n" + "=" * 60)
     print("완료! 인덱스 현황:")
     print("=" * 60)
-    for col_name in ["law_articles", "qa_precedents"]:
+    for col_name in ["law_articles", "qa_precedents", PRECEDENTS_ADD_COLLECTION]:
         try:
             col = chroma_client.get_collection(col_name)
             print(f"  {col_name:25s}: {col.count():,}개 벡터")
