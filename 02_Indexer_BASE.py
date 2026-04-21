@@ -21,6 +21,7 @@
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -32,7 +33,7 @@ from pathlib import Path
 # ============================================================
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
-CHROMA_DIR = DATA_DIR / "chroma_db"
+CHROMA_DIR = Path(os.environ.get("CHROMA_DB_PATH", str(DATA_DIR / "chroma_db")))
 
 ALL_ARTICLES_PATH = DATA_DIR / "raw_laws" / "all_articles.jsonl"
 BYEOLPYO_PATH     = DATA_DIR / "raw_laws" / "byeolpyo" / "byeolpyo_chunks.jsonl"

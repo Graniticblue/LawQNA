@@ -23,6 +23,7 @@
 """
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,7 +37,7 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 # ============================================================
 BASE_DIR        = Path(__file__).parent
 DATA_DIR        = BASE_DIR / "data"
-CHROMA_DIR      = DATA_DIR / "chroma_db"
+CHROMA_DIR      = Path(os.environ.get("CHROMA_DB_PATH", str(DATA_DIR / "chroma_db")))
 MAP_PATH        = DATA_DIR / "keyword_law_map.json"
 GRAPH_PATH      = DATA_DIR / "article_graph.json"
 ARTICLE_ROLES_DIR = DATA_DIR / "article_roles"
