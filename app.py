@@ -109,9 +109,12 @@ html, body, [class*="css"] {
   border-radius: 20px !important;
   font-size: 12px !important;
   font-weight: 500 !important;
-  height: 32px !important;
-  padding: 0 14px !important;
-  white-space: nowrap !important;
+  height: auto !important;
+  min-height: 32px !important;
+  padding: 6px 14px !important;
+  white-space: normal !important;
+  line-height: 1.35 !important;
+  word-break: keep-all !important;
   transition: all .12s !important;
   box-shadow: none !important;
 }
@@ -709,7 +712,7 @@ chip_cols = st.columns(len(EXAMPLES))
 for col, ex in zip(chip_cols, EXAMPLES):
     with col:
         st.markdown('<div class="chip-btn">', unsafe_allow_html=True)
-        if st.button(ex[:18] + "…", key=f"chip_{ex[:10]}", use_container_width=True):
+        if st.button(ex, key=f"chip_{ex[:10]}", use_container_width=True):
             st.session_state.pending_query = ex
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
