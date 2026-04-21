@@ -18,7 +18,16 @@ def chroma_is_empty() -> bool:
     sqlite = CHROMA_DIR / "chroma.sqlite3"
     if not sqlite.exists():
         return True
-    return sqlite.stat().st_size < 65536  # 64KB 미만이면 빈 DB
+    if sqlite.stat().st_size < 65536:
+        return True
+    # 파일이 있어도 law_articles 컬렉션이 실제로 비어있으면 재인덱싱
+    try:
+        import chromadb
+        client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+        col = client.get_or_create_collection("law_articles")
+        return col.count() == 0
+    except Exception:
+        return True
 
 if __name__ == "__main__":
     if chroma_is_empty():
