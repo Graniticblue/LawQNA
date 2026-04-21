@@ -1,0 +1,11 @@
+.env
+.git
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+data/chroma_db/
+신구대조표_인쇄본/
+판례/
+tmp/

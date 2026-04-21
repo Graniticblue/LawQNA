@@ -22,3 +22,4 @@ venv/
 # 임시 출력 파일
 *.txt
 !prompt.md
+!requirements.txt
