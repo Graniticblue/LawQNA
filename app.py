@@ -580,7 +580,7 @@ def render_compare_result(items: list[dict], analysis: str):
 # ════════════════════════════════════════════════════════════
 
 # ── 헤더 ────────────────────────────────────────────────────
-h_left, h_right = st.columns([1, "auto"])
+h_left, h_right = st.columns([5, 1])
 with h_left:
     st.markdown("""
     <div class="app-header">
@@ -606,7 +606,7 @@ st.markdown('<hr class="hr-toss" style="margin-top:0">', unsafe_allow_html=True)
 if st.session_state.show_history and st.session_state.history:
     history_rev = list(reversed(st.session_state.history[-10:]))
 
-    hdr_l, hdr_r = st.columns([1, "auto"])
+    hdr_l, hdr_r = st.columns([5, 1])
     with hdr_l:
         st.markdown(
             '<div style="font-size:13px;font-weight:700;color:var(--t2);'
