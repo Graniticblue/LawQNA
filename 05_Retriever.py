@@ -1148,10 +1148,10 @@ class Retriever:
             if aid in seen_ids:
                 continue
             law_name = rec.get("law_name", "")
-            개정조문 = rec.get("개정조문", [])
+            조문_변경 = rec.get("조문_변경", [])
 
-            for art in 개정조문:
-                art_norm = art.replace(" ", "")
+            for item in 조문_변경:
+                art_norm = item.get("조문", "").replace(" ", "")
                 m = re.match(r'(제\d+조)', art_norm)
                 if not m:
                     continue
@@ -1202,13 +1202,21 @@ class Retriever:
                 lines.append(f"개정이유: {rec.get('개정이유','')}")
                 키포인트 = rec.get('목적론적_키포인트', '')
                 if 키포인트:
-                    lines.append(f"목적론적 키포인트: {키포인트}")
-                주요내용 = rec.get('주요내용', [])
+                    if isinstance(키포인트, list):
+                        lines.append("목적론적 키포인트:")
+                        for kp in 키포인트:
+                            lines.append(f"  · {kp}")
+                    else:
+                        lines.append(f"목적론적 키포인트: {키포인트}")
+                주요내용 = rec.get('주요내용', '')
                 if 주요내용:
-                    lines.append("주요 개정 내용:")
-                    for item in 주요내용:
-                        조문 = ", ".join(item.get('조문', []))
-                        lines.append(f"  · [{조문}] {item.get('항목','')}: {item.get('내용','')}")
+                    if isinstance(주요내용, str):
+                        lines.append(f"주요 개정 내용: {주요내용}")
+                    else:
+                        lines.append("주요 개정 내용:")
+                        for item in 주요내용:
+                            조문 = ", ".join(item.get('조문', []))
+                            lines.append(f"  · [{조문}] {item.get('항목','')}: {item.get('내용','')}")
                 연동 = rec.get('연동_조문_주의', '')
                 if 연동:
                     lines.append(f"※ 연동 개정: {연동}")
