@@ -380,6 +380,12 @@ class HybridSearcher:
         except Exception:
             self._memo_col = None
 
+        # law_amendments: 개정이력 의미 검색 (index_amendments_chroma.py로 구축)
+        try:
+            self._amend_col = chroma_client.get_collection("law_amendments")
+        except Exception:
+            self._amend_col = None
+
     def _embed_text(self, text: str) -> list[float]:
         return self._embed.get_text_embedding(text)
 
@@ -642,6 +648,70 @@ class HybridSearcher:
 
         results.sort(key=lambda x: -x["score"])
         return results[:top_k]
+
+    # ----------------------------------------------------------
+    # 개정이력 의미 검색 (law_amendments)
+    # ----------------------------------------------------------
+
+    def search_amendments_semantic(
+        self,
+        query: str,
+        amendments_cache: list[dict],
+        top_k: int = 3,
+        min_score: float = 0.45,
+    ) -> list[dict]:
+        """
+        쿼리 의미 기반으로 개정이력 직접 검색.
+        '방화문 기준이 어떻게 바뀌었나' 등 개정 관련 질의에 활용.
+
+        Parameters
+        ----------
+        query            : 검색 쿼리
+        amendments_cache : Retriever._amendments (amendments.jsonl 전체)
+        top_k            : 반환할 최대 건수
+        min_score        : 최소 유사도 (cosine 변환 기준)
+        """
+        if self._amend_col is None or self._amend_col.count() == 0:
+            return []
+
+        query_emb = self._embed_text(query)
+        n = min(top_k * 2, self._amend_col.count())
+        try:
+            res = self._amend_col.query(
+                query_embeddings=[query_emb],
+                n_results=n,
+                include=["documents", "metadatas", "distances"],
+            )
+        except Exception:
+            return []
+
+        # amendment_id → full record 매핑
+        amend_map: dict[str, dict] = {
+            rec.get("amendment_id", ""): rec
+            for rec in amendments_cache
+        }
+
+        results = []
+        for doc_text, meta, dist in zip(
+            res["documents"][0], res["metadatas"][0], res["distances"][0]
+        ):
+            score = max(0.0, 1.0 - dist)
+            if score < min_score:
+                continue
+            aid = meta.get("amendment_id", "")
+            full_rec = amend_map.get(aid)
+            if full_rec is not None:
+                results.append(full_rec)
+
+        results_unique = []
+        seen_ids: set[str] = set()
+        for rec in results:
+            aid = rec.get("amendment_id", "")
+            if aid not in seen_ids:
+                results_unique.append(rec)
+                seen_ids.add(aid)
+
+        return results_unique[:top_k]
 
     # ----------------------------------------------------------
     # 판례 검색 (court_cases) -PLAN §4.2
@@ -1039,6 +1109,12 @@ class Retriever:
         """질의와 관련된 해석 원칙 메모 검색 (memos 컬렉션)."""
         return self._searcher.search_memos(query, top_k=top_k)
 
+    def search_amendments_semantic(self, query: str, top_k: int = 3) -> list[dict]:
+        """쿼리 의미 기반으로 개정이력 직접 검색. '방화문 기준이 어떻게 바뀌었나' 등."""
+        return self._searcher.search_amendments_semantic(
+            query, self._amendments, top_k=top_k
+        )
+
     def fetch_linked_memos(
         self,
         law_docs: list[RetrievedDoc],
@@ -1179,11 +1255,13 @@ class Retriever:
         article_roles: Optional[list[dict]] = None,
         memo_docs: Optional[list[dict]] = None,
         amendment_docs: Optional[list[dict]] = None,
+        amendment_semantic_docs: Optional[list[dict]] = None,
     ) -> str:
         """
         검색 결과를 Pass 2 LLM 컨텍스트로 포맷 (PLAN §2.2).
         0층: 조문 해석 프레임 / 1층: 법령 조문 / 2층: 질의회신 선례 / 3층: 판례
         memo층: 관련 해석 원칙 메모 (always-on이 아닌 케이스-특정 원칙)
+        amendment_semantic_docs: 의미 검색으로 찾은 개정이력 (조문 매칭과 별도)
         """
         lines = []
 
@@ -1225,6 +1303,62 @@ class Retriever:
                 연동 = rec.get('연동_조문_주의', '')
                 if 연동:
                     lines.append(f"※ 연동 개정: {연동}")
+                연관 = rec.get('연관_개정', [])
+                if 연관:
+                    lines.append(f"※ 연관 개정: {', '.join(연관[:5])}")
+
+        # ── 개정이력 검색 결과층: 의미 검색 기반 ─────────
+        if amendment_semantic_docs:
+            # amendment_docs에 이미 포함된 ID는 중복 렌더링 제외
+            existing_ids: set[str] = set()
+            if amendment_docs:
+                existing_ids = {
+                    rec.get("amendment_id", "") for rec in amendment_docs
+                }
+            unique_semantic = [
+                rec for rec in amendment_semantic_docs
+                if rec.get("amendment_id", "") not in existing_ids
+            ]
+            if unique_semantic:
+                lines.append("\n=== [개정이력 검색 결과] ===")
+                lines.append(
+                    "※ 아래는 질의와 의미적으로 관련된 개정이력입니다. "
+                    "목적론적 해석 시 참조하세요."
+                )
+                for rec in unique_semantic:
+                    lines.append(
+                        f"\n[{rec.get('law_name','')} {rec.get('시행일','')} "
+                        f"{rec.get('공포번호','')}]"
+                    )
+                    lines.append(f"개정이유: {rec.get('개정이유','')}")
+                    키포인트 = rec.get('목적론적_키포인트', '')
+                    if 키포인트:
+                        if isinstance(키포인트, list):
+                            lines.append("목적론적 키포인트:")
+                            for kp in 키포인트:
+                                lines.append(f"  · {kp}")
+                        else:
+                            lines.append(f"목적론적 키포인트: {키포인트}")
+                    주요내용 = rec.get('주요내용', '')
+                    if 주요내용:
+                        if isinstance(주요내용, str):
+                            lines.append(f"주요 개정 내용: {주요내용}")
+                        else:
+                            lines.append("주요 개정 내용:")
+                            for item in 주요내용:
+                                조문 = ", ".join(item.get('조문', []))
+                                lines.append(f"  · [{조문}] {item.get('항목','')}: {item.get('내용','')}")
+                    부칙 = rec.get('부칙_상세', [])
+                    if 부칙:
+                        lines.append("부칙(적용례·경과조치):")
+                        for b in 부칙:
+                            lines.append(f"  · {b.get('조항','')}: {b.get('내용','')}")
+                    연동 = rec.get('연동_조문_주의', '')
+                    if 연동:
+                        lines.append(f"※ 연동 개정: {연동}")
+                    연관 = rec.get('연관_개정', [])
+                    if 연관:
+                        lines.append(f"※ 연관 개정: {', '.join(연관[:5])}")
 
         # ── memo층: 관련 해석 원칙 메모 ─────────────────
         if memo_docs:
