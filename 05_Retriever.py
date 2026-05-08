@@ -1217,6 +1217,11 @@ class Retriever:
                         for item in 주요내용:
                             조문 = ", ".join(item.get('조문', []))
                             lines.append(f"  · [{조문}] {item.get('항목','')}: {item.get('내용','')}")
+                부칙 = rec.get('부칙_상세', [])
+                if 부칙:
+                    lines.append("부칙(적용례·경과조치):")
+                    for b in 부칙:
+                        lines.append(f"  · {b.get('조항','')}: {b.get('내용','')}")
                 연동 = rec.get('연동_조문_주의', '')
                 if 연동:
                     lines.append(f"※ 연동 개정: {연동}")
