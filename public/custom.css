@@ -1,0 +1,13 @@
+/* Chainlit 로고 숨김 */
+img[alt="logo"],
+img[alt="Chainlit"],
+a img[alt="logo"] {
+    display: none !important;
+}
+
+/* 하단 "Built with Chainlit" 워터마크 숨김 */
+a[href*="chainlit.io"],
+a[href*="github.com/Chainlit"],
+.watermark {
+    display: none !important;
+}
