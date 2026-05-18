@@ -5,17 +5,9 @@
         const submitBtn = document.getElementById('chat-submit');
         if (!submitBtn) return;
 
-        // 입력창 최상위 컨테이너까지 올라가기
-        let container = submitBtn.closest('form');
-        if (!container) {
-            let el = submitBtn;
-            for (let i = 0; i < 6; i++) {
-                el = el.parentElement;
-                if (!el) break;
-                container = el;
-            }
-        }
-        if (!container || !container.parentNode) return;
+        // #chat-submit 기준으로 3단계 위 = 둥근 입력박스 컨테이너
+        const inputBox = submitBtn.parentElement?.parentElement?.parentElement;
+        if (!inputBox || !inputBox.parentNode) return;
 
         const img = document.createElement('img');
         img.id = 'usun-logo';
@@ -23,14 +15,13 @@
         img.alt = '유선건축사사무소';
         img.style.cssText = [
             'display: block',
-            'margin: 0 auto 14px auto',
-            'max-height: 56px',
-            'max-width: 220px',
+            'margin: 0 auto 10px auto',
+            'max-height: 52px',
+            'max-width: 200px',
             'object-fit: contain',
-            'opacity: 0.92',
         ].join(';');
 
-        container.parentNode.insertBefore(img, container);
+        inputBox.parentNode.insertBefore(img, inputBox);
     }
 
     const observer = new MutationObserver(insertLogo);
