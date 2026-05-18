@@ -85,6 +85,70 @@ def chunk_law_pdf(text: str, law_name: str) -> list[dict]:
     return chunks
 
 
+# ── 인라인 인용 마커 파싱 ───────────────────────────────────
+
+def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
+    """
+    답변 텍스트의 [법령N], [해석례N], [판례N] 마커를 파싱하여
+    cl.Text(display="side") 요소 리스트를 반환.
+    """
+    law_docs   = result.get("law_docs",  [])
+    qa_docs    = result.get("qa_docs",   [])
+    case_docs  = result.get("case_docs", [])
+
+    elements: list = []
+    seen: set[str] = set()
+
+    for m in re.finditer(r'\[(법령|해석례|판례)(\d+)\]', answer):
+        kind = m.group(1)
+        idx  = int(m.group(2)) - 1   # 0-based
+        name = f"{kind}{m.group(2)}"
+
+        if name in seen:
+            continue
+        seen.add(name)
+
+        doc = None
+        if kind == "법령"   and 0 <= idx < len(law_docs):
+            doc = law_docs[idx]
+        elif kind == "해석례" and 0 <= idx < len(qa_docs):
+            doc = qa_docs[idx]
+        elif kind == "판례"  and 0 <= idx < len(case_docs):
+            doc = case_docs[idx]
+
+        if doc is None:
+            continue
+
+        content = f"**{doc.law_name}  {doc.article_no}**\n\n{doc.content}"
+        elements.append(cl.Text(name=name, content=content, display="side"))
+
+    return answer, elements
+
+
+# ── [출처 요약] 분리 ─────────────────────────────────────────
+
+def split_answer(raw: str) -> tuple[str, str]:
+    m = re.search(r'\[출처 요약\]', raw)
+    if m:
+        return raw[: m.start()].rstrip(), raw[m.start():]
+    return raw, ""
+
+
+# ── 출처 배지 텍스트 ─────────────────────────────────────────
+
+def format_sources(source_info: dict) -> str:
+    badges = []
+    if source_info.get("db_law"):
+        badges.append(f"📋 **조문** {source_info['db_law_detail']}")
+    if source_info.get("db_qa"):
+        badges.append(f"📌 **해석례** {source_info['db_qa_detail']}")
+    if source_info.get("db_amendment"):
+        badges.append(f"📖 **입법요지** {source_info['db_amendment_detail']}")
+    if source_info.get("internal"):
+        badges.append(f"💡 **내장지식** {source_info['internal_detail']}")
+    return "\n".join(badges)
+
+
 # ── Chainlit 핸들러 ─────────────────────────────────────────
 
 @cl.on_chat_start
@@ -178,36 +242,24 @@ async def on_message(message: cl.Message):
 
     await thinking_msg.remove()
 
-    answer = result.get("answer", "")
-    law_docs = result.get("law_docs", [])
-    qa_docs = result.get("qa_docs", [])
+    raw_answer  = result.get("answer", "")
+    source_info = result.get("source_info", {})
+    if not isinstance(source_info, dict):
+        source_info = {}
 
-    # 답변 전송
-    await cl.Message(content=answer).send()
+    # [출처 요약] 블록 분리
+    body, _ = split_answer(raw_answer)
 
-    # 검색 결과 요약 (Elements)
-    elements = []
+    # 인라인 인용 마커 → cl.Text 요소 생성
+    body, cite_elements = build_citation_elements(body, result)
 
-    if law_docs:
-        law_lines = [f"**검색된 법령 조문 ({len(law_docs)}건)**\n"]
-        for doc in law_docs[:5]:
-            badge = "(직접참조)" if getattr(doc, "score_type", "") == "exact" else f"(유사도 {doc.score:.3f})"
-            law_lines.append(f"- {doc.law_name} {doc.article_no} {badge}")
-        elements.append(
-            cl.Text(name="법령 조문", content="\n".join(law_lines), display="inline")
-        )
+    # 본문 + 인라인 인용 요소 전송
+    await cl.Message(content=body, elements=cite_elements).send()
 
-    if qa_docs:
-        qa_lines = [f"**유사 선례 ({len(qa_docs)}건)**\n"]
-        for doc in qa_docs[:3]:
-            ref = doc.metadata.get("doc_ref", "") or doc.metadata.get("doc_code", "")
-            qa_lines.append(f"- {ref or doc.law_name} (유사도 {doc.score:.3f})")
-        elements.append(
-            cl.Text(name="유사 선례", content="\n".join(qa_lines), display="inline")
-        )
-
-    if elements:
-        await cl.Message(content="", elements=elements).send()
+    # 출처 요약 (있을 때만 별도 메시지)
+    sources_text = format_sources(source_info)
+    if sources_text:
+        await cl.Message(content=f"**출처**\n{sources_text}", author="출처").send()
 
 
 @cl.on_chat_end
