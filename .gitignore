@@ -1,8 +1,7 @@
 # 환경변수 (API 키)
 .env
 
-# Chainlit 자동 생성 파일
-.chainlit/translations/
+# Chainlit 자동 생성 파일 (번역·config는 추적)
 # config.toml은 추적 (앱 이름·테마 설정 포함)
 
 # ChromaDB 바이너리 (재생성 가능)

@@ -11,3 +11,23 @@ a[href*="github.com/Chainlit"],
 .watermark {
     display: none !important;
 }
+
+/* 전송 버튼 블루로 변경 */
+button[data-testid="send-button"],
+button[aria-label="Send message"],
+form button[type="submit"] {
+    background-color: #1565C0 !important;
+    color: white !important;
+}
+
+button[data-testid="send-button"]:hover,
+button[aria-label="Send message"]:hover {
+    background-color: #0D47A1 !important;
+}
+
+/* 아이콘 버튼(send) 색상 */
+button[data-testid="send-button"] svg,
+button[aria-label="Send message"] svg {
+    color: white !important;
+    fill: white !important;
+}
