@@ -12,24 +12,19 @@ a[href*="github.com/Chainlit"],
     display: none !important;
 }
 
-/* 전송 버튼 블루로 변경 (MUI Fab 타겟) */
-.MuiFab-root,
-.MuiFab-colorPrimary,
-.MuiFab-circular,
-button[class*="MuiFab"] {
+/* Tailwind CSS 변수 오버라이드 — 전체 primary 색상을 블루로 */
+:root {
+    --primary: 21 101 192;      /* #1565C0 (RGB) */
+    --primary-foreground: 255 255 255;
+    --ring: 21 101 192;
+}
+
+/* 전송 버튼 직접 타겟 */
+#chat-submit {
     background-color: #1565C0 !important;
     color: white !important;
 }
 
-.MuiFab-root:hover,
-.MuiFab-colorPrimary:hover,
-button[class*="MuiFab"]:hover {
+#chat-submit:hover:not(:disabled) {
     background-color: #0D47A1 !important;
-}
-
-/* MUI CSS 변수 오버라이드 */
-:root {
-    --mui-palette-primary-main: #1565C0 !important;
-    --mui-palette-primary-dark: #0D47A1 !important;
-    --mui-palette-primary-light: #42A5F5 !important;
 }
