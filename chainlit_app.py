@@ -235,8 +235,9 @@ async def generate_streaming(gen, query: str, extra_context: str, session_id: st
         msg = cl.Message(content="답변을 생성하지 못했습니다.")
         await msg.send()
 
+    # 스트리밍 완료 확정 (content 교체는 하지 않음)
     await msg.update()
-    return msg, result_holder[0]
+    return msg, result_holder[0], True  # True = streamed
 
 
 # ── 내장 법령 목록 ───────────────────────────────────────────
@@ -412,7 +413,7 @@ async def on_message(message: cl.Message):
 
     try:
         gen = get_generator()
-        msg, result = await generate_streaming(gen, query, extra_context, session_id)
+        stream_msg, result, _ = await generate_streaming(gen, query, extra_context, session_id)
     except Exception as e:
         await cl.Message(content=f"오류가 발생했습니다: {e}").send()
         return
@@ -444,11 +445,9 @@ async def on_message(message: cl.Message):
         cl.Action(name="new_chat",    value="reset", label="🔄 새 대화"),
     ]
 
-    # 스트리밍 완료 메시지에 요소·액션 추가
-    msg.content  = body
-    msg.elements = elements
-    msg.actions  = actions
-    await msg.update()
+    # raw 스트리밍 메시지 제거 후 처리된 메시지 새로 전송
+    await stream_msg.remove()
+    await cl.Message(content=body, elements=elements, actions=actions).send()
 
     # 히스토리 업데이트
     history.append({"q": query, "a": body[:500]})
