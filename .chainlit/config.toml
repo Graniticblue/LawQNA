@@ -77,6 +77,8 @@ cot = "hidden"
 
 custom_css = "/public/custom.css"
 
+custom_js = "/public/custom.js"
+
 [UI.theme]
 
 [UI.theme.light]
