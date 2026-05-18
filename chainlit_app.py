@@ -428,9 +428,6 @@ async def on_message(message: cl.Message):
     # [출처 요약] 블록 분리
     body, _ = split_answer(raw_answer)
 
-    # 섹션 접기/펼치기
-    body = make_collapsible_html(body)
-
     # 인라인 인용 마커 → cl.Text 요소
     body, elements = build_citation_elements(body, result)
 
