@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """chainlit_app.py — 건축법규 AI (Chainlit UI)"""
 
+import asyncio
 import importlib.util
 import io
 import sys
@@ -137,23 +138,33 @@ async def on_message(message: cl.Message):
     # ── 답변 생성 ─────────────────────────────────────────────
     gen = get_generator()
 
-    async with cl.Step(name="법령 분석", show_input=False) as step:
-        step.output = "Pass 1 — 쟁점 식별 및 관련 조문 분류 중…"
-        await step.update()
+    # 진행 메시지
+    thinking = cl.Message(content="⏳ 법령 분석 중…")
+    await thinking.send()
 
-        result = await cl.make_async(gen.generate)(
-            query=query,
-            verbose=False,
-            extra_context=extra_context,
+    try:
+        result = await asyncio.to_thread(
+            gen.generate,
+            query,
+            False,       # verbose
+            extra_context,
         )
+    except Exception as e:
+        await thinking.remove()
+        await cl.Message(content=f"⚠️ 오류가 발생했습니다: {e}").send()
+        return
 
-        n_law = len(result.get("law_docs", []))
-        n_qa  = len(result.get("qa_docs", []))
-        step.output = f"조문 {n_law}건 · 선례 {n_qa}건 검색 완료 → Pass 2 완료"
-        await step.update()
+    await thinking.remove()
+
+    # result 타입 보장
+    if not isinstance(result, dict):
+        await cl.Message(content=f"⚠️ 응답 형식 오류: {result}").send()
+        return
 
     raw_answer   = result.get("answer", "답변 생성에 실패했습니다.")
     source_info  = result.get("source_info", {})
+    if not isinstance(source_info, dict):
+        source_info = {}
     body, _      = split_answer(raw_answer)
     sources_text = format_sources(source_info)
 
