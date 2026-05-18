@@ -1,6 +1,10 @@
 # 환경변수 (API 키)
 .env
 
+# Chainlit 자동 생성 파일
+.chainlit/translations/
+.chainlit/*.toml
+
 # ChromaDB 바이너리 (재생성 가능)
 data/chroma_db/
 
