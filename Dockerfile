@@ -12,6 +12,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-EXPOSE 8501
+EXPOSE 8000
 
-CMD python startup.py && streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
+CMD python startup.py && chainlit run chainlit_app.py --port=${PORT:-8000} --host=0.0.0.0

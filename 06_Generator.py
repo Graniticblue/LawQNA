@@ -602,7 +602,7 @@ class Generator:
             self._retriever = mod.Retriever()
         return self._retriever
 
-    def generate(self, query: str, verbose: bool = True) -> dict:
+    def generate(self, query: str, verbose: bool = True, extra_context: str = "") -> dict:
         """
         2-pass 생성 실행.
         반환: {"query", "pass1", "context", "answer"}
@@ -704,6 +704,8 @@ class Generator:
                 + "\n".join(f"- \"{t}\"" for t in definition_terms)
             )
 
+        extra_section = f"\n## 추가 컨텍스트\n{extra_context}\n" if extra_context else ""
+
         pass2_input = f"""## 질문
 {query}
 
@@ -712,7 +714,7 @@ class Generator:
 {rel_type_summary}{def_terms_note}
 ## 검색된 관련 조문 및 판례
 {context}
-
+{extra_section}
 위 내용을 바탕으로 완전한 CoT 답변을 작성하세요."""
 
         # ── 메모 주입 ────────────────────────────────────
