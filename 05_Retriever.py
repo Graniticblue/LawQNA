@@ -1298,8 +1298,16 @@ class Retriever:
                 부칙 = rec.get('부칙_상세', [])
                 if 부칙:
                     lines.append("부칙(적용례·경과조치):")
-                    for b in 부칙:
-                        lines.append(f"  · {b.get('조항','')}: {b.get('내용','')}")
+                    if isinstance(부칙, dict):
+                        for k, v in 부칙.items():
+                            v_str = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+                            lines.append(f"  · {k}: {v_str[:200]}")
+                    else:
+                        for b in 부칙:
+                            if isinstance(b, dict):
+                                lines.append(f"  · {b.get('조항','')}: {b.get('내용','')}")
+                            else:
+                                lines.append(f"  · {b}")
                 연동 = rec.get('연동_조문_주의', '')
                 if 연동:
                     lines.append(f"※ 연동 개정: {연동}")
@@ -1351,8 +1359,16 @@ class Retriever:
                     부칙 = rec.get('부칙_상세', [])
                     if 부칙:
                         lines.append("부칙(적용례·경과조치):")
-                        for b in 부칙:
-                            lines.append(f"  · {b.get('조항','')}: {b.get('내용','')}")
+                        if isinstance(부칙, dict):
+                            for k, v in 부칙.items():
+                                v_str = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+                                lines.append(f"  · {k}: {v_str[:200]}")
+                        else:
+                            for b in 부칙:
+                                if isinstance(b, dict):
+                                    lines.append(f"  · {b.get('조항','')}: {b.get('내용','')}")
+                                else:
+                                    lines.append(f"  · {b}")
                     연동 = rec.get('연동_조문_주의', '')
                     if 연동:
                         lines.append(f"※ 연동 개정: {연동}")
