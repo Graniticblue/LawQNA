@@ -602,7 +602,7 @@ class Generator:
             self._retriever = mod.Retriever()
         return self._retriever
 
-    def generate(self, query: str, verbose: bool = True, extra_context: str = "") -> dict:
+    def generate(self, query: str, verbose: bool = True, extra_context: str = "", session_id: str = "") -> dict:
         """
         2-pass 생성 실행.
         반환: {"query", "pass1", "context", "answer"}
@@ -666,16 +666,24 @@ class Generator:
         # 개정이력 의미 검색: 쿼리와 직접 관련된 개정이력 추가 검색
         amendment_semantic_docs = retriever.search_amendments_semantic(query, top_k=3)
 
+        # 업로드 법령 검색 (세션 컬렉션)
+        uploaded_docs = []
+        if session_id:
+            uploaded_docs = retriever.search_uploaded(session_id, search_query, top_k=5)
+            if verbose and uploaded_docs:
+                print(f"→ 업로드 법령 {len(uploaded_docs)}건 검색됨")
+
         context = retriever.format_context(
             law_docs, qa_docs, case_docs,
             article_roles=article_roles if article_roles else None,
             memo_docs=memo_docs if memo_docs else None,
             amendment_docs=amendment_docs if amendment_docs else None,
             amendment_semantic_docs=amendment_semantic_docs if amendment_semantic_docs else None,
+            uploaded_docs=uploaded_docs if uploaded_docs else None,
         )
 
         if verbose:
-            print(f"→ 법령 조문 {len(law_docs)}건 / 질의회신 {len(qa_docs)}건 / 판례 {len(case_docs)}건 / 메모 {len(memo_docs)}건 / 개정연혁 {len(amendment_docs)}건 / 개정이력 검색 {len(amendment_semantic_docs)}건 주입됨")
+            print(f"→ 법령 조문 {len(law_docs)}건 / 질의회신 {len(qa_docs)}건 / 판례 {len(case_docs)}건 / 메모 {len(memo_docs)}건 / 개정연혁 {len(amendment_docs)}건 / 개정이력 검색 {len(amendment_semantic_docs)}건 / 업로드 {len(uploaded_docs)}건 주입됨")
 
         # ── Pass 2: 최종 답변 ─────────────────────────
         if verbose:

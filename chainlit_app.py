@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""chainlit_app.py — 건축법규 AI (Chainlit UI)"""
+"""
+chainlit_app.py -- 건축법규 AI 자문 시스템 (Chainlit 인터페이스)
+
+PDF 업로드 → 백그라운드 임베딩 → 세션 전용 ChromaDB 컬렉션 → 기존 law_articles와 동시 검색
+"""
 
 import asyncio
 import importlib.util
-import io
+import re
 import sys
 from pathlib import Path
 
@@ -12,96 +16,100 @@ import chainlit as cl
 BASE_DIR = Path(__file__).parent
 sys.path.insert(0, str(BASE_DIR))
 
-# ── Generator 싱글톤 ─────────────────────────────────────────
-_generator = None
+
+# ── Generator 싱글턴 ────────────────────────────────────────
+
+_generator_instance = None
 
 
 def get_generator():
-    global _generator
-    if _generator is None:
+    global _generator_instance
+    if _generator_instance is None:
         spec = importlib.util.spec_from_file_location(
-            "Generator", BASE_DIR / "06_Generator.py"
+            "generator_mod", BASE_DIR / "06_Generator.py"
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        _generator = mod.Generator()
-    return _generator
+        _generator_instance = mod.Generator()
+    return _generator_instance
 
 
-# ── PDF 파싱 ─────────────────────────────────────────────────
+# ── PDF 파싱 ────────────────────────────────────────────────
+
 def parse_pdf(path: str) -> str:
+    """PDF 파일에서 텍스트 추출 (PyMuPDF 우선, pdfplumber 폴백)."""
+    try:
+        import fitz  # PyMuPDF
+        doc = fitz.open(path)
+        pages = [page.get_text() for page in doc]
+        doc.close()
+        return "\n".join(pages)
+    except Exception:
+        pass
     try:
         import pdfplumber
-        parts = []
         with pdfplumber.open(path) as pdf:
-            for page in pdf.pages:
-                t = page.extract_text()
-                if t:
-                    parts.append(t)
-        return "\n".join(parts)
-    except Exception as e:
-        return f"[PDF 파싱 실패: {e}]"
-
-
-# ── 대화 이력 → 컨텍스트 문자열 ─────────────────────────────
-def history_to_context(history: list[dict]) -> str:
-    if not history:
+            return "\n".join(p.extract_text() or "" for p in pdf.pages)
+    except Exception:
         return ""
-    lines = ["[이전 대화 참고 — 연속 질의 시 맥락 유지]"]
-    for h in history[-3:]:  # 최근 3턴
-        lines.append(f"Q: {h['query']}")
-        summary = h["answer"][:300].replace("\n", " ")
-        lines.append(f"A: {summary}…")
-    return "\n".join(lines)
 
 
-# ── 출처 배지 텍스트 ─────────────────────────────────────────
-def format_sources(source_info: dict) -> str:
-    badges = []
-    if source_info.get("db_law"):
-        badges.append(f"📋 **조문** {source_info['db_law_detail']}")
-    if source_info.get("db_qa"):
-        badges.append(f"📌 **선례** {source_info['db_qa_detail']}")
-    if source_info.get("db_amendment"):
-        badges.append(f"📖 **입법요지** {source_info['db_amendment_detail']}")
-    if source_info.get("internal"):
-        badges.append(f"💡 **내장지식** {source_info['internal_detail']}")
-    return "\n".join(badges)
+# ── PDF 청킹 ────────────────────────────────────────────────
+
+def chunk_law_pdf(text: str, law_name: str) -> list[dict]:
+    """법령 PDF 텍스트를 제XX조 단위로 청킹."""
+    # 제XX조 패턴으로 분리
+    pattern = r'(?=제\d+조(?:의\d+)?[\s(（])'
+    parts = re.split(pattern, text)
+    chunks = []
+    for part in parts:
+        part = part.strip()
+        if not part or len(part) < 20:
+            continue
+        # 조문 번호 추출
+        m = re.match(r'(제\d+조(?:의\d+)?)', part)
+        article_no = m.group(1) if m else f"chunk_{len(chunks)}"
+        chunks.append({
+            "law_name": law_name,
+            "article_no": article_no,
+            "content": part[:2000],
+        })
+    # 청킹 실패 시 전체를 500자 단위로 분할
+    if not chunks:
+        for i in range(0, len(text), 500):
+            chunks.append({
+                "law_name": law_name,
+                "article_no": f"p{i // 500 + 1}",
+                "content": text[i:i + 500],
+            })
+    return chunks
 
 
-# ── [출처 요약] 블록 제거 (본문에서 분리) ─────────────────────
-def split_answer(raw: str) -> tuple[str, str]:
-    import re
-    m = re.search(r'\[출처 요약\]', raw)
-    if m:
-        return raw[: m.start()].rstrip(), raw[m.start():]
-    return raw, ""
-
-
-# ============================================================
-# Chainlit 이벤트
-# ============================================================
+# ── Chainlit 핸들러 ─────────────────────────────────────────
 
 @cl.on_chat_start
 async def on_start():
-    cl.user_session.set("history", [])
-    cl.user_session.set("uploaded_law", "")   # 누적 PDF 텍스트
+    cl.user_session.set("uploaded_law", "")
+    cl.user_session.set("pdf_ready", False)  # 임베딩 완료 여부
+
+    # 세션 컬렉션 미리 생성
+    session_id = cl.context.session.id
+    gen = get_generator()
+    retriever = gen._get_retriever()
+    retriever.create_session_collection(session_id)
+    cl.user_session.set("session_id", session_id)
 
     await cl.Message(
         content=(
-            "## 건축법규 AI\n\n"
-            "건축법·시행령·시행규칙 및 국토계획법 등 관련 법규에 대해 질의하세요.\n\n"
-            "> **시스템에 없는 법령**은 PDF를 첨부하시면 해당 내용을 참고하여 답변합니다.\n"
-            "> 이전 답변과 이어지는 질문도 그대로 입력하세요."
+            "**건축법규 AI 자문 시스템**에 오신 것을 환영합니다.\n\n"
+            "건축법·국토계획법·주택법 관련 질의를 입력하시거나, "
+            "참고할 법령 PDF를 첨부하시면 해당 내용을 함께 검토하여 답변드립니다."
         )
     ).send()
 
 
 @cl.on_message
 async def on_message(message: cl.Message):
-    history: list[dict] = cl.user_session.get("history", [])
-    uploaded_law: str = cl.user_session.get("uploaded_law", "")
-
     # ── PDF 첨부 처리 ─────────────────────────────────────────
     if message.elements:
         for elem in message.elements:
@@ -111,73 +119,101 @@ async def on_message(message: cl.Message):
             if not name.lower().endswith(".pdf"):
                 continue
 
-            pdf_text = parse_pdf(elem.path)
             law_label = name.replace(".pdf", "").replace(".PDF", "")
-            chunk = f"\n\n=== [{law_label}] ===\n{pdf_text}"
-            # 토큰 과다 방지: 법령 1개당 최대 6000자
-            uploaded_law += chunk[:6000]
-            cl.user_session.set("uploaded_law", uploaded_law)
 
-            await cl.Message(
-                content=f"**{law_label}** PDF 업로드 완료. 이후 질문에 참고합니다."
-            ).send()
+            # 파싱 알림
+            parsing_msg = cl.Message(content=f"**{law_label}** 파싱 중…")
+            await parsing_msg.send()
 
+            pdf_text = parse_pdf(elem.path)
+            chunks = chunk_law_pdf(pdf_text, law_label)
+
+            await parsing_msg.remove()
+
+            # 백그라운드 임베딩
+            indexing_msg = cl.Message(
+                content=f"**{law_label}** 임베딩 중… ({len(chunks)}개 청크) 질문을 먼저 입력하셔도 됩니다."
+            )
+            await indexing_msg.send()
+
+            session_id = cl.user_session.get("session_id", "")
+
+            async def do_index(chunks=chunks, session_id=session_id, msg=indexing_msg, label=law_label):
+                gen = get_generator()
+                retriever = gen._get_retriever()
+                n = await asyncio.to_thread(retriever.index_uploaded_chunks, session_id, chunks)
+                cl.user_session.set("pdf_ready", True)
+                await msg.remove()
+                await cl.Message(
+                    content=f"**{label}** 인덱싱 완료 ({n}개 청크). 이제 이 법령을 참고하여 답변합니다."
+                ).send()
+
+            asyncio.create_task(do_index())
+
+    # ── 텍스트 질의 처리 ─────────────────────────────────────
     query = message.content.strip()
     if not query:
         return
 
-    # ── extra_context 조합 ────────────────────────────────────
-    parts = []
-    hist_ctx = history_to_context(history)
-    if hist_ctx:
-        parts.append(hist_ctx)
-    if uploaded_law:
-        parts.append(f"[사용자 첨부 법령 전문]\n{uploaded_law}")
-    extra_context = "\n\n".join(parts)
+    # extra_context 조합 (필요 시 확장 가능)
+    extra_context = ""
+    session_id = cl.user_session.get("session_id", "")
 
-    # ── 답변 생성 ─────────────────────────────────────────────
-    gen = get_generator()
-
-    # 진행 메시지
-    thinking = cl.Message(content="⏳ 법령 분석 중…")
-    await thinking.send()
+    thinking_msg = cl.Message(content="분석 중…")
+    await thinking_msg.send()
 
     try:
+        gen = get_generator()
         result = await asyncio.to_thread(
             gen.generate,
             query,
-            False,       # verbose
+            False,
             extra_context,
+            session_id,  # session_id 전달
         )
     except Exception as e:
-        await thinking.remove()
-        await cl.Message(content=f"⚠️ 오류가 발생했습니다: {e}").send()
+        await thinking_msg.remove()
+        await cl.Message(content=f"오류가 발생했습니다: {e}").send()
         return
 
-    await thinking.remove()
+    await thinking_msg.remove()
 
-    # result 타입 보장
-    if not isinstance(result, dict):
-        await cl.Message(content=f"⚠️ 응답 형식 오류: {result}").send()
-        return
+    answer = result.get("answer", "")
+    law_docs = result.get("law_docs", [])
+    qa_docs = result.get("qa_docs", [])
 
-    raw_answer   = result.get("answer", "답변 생성에 실패했습니다.")
-    source_info  = result.get("source_info", {})
-    if not isinstance(source_info, dict):
-        source_info = {}
-    body, _      = split_answer(raw_answer)
-    sources_text = format_sources(source_info)
+    # 답변 전송
+    await cl.Message(content=answer).send()
 
-    # 본문 전송
-    await cl.Message(content=body).send()
+    # 검색 결과 요약 (Elements)
+    elements = []
 
-    # 출처 별도 전송 (있을 때만)
-    if sources_text:
-        await cl.Message(
-            content=f"**출처**\n{sources_text}",
-            author="출처",
-        ).send()
+    if law_docs:
+        law_lines = [f"**검색된 법령 조문 ({len(law_docs)}건)**\n"]
+        for doc in law_docs[:5]:
+            badge = "(직접참조)" if getattr(doc, "score_type", "") == "exact" else f"(유사도 {doc.score:.3f})"
+            law_lines.append(f"- {doc.law_name} {doc.article_no} {badge}")
+        elements.append(
+            cl.Text(name="법령 조문", content="\n".join(law_lines), display="inline")
+        )
 
-    # 히스토리 업데이트
-    history.append({"query": query, "answer": body})
-    cl.user_session.set("history", history)
+    if qa_docs:
+        qa_lines = [f"**유사 선례 ({len(qa_docs)}건)**\n"]
+        for doc in qa_docs[:3]:
+            ref = doc.metadata.get("doc_ref", "") or doc.metadata.get("doc_code", "")
+            qa_lines.append(f"- {ref or doc.law_name} (유사도 {doc.score:.3f})")
+        elements.append(
+            cl.Text(name="유사 선례", content="\n".join(qa_lines), display="inline")
+        )
+
+    if elements:
+        await cl.Message(content="", elements=elements).send()
+
+
+@cl.on_chat_end
+async def on_end():
+    session_id = cl.user_session.get("session_id", "")
+    if session_id:
+        gen = get_generator()
+        retriever = gen._get_retriever()
+        retriever.delete_session_collection(session_id)

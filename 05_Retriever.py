@@ -353,8 +353,10 @@ class HybridSearcher:
 
     def __init__(self, chroma_client, embed_model):
         self._client    = chroma_client
+        self._chroma    = chroma_client
         self._embed     = embed_model
         self._law_col   = chroma_client.get_collection("law_articles")
+        self._session_cols: dict[str, object] = {}
 
         # qa_precedents: labeled_with_doc 인덱스
         try:
@@ -712,6 +714,93 @@ class HybridSearcher:
                 seen_ids.add(aid)
 
         return results_unique[:top_k]
+
+    # ----------------------------------------------------------
+    # 세션 컬렉션 (업로드 PDF 임시 인덱싱)
+    # ----------------------------------------------------------
+
+    def create_session_collection(self, session_id: str) -> None:
+        """세션 전용 임시 컬렉션 생성 (이미 있으면 재사용)."""
+        col_name = f"session_{session_id[:16]}"
+        try:
+            col = self._chroma.get_or_create_collection(
+                name=col_name,
+                metadata={"hnsw:space": "cosine"},
+            )
+            self._session_cols[session_id] = col
+        except Exception as e:
+            print(f"[세션 컬렉션 생성 실패] {e}")
+
+    def index_uploaded_chunks(self, session_id: str, chunks: list[dict]) -> int:
+        """청크를 세션 컬렉션에 임베딩하여 저장. 반환: 저장된 청크 수."""
+        col = self._session_cols.get(session_id)
+        if col is None:
+            return 0
+
+        ids, texts, metas = [], [], []
+        for i, chunk in enumerate(chunks):
+            ids.append(f"{session_id[:8]}_{i}")
+            texts.append(chunk["content"][:2000])
+            metas.append({
+                "law_name": chunk.get("law_name", "업로드 법령"),
+                "article_no": chunk.get("article_no", f"chunk_{i}"),
+                "source": "uploaded",
+            })
+
+        if not ids:
+            return 0
+
+        BATCH = 32
+        embeddings = []
+        for i in range(0, len(texts), BATCH):
+            embeddings.extend([self._embed_text(t) for t in texts[i:i + BATCH]])
+
+        col.add(ids=ids, embeddings=embeddings, documents=texts, metadatas=metas)
+        return len(ids)
+
+    def search_uploaded(self, session_id: str, query: str, top_k: int = 5) -> list:
+        """세션 컬렉션에서 유사도 검색. RetrievedDoc 리스트 반환."""
+        col = self._session_cols.get(session_id)
+        if col is None or col.count() == 0:
+            return []
+
+        query_emb = self._embed_text(query)
+        n = min(top_k, col.count())
+        try:
+            res = col.query(
+                query_embeddings=[query_emb],
+                n_results=n,
+                include=["documents", "metadatas", "distances"],
+            )
+        except Exception:
+            return []
+
+        results = []
+        for doc, meta, dist in zip(
+            res["documents"][0], res["metadatas"][0], res["distances"][0]
+        ):
+            score = max(0.0, 1.0 - dist)
+            if score < 0.3:
+                continue
+            results.append(RetrievedDoc(
+                source="uploaded",
+                law_name=meta.get("law_name", "업로드 법령"),
+                article_no=meta.get("article_no", ""),
+                content=doc,
+                score=score,
+                score_type="vector",
+                metadata={"source": "uploaded"},
+            ))
+        return results
+
+    def delete_session_collection(self, session_id: str) -> None:
+        """세션 종료 시 임시 컬렉션 삭제."""
+        col_name = f"session_{session_id[:16]}"
+        try:
+            self._chroma.delete_collection(col_name)
+        except Exception:
+            pass
+        self._session_cols.pop(session_id, None)
 
     # ----------------------------------------------------------
     # 판례 검색 (court_cases) -PLAN §4.2
@@ -1115,6 +1204,18 @@ class Retriever:
             query, self._amendments, top_k=top_k
         )
 
+    def create_session_collection(self, session_id: str) -> None:
+        self._searcher.create_session_collection(session_id)
+
+    def index_uploaded_chunks(self, session_id: str, chunks: list[dict]) -> int:
+        return self._searcher.index_uploaded_chunks(session_id, chunks)
+
+    def search_uploaded(self, session_id: str, query: str, top_k: int = 5) -> list:
+        return self._searcher.search_uploaded(session_id, query, top_k)
+
+    def delete_session_collection(self, session_id: str) -> None:
+        self._searcher.delete_session_collection(session_id)
+
     def fetch_linked_memos(
         self,
         law_docs: list[RetrievedDoc],
@@ -1256,6 +1357,7 @@ class Retriever:
         memo_docs: Optional[list[dict]] = None,
         amendment_docs: Optional[list[dict]] = None,
         amendment_semantic_docs: Optional[list[dict]] = None,
+        uploaded_docs: Optional[list] = None,
     ) -> str:
         """
         검색 결과를 Pass 2 LLM 컨텍스트로 포맷 (PLAN §2.2).
@@ -1264,6 +1366,14 @@ class Retriever:
         amendment_semantic_docs: 의미 검색으로 찾은 개정이력 (조문 매칭과 별도)
         """
         lines = []
+
+        # ── 업로드 문서층 ────────────────────────────────
+        if uploaded_docs:
+            lines.append("=== [사용자 업로드 법령] ===")
+            lines.append("※ 아래는 사용자가 업로드한 법령 조문입니다. 질의와 관련된 경우 우선 참조하세요.")
+            for doc in uploaded_docs:
+                lines.append(f"\n[{doc.law_name} {doc.article_no}]")
+                lines.append(doc.content)
 
         # ── 개정연혁층: 목적론적 해석 재료 ──────────────
         if amendment_docs:
