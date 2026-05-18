@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 chainlit_app.py -- 건축법규 AI 자문 시스템 (Chainlit 인터페이스)
-
-PDF 업로드 → 백그라운드 임베딩 → 세션 전용 ChromaDB 컬렉션 → 기존 law_articles와 동시 검색
 """
 
 import asyncio
 import importlib.util
+import queue as _queue
 import re
 import sys
+import threading
 from pathlib import Path
 
 import chainlit as cl
@@ -37,9 +37,8 @@ def get_generator():
 # ── PDF 파싱 ────────────────────────────────────────────────
 
 def parse_pdf(path: str) -> str:
-    """PDF 파일에서 텍스트 추출 (PyMuPDF 우선, pdfplumber 폴백)."""
     try:
-        import fitz  # PyMuPDF
+        import fitz
         doc = fitz.open(path)
         pages = [page.get_text() for page in doc]
         doc.close()
@@ -57,8 +56,6 @@ def parse_pdf(path: str) -> str:
 # ── PDF 청킹 ────────────────────────────────────────────────
 
 def chunk_law_pdf(text: str, law_name: str) -> list[dict]:
-    """법령 PDF 텍스트를 제XX조 단위로 청킹."""
-    # 제XX조 패턴으로 분리
     pattern = r'(?=제\d+조(?:의\d+)?[\s(（])'
     parts = re.split(pattern, text)
     chunks = []
@@ -66,7 +63,6 @@ def chunk_law_pdf(text: str, law_name: str) -> list[dict]:
         part = part.strip()
         if not part or len(part) < 20:
             continue
-        # 조문 번호 추출
         m = re.match(r'(제\d+조(?:의\d+)?)', part)
         article_no = m.group(1) if m else f"chunk_{len(chunks)}"
         chunks.append({
@@ -74,7 +70,6 @@ def chunk_law_pdf(text: str, law_name: str) -> list[dict]:
             "article_no": article_no,
             "content": part[:2000],
         })
-    # 청킹 실패 시 전체를 500자 단위로 분할
     if not chunks:
         for i in range(0, len(text), 500):
             chunks.append({
@@ -88,20 +83,16 @@ def chunk_law_pdf(text: str, law_name: str) -> list[dict]:
 # ── 인라인 인용 마커 파싱 ───────────────────────────────────
 
 def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
-    """
-    답변 텍스트의 [법령N], [해석례N], [판례N] 마커를 파싱하여
-    cl.Text(display="side") 요소 리스트를 반환.
-    """
-    law_docs   = result.get("law_docs",  [])
-    qa_docs    = result.get("qa_docs",   [])
-    case_docs  = result.get("case_docs", [])
+    law_docs  = result.get("law_docs",  [])
+    qa_docs   = result.get("qa_docs",   [])
+    case_docs = result.get("case_docs", [])
 
     elements: list = []
     seen: set[str] = set()
 
     for m in re.finditer(r'\[(법령|해석례|판례)(\d+)\]', answer):
         kind = m.group(1)
-        idx  = int(m.group(2)) - 1   # 0-based
+        idx  = int(m.group(2)) - 1
         name = f"{kind}{m.group(2)}"
 
         if name in seen:
@@ -134,7 +125,7 @@ def split_answer(raw: str) -> tuple[str, str]:
     return raw, ""
 
 
-# ── 출처 배지 텍스트 ─────────────────────────────────────────
+# ── 출처 텍스트 ─────────────────────────────────────────────
 
 def format_sources(source_info: dict) -> str:
     badges = []
@@ -147,6 +138,105 @@ def format_sources(source_info: dict) -> str:
     if source_info.get("internal"):
         badges.append(f"💡 **내장지식** {source_info['internal_detail']}")
     return "\n".join(badges)
+
+
+# ── 섹션 접기/펼치기 ─────────────────────────────────────────
+
+_COLLAPSIBLE = {
+    "[관련 조문 확인]",
+    "[관련 판례 검토]",
+    "[근거 법령 + 인용 선례]",
+    "[담당부서 확인 질문]",
+    "[해석 분기점]",
+}
+
+
+def make_collapsible_html(body: str) -> str:
+    lines = body.split("\n")
+    output = []
+    in_details = False
+    buf = []
+
+    def flush():
+        nonlocal in_details, buf
+        if in_details:
+            output.append("\n".join(buf))
+            output.append("</details>\n")
+            buf = []
+            in_details = False
+
+    for line in lines:
+        is_collapse = line.startswith("###") and any(s in line for s in _COLLAPSIBLE)
+        if is_collapse:
+            flush()
+            title = line.lstrip("#").strip()
+            output.append(f"<details>\n<summary><strong>{title}</strong></summary>\n")
+            in_details = True
+        elif in_details:
+            buf.append(line)
+        else:
+            output.append(line)
+
+    flush()
+    return "\n".join(output)
+
+
+# ── 스트리밍 생성 ─────────────────────────────────────────────
+
+async def generate_streaming(gen, query: str, extra_context: str, session_id: str):
+    token_q: _queue.Queue = _queue.Queue()
+    result_holder: list = [None]
+    error_holder:  list = [None]
+
+    def stream_cb(token: str):
+        token_q.put(token)
+
+    def worker():
+        try:
+            result_holder[0] = gen.generate(
+                query, False, extra_context, session_id,
+                stream_callback=stream_cb,
+            )
+        except Exception as e:
+            error_holder[0] = e
+        finally:
+            token_q.put(None)
+
+    thinking_msg = cl.Message(content="분석 중…")
+    await thinking_msg.send()
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
+    msg = None
+    first = True
+    while True:
+        try:
+            token = token_q.get_nowait()
+            if token is None:
+                break
+            if first:
+                await thinking_msg.remove()
+                msg = cl.Message(content="")
+                await msg.send()
+                first = False
+            await msg.stream_token(token)
+        except _queue.Empty:
+            await asyncio.sleep(0.01)
+
+    thread.join()
+
+    if error_holder[0]:
+        await thinking_msg.remove()
+        raise error_holder[0]
+
+    if msg is None:
+        await thinking_msg.remove()
+        msg = cl.Message(content="답변을 생성하지 못했습니다.")
+        await msg.send()
+
+    await msg.update()
+    return msg, result_holder[0]
 
 
 # ── 내장 법령 목록 ───────────────────────────────────────────
@@ -199,21 +289,56 @@ async def set_starters():
             message=_LAW_LIST_TRIGGER,
             icon="/public/starter_list.svg",
         ),
+        cl.Starter(
+            label="🏗️ 건축허가·신고",
+            message="건축허가와 건축신고의 대상 기준과 차이를 알려주세요.",
+        ),
+        cl.Starter(
+            label="🗺️ 용도지역 제한",
+            message="용도지역별 건폐율·용적률 기준과 건축 제한을 알려주세요.",
+        ),
+        cl.Starter(
+            label="🔥 피난·방화 기준",
+            message="피난계단 및 방화구획 설치 기준을 알려주세요.",
+        ),
+        cl.Starter(
+            label="👷 감리 대상·절차",
+            message="건축 감리 대상 건축물과 감리 절차를 알려주세요.",
+        ),
     ]
 
 
 @cl.on_chat_start
 async def on_start():
-    cl.user_session.set("uploaded_law", "")
-    cl.user_session.set("pdf_ready", False)  # 임베딩 완료 여부
+    cl.user_session.set("pdf_list", [])
+    cl.user_session.set("pdf_ready", False)
+    cl.user_session.set("history", [])
 
-    # 세션 컬렉션 미리 생성
     session_id = cl.context.session.id
     gen = get_generator()
     retriever = gen._get_retriever()
     retriever.create_session_collection(session_id)
     cl.user_session.set("session_id", session_id)
 
+
+@cl.action_callback("helpful")
+async def on_helpful(action: cl.Action):
+    await action.remove()
+    await cl.Message(content="피드백 감사합니다! 😊").send()
+
+
+@cl.action_callback("not_helpful")
+async def on_not_helpful(action: cl.Action):
+    await action.remove()
+    await cl.Message(content="피드백 감사합니다. 더 나은 답변을 위해 참고하겠습니다.").send()
+
+
+@cl.action_callback("new_chat")
+async def on_new_chat(action: cl.Action):
+    cl.user_session.set("history", [])
+    cl.user_session.set("pdf_list", [])
+    cl.user_session.set("pdf_ready", False)
+    await cl.Message(content="대화 이력이 초기화되었습니다. 새 질의를 입력해 주세요.").send()
 
 
 @cl.on_message
@@ -234,7 +359,6 @@ async def on_message(message: cl.Message):
 
             law_label = name.replace(".pdf", "").replace(".PDF", "")
 
-            # 파싱 알림
             parsing_msg = cl.Message(content=f"**{law_label}** 파싱 중…")
             await parsing_msg.send()
 
@@ -243,7 +367,6 @@ async def on_message(message: cl.Message):
 
             await parsing_msg.remove()
 
-            # 백그라운드 임베딩
             indexing_msg = cl.Message(
                 content=f"**{law_label}** 임베딩 중… ({len(chunks)}개 청크) 질문을 먼저 입력하셔도 됩니다."
             )
@@ -255,10 +378,17 @@ async def on_message(message: cl.Message):
                 gen = get_generator()
                 retriever = gen._get_retriever()
                 n = await asyncio.to_thread(retriever.index_uploaded_chunks, session_id, chunks)
+
+                pdf_list = cl.user_session.get("pdf_list", [])
+                if label not in pdf_list:
+                    pdf_list.append(label)
+                    cl.user_session.set("pdf_list", pdf_list)
                 cl.user_session.set("pdf_ready", True)
+
                 await msg.remove()
+                tags = " · ".join(f"`{p}`" for p in pdf_list)
                 await cl.Message(
-                    content=f"**{label}** 인덱싱 완료 ({n}개 청크). 이제 이 법령을 참고하여 답변합니다."
+                    content=f"**{label}** 인덱싱 완료 ({n}개 청크)\n📎 활성 파일: {tags}"
                 ).send()
 
             asyncio.create_task(do_index())
@@ -268,28 +398,27 @@ async def on_message(message: cl.Message):
     if not query:
         return
 
-    # extra_context 조합 (필요 시 확장 가능)
+    # 히스토리에서 extra_context 구성
+    history = cl.user_session.get("history", [])
     extra_context = ""
-    session_id = cl.user_session.get("session_id", "")
+    if history:
+        lines = []
+        for h in history[-3:]:
+            lines.append(f"Q: {h['q']}")
+            lines.append(f"A: {h['a'][:300]}...")
+        extra_context = "\n".join(lines)
 
-    thinking_msg = cl.Message(content="분석 중…")
-    await thinking_msg.send()
+    session_id = cl.user_session.get("session_id", "")
 
     try:
         gen = get_generator()
-        result = await asyncio.to_thread(
-            gen.generate,
-            query,
-            False,
-            extra_context,
-            session_id,  # session_id 전달
-        )
+        msg, result = await generate_streaming(gen, query, extra_context, session_id)
     except Exception as e:
-        await thinking_msg.remove()
         await cl.Message(content=f"오류가 발생했습니다: {e}").send()
         return
 
-    await thinking_msg.remove()
+    if result is None:
+        return
 
     raw_answer  = result.get("answer", "")
     source_info = result.get("source_info", {})
@@ -299,16 +428,34 @@ async def on_message(message: cl.Message):
     # [출처 요약] 블록 분리
     body, _ = split_answer(raw_answer)
 
-    # 인라인 인용 마커 → cl.Text 요소 생성
-    body, cite_elements = build_citation_elements(body, result)
+    # 섹션 접기/펼치기
+    body = make_collapsible_html(body)
 
-    # 본문 + 인라인 인용 요소 전송
-    await cl.Message(content=body, elements=cite_elements).send()
+    # 인라인 인용 마커 → cl.Text 요소
+    body, elements = build_citation_elements(body, result)
 
-    # 출처 요약 (있을 때만 별도 메시지)
+    # 출처 사이드패널
     sources_text = format_sources(source_info)
     if sources_text:
-        await cl.Message(content=f"**출처**\n{sources_text}", author="출처").send()
+        body += "\n\n---\n[출처]"
+        elements.append(cl.Text(name="출처", content=sources_text, display="side"))
+
+    # 피드백 + 새 대화 액션
+    actions = [
+        cl.Action(name="helpful",     value="1",     label="👍 도움됐어요"),
+        cl.Action(name="not_helpful", value="0",     label="👎 아쉬워요"),
+        cl.Action(name="new_chat",    value="reset", label="🔄 새 대화"),
+    ]
+
+    # 스트리밍 완료 메시지에 요소·액션 추가
+    msg.content  = body
+    msg.elements = elements
+    msg.actions  = actions
+    await msg.update()
+
+    # 히스토리 업데이트
+    history.append({"q": query, "a": body[:500]})
+    cl.user_session.set("history", history)
 
 
 @cl.on_chat_end

@@ -69,6 +69,25 @@ def call_claude(client, system: str, user_msg: str) -> str:
         return f"[Claude API 오류] {e}"
 
 
+def call_claude_stream(client, system: str, user_msg: str, stream_callback) -> str:
+    """Pass 2 스트리밍: 토큰을 stream_callback으로 전달하고 전체 텍스트 반환."""
+    try:
+        full_text = ""
+        with client.messages.stream(
+            model=MODEL_NAME,
+            max_tokens=16000,
+            system=system,
+            messages=[{"role": "user", "content": user_msg}],
+        ) as stream:
+            for text in stream.text_stream:
+                full_text += text
+                if stream_callback:
+                    stream_callback(text)
+        return full_text
+    except Exception as e:
+        return f"[Claude API 오류] {e}"
+
+
 # ============================================================
 # 메모 로더 (해석 원칙 bullet 압축)
 # ============================================================
@@ -609,7 +628,7 @@ class Generator:
             self._retriever = mod.Retriever()
         return self._retriever
 
-    def generate(self, query: str, verbose: bool = True, extra_context: str = "", session_id: str = "") -> dict:
+    def generate(self, query: str, verbose: bool = True, extra_context: str = "", session_id: str = "", stream_callback=None) -> dict:
         """
         2-pass 생성 실행.
         반환: {"query", "pass1", "context", "answer"}
@@ -765,7 +784,10 @@ class Generator:
         else:
             pass2_system = PASS2_SYSTEM
 
-        answer = call_claude(self._client, pass2_system, pass2_input)
+        if stream_callback:
+            answer = call_claude_stream(self._client, pass2_system, pass2_input, stream_callback)
+        else:
+            answer = call_claude(self._client, pass2_system, pass2_input)
 
         if verbose:
             print(f"\n{'='*60}")
