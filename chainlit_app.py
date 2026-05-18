@@ -163,13 +163,6 @@ async def on_start():
     retriever.create_session_collection(session_id)
     cl.user_session.set("session_id", session_id)
 
-    await cl.Message(
-        content=(
-            "**건축법규 AI 자문 시스템**에 오신 것을 환영합니다.\n\n"
-            "건축법·국토계획법·주택법 관련 질의를 입력하시거나, "
-            "참고할 법령 PDF를 첨부하시면 해당 내용을 함께 검토하여 답변드립니다."
-        )
-    ).send()
 
 
 @cl.on_message
