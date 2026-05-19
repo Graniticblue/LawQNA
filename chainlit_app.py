@@ -93,6 +93,20 @@ def fmt_date(d: str) -> str:
 
 _amendment_lookup: dict = {}
 
+# amendments.jsonl 축약키 → all_articles 전체명(공백제거) 매핑
+_AMEND_KEY_MAP = {
+    "건축법":           "건축법",
+    "건축법시행령":      "건축법시행령",
+    "건축법시행규칙":    "건축법시행규칙",
+    "국토계획법":        "국토의계획및이용에관한법률",
+    "국토계획법시행령":  "국토의계획및이용에관한법률시행령",
+    "국토계획법시행규칙":"국토의계획및이용에관한법률시행규칙",
+    "주택법":           "주택법",
+    "주택법시행령":      "주택법시행령",
+    "주택법시행규칙":    "주택법시행규칙",
+}
+
+
 def get_amendment_lookup() -> dict:
     global _amendment_lookup
     if _amendment_lookup:
@@ -109,11 +123,24 @@ def get_amendment_lookup() -> dict:
         m = re.match(r'^([^_]+)_(\d{8})_(.+)$', aid)
         if not m:
             continue
-        law_key  = m.group(1)           # "건축법시행령"
-        enf_date = m.group(2)           # "20260227"
-        law_no   = m.group(3)           # "35717호"
-        pub_date = rec.get("공포일", "").replace("-", ".")
-        lookup[(law_key, enf_date)] = (law_no, pub_date)
+        amend_key = m.group(1)           # "국토계획법시행령"
+        enf_date  = m.group(2)           # "20250701"
+        law_no    = m.group(3)           # "35378호"
+        pub_date  = rec.get("공포일", "").replace("-", ".")
+        pub_digits = pub_date.replace(".", "")  # "20250415"
+
+        # 전체명 키 (all_articles와 동일 형태)
+        full_key = _AMEND_KEY_MAP.get(amend_key, amend_key)
+
+        # 시행일 기준 키
+        lookup[(full_key, enf_date)] = (law_no, pub_date)
+        # 공포일도 fallback 키로 등록 (enforcement_date가 공포일인 경우 대비)
+        if pub_digits and pub_digits != enf_date:
+            lookup.setdefault((full_key, pub_digits), (law_no, pub_date))
+        # 원래 abbreviated 키도 유지 (건축법 등 동일한 경우)
+        if full_key != amend_key:
+            lookup[(amend_key, enf_date)] = (law_no, pub_date)
+
     _amendment_lookup = lookup
     return lookup
 
@@ -121,7 +148,9 @@ def get_amendment_lookup() -> dict:
 def get_law_header(law_name: str, enforcement_date: str) -> str:
     """law.go.kr 형식: [시행 2026.02.27.] [법률 제21035호, 2025.08.26., 일부개정]"""
     lookup = get_amendment_lookup()
-    law_key = law_name.replace(" ", "")
+    # 공백 제거한 전체 법령명으로 조회 (amendments 전체명 키)
+    law_key = re.sub(r'[\s·ㆍ]+', '', law_name)
+    law_key = law_key.replace('ㆍ', '').replace('·', '')
     info = lookup.get((law_key, enforcement_date))
     edate_str = fmt_date(enforcement_date)
     if not edate_str:
