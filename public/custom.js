@@ -1,41 +1,4 @@
 (function () {
-    // ── 헤더 고정 법령 목록 버튼 ─────────────────────────────
-    const nativeValueSetter = Object.getOwnPropertyDescriptor(
-        window.HTMLTextAreaElement.prototype, 'value'
-    )?.set;
-
-    function insertHeaderBtn() {
-        if (document.getElementById('header-law-btn')) return;
-
-        const btn = document.createElement('button');
-        btn.id = 'header-law-btn';
-        btn.textContent = '📋 지원 법령';
-        btn.type = 'button';
-        btn.style.cssText = [
-            'position:fixed', 'top:10px', 'right:16px', 'z-index:9999',
-            'padding:5px 14px', 'border-radius:6px',
-            'border:1.5px solid #1565C0', 'background:white',
-            'color:#1565C0', 'font-size:13px', 'font-weight:500',
-            'cursor:pointer', 'transition:all 0.15s',
-            'box-shadow:0 1px 4px rgba(0,0,0,0.08)',
-        ].join(';');
-        btn.addEventListener('mouseenter', () => { btn.style.background='#1565C0'; btn.style.color='white'; });
-        btn.addEventListener('mouseleave', () => { btn.style.background='white'; btn.style.color='#1565C0'; });
-        btn.addEventListener('click', () => {
-            const ta = document.querySelector('textarea');
-            const submit = document.getElementById('chat-submit');
-            if (!ta || !submit || !nativeValueSetter) return;
-            nativeValueSetter.call(ta, '📋 내장 법령 목록');
-            ta.dispatchEvent(new Event('input', { bubbles: true }));
-            setTimeout(() => submit.click(), 50);
-        });
-        document.body.appendChild(btn);
-    }
-
-    const headerObserver = new MutationObserver(insertHeaderBtn);
-    headerObserver.observe(document.documentElement, { childList: true, subtree: true });
-    insertHeaderBtn();
-
     // ── 로고 ────────────────────────────────────────────────
     const LOGO_WRAP_ID = 'usun-logo-wrap';
 
