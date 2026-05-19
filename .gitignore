@@ -28,8 +28,10 @@ venv/
 !requirements.txt
 
 # 대용량 원본 PDF (재현 불가 데이터 제외)
-data/raw_laws/
+data/raw_laws/**/*.pdf
+data/raw_laws/법령소스/
 tmp/
 신구대조표_인쇄본/
 판례/
 *.pdf
+!data/raw_laws/*.jsonl
