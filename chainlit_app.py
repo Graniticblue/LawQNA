@@ -80,6 +80,24 @@ def chunk_law_pdf(text: str, law_name: str) -> list[dict]:
     return chunks
 
 
+# ── 날짜 포맷 ────────────────────────────────────────────────
+
+def fmt_date(d: str) -> str:
+    if d and len(d) == 8 and d.isdigit():
+        return f"{d[:4]}.{d[4:6]}.{d[6:]}"
+    return d
+
+
+# ── content 중복 번호 제거 ────────────────────────────────────
+
+def clean_article_content(text: str) -> str:
+    """① ①, 1. 1., 가. 가. 형태 중복 제거"""
+    text = re.sub(r'([①-⑳])\s+\1', r'\1', text)
+    text = re.sub(r'(\d+\.)\s+\1\s*', r'\1 ', text)
+    text = re.sub(r'([가-힣]\.)\s+\1\s*', r'\1 ', text)
+    return text
+
+
 # ── 인라인 인용 마커 파싱 ───────────────────────────────────
 
 def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
@@ -110,7 +128,10 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
         if doc is None:
             continue
 
-        content = f"**{doc.law_name}  {doc.article_no}**\n\n{doc.content}"
+        edate = fmt_date(doc.metadata.get("enforcement_date", ""))
+        date_str = f"  ·  시행 {edate}" if edate else ""
+        body = clean_article_content(doc.content)
+        content = f"**{doc.law_name}  {doc.article_no}**{date_str}\n\n{body}"
         elements.append(cl.Text(name=name, content=content, display="side"))
 
     return answer, elements
