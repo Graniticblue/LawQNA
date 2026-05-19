@@ -119,7 +119,8 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
 # ── [출처 요약] 분리 ─────────────────────────────────────────
 
 def split_answer(raw: str) -> tuple[str, str]:
-    m = re.search(r'\[출처 요약\]', raw)
+    # LLM이 [출처 요약]을 코드펜스(```) 안에 출력하는 경우도 함께 제거
+    m = re.search(r'(?:```[^\n]*\n)?\[출처\s*요약\]', raw)
     if m:
         return raw[: m.start()].rstrip(), raw[m.start():]
     return raw, ""
