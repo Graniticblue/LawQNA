@@ -382,11 +382,6 @@ _LAW_LIST_TRIGGER = "📋 내장 법령 목록"
 async def set_starters():
     return [
         cl.Starter(
-            label="📋 내장 법령 목록",
-            message=_LAW_LIST_TRIGGER,
-            icon="/public/starter_list.svg",
-        ),
-        cl.Starter(
             label="🏗️ 건축허가·신고",
             message="건축허가와 건축신고의 대상 기준과 차이를 알려주세요.",
         ),
