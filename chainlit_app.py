@@ -5,6 +5,7 @@ chainlit_app.py -- 건축법규 AI 자문 시스템 (Chainlit 인터페이스)
 
 import asyncio
 import importlib.util
+import json
 import queue as _queue
 import re
 import sys
@@ -88,6 +89,49 @@ def fmt_date(d: str) -> str:
     return d
 
 
+# ── 개정이력 조회 (공포번호·공포일) ──────────────────────────
+
+_amendment_lookup: dict = {}
+
+def get_amendment_lookup() -> dict:
+    global _amendment_lookup
+    if _amendment_lookup:
+        return _amendment_lookup
+    path = BASE_DIR / "data/law_amendments/amendments.jsonl"
+    if not path.exists():
+        return {}
+    lookup: dict = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        rec = json.loads(line)
+        aid = rec.get("amendment_id", "")
+        m = re.match(r'^([^_]+)_(\d{8})_(.+)$', aid)
+        if not m:
+            continue
+        law_key  = m.group(1)           # "건축법시행령"
+        enf_date = m.group(2)           # "20260227"
+        law_no   = m.group(3)           # "35717호"
+        pub_date = rec.get("공포일", "").replace("-", ".")
+        lookup[(law_key, enf_date)] = (law_no, pub_date)
+    _amendment_lookup = lookup
+    return lookup
+
+
+def get_law_header(law_name: str, enforcement_date: str) -> str:
+    """법령명 + 시행일 → '제35717호 · 공포 2025.08.26 · 시행 2025.08.26' 문자열"""
+    lookup = get_amendment_lookup()
+    law_key = law_name.replace(" ", "")  # "건축법 시행령" → "건축법시행령"
+    info = lookup.get((law_key, enforcement_date))
+    edate_str = fmt_date(enforcement_date)
+    if info:
+        law_no, pub_date = info
+        return f"제{law_no} · 공포 {pub_date} · 시행 {edate_str}"
+    elif edate_str:
+        return f"시행 {edate_str}"
+    return ""
+
+
 # ── content 중복 번호 제거 ────────────────────────────────────
 
 def clean_article_content(text: str) -> str:
@@ -128,10 +172,11 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
         if doc is None:
             continue
 
-        edate = fmt_date(doc.metadata.get("enforcement_date", ""))
-        date_str = f"  ·  시행 {edate}" if edate else ""
+        edate = doc.metadata.get("enforcement_date", "")
+        header_extra = get_law_header(doc.law_name, edate)
+        sep = "  ·  " if header_extra else ""
         body = clean_article_content(doc.content)
-        content = f"**{doc.law_name}  {doc.article_no}**{date_str}\n\n{body}"
+        content = f"**{doc.law_name}  {doc.article_no}**{sep}{header_extra}\n\n{body}"
         elements.append(cl.Text(name=name, content=content, display="side"))
 
     return answer, elements
