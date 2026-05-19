@@ -442,11 +442,7 @@ async def on_new_chat(action: cl.Action):
 async def on_message(message: cl.Message):
     # ── 법령 목록 트리거 ──────────────────────────────────────
     if message.content.strip() == _LAW_LIST_TRIGGER:
-        element = cl.Text(name="법령목록", content=LAW_DB_INFO, display="side")
-        await cl.Message(
-            content="📋 **내장 법령 목록** — [열기]",
-            elements=[element],
-        ).send()
+        await cl.Message(content=LAW_DB_INFO).send()
         return
 
     # ── PDF 첨부 처리 ─────────────────────────────────────────
