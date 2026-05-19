@@ -119,17 +119,17 @@ def get_amendment_lookup() -> dict:
 
 
 def get_law_header(law_name: str, enforcement_date: str) -> str:
-    """법령명 + 시행일 → '제35717호 · 공포 2025.08.26 · 시행 2025.08.26' 문자열"""
+    """law.go.kr 형식: [시행 2026.02.27.] [법률 제21035호, 2025.08.26., 일부개정]"""
     lookup = get_amendment_lookup()
-    law_key = law_name.replace(" ", "")  # "건축법 시행령" → "건축법시행령"
+    law_key = law_name.replace(" ", "")
     info = lookup.get((law_key, enforcement_date))
     edate_str = fmt_date(enforcement_date)
+    if not edate_str:
+        return ""
     if info:
         law_no, pub_date = info
-        return f"제{law_no} · 공포 {pub_date} · 시행 {edate_str}"
-    elif edate_str:
-        return f"시행 {edate_str}"
-    return ""
+        return f"[시행 {edate_str}.] [제{law_no}, {pub_date}., 일부개정]"
+    return f"[시행 {edate_str}.]"
 
 
 # ── content 중복 번호 제거 ────────────────────────────────────
