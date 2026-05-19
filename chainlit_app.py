@@ -246,19 +246,19 @@ async def generate_streaming(gen, query: str, extra_context: str, session_id: st
 LAW_DB_INFO = """\
 ### 📋 내장 법령 데이터베이스
 
-**건축법 계열** — DB 반영일 2026.04.21 · 개정이력 2018.06 ~ 2026.02 (61건)
+**건축법 계열** — DB 반영일 2026.04.21 · 개정이력 2018.06 ~ 2026.02 (61건, 시행일 기준)
 
-| 법령 | 현행 시행일 | 개정이력 |
-|------|-----------|---------|
-| 건축법 | 2026.02.27 | 2018.08 ~ 2025.08 (18건) |
-| 건축법 시행령 | 2025.08.26 | 2018.06 ~ 2025.08 (26건) |
+| 법령 | 현행 시행일 | 개정이력 (시행일 기준) |
+|------|-----------|-------------------|
+| 건축법 | 2026.02.27 | 2019.01 ~ 2026.02 (18건) |
+| 건축법 시행령 | 2025.08.26 | 2018.06 ~ 2026.02 (26건) |
 | 건축법 시행규칙 | 2026.02.27 | 2018.06 ~ 2026.02 (17건) |
 
-**국토계획법 계열** — DB 반영일 2026.04.21 · 개정이력 2023.07 ~ 2025.12 (9건)
+**국토계획법 계열** — DB 반영일 2026.04.21 · 개정이력 2023.07 ~ 2026.06 (9건, 시행일 기준)
 
-| 법령 | 현행 시행일 | 개정이력 |
-|------|-----------|---------|
-| 국토의 계획 및 이용에 관한 법률 | 2025.10.01 | 2024.02 ~ 2025.12 (2건) |
+| 법령 | 현행 시행일 | 개정이력 (시행일 기준) |
+|------|-----------|-------------------|
+| 국토의 계획 및 이용에 관한 법률 | 2025.10.01 | 2024.08 ~ 2026.06 (2건) |
 | 국토의 계획 및 이용에 관한 법률 시행령 | 2025.07.01 | 2023.07 ~ 2025.07 (6건) |
 | 국토의 계획 및 이용에 관한 법률 시행규칙 | 2025.12.26 | 2024.05 (1건) |
 
@@ -412,15 +412,20 @@ async def on_message(message: cl.Message):
 
     session_id = cl.user_session.get("session_id", "")
 
+    thinking_msg = cl.Message(content="분석 중…")
+    await thinking_msg.send()
+
     try:
         gen = get_generator()
-        stream_msg, result, _ = await generate_streaming(gen, query, extra_context, session_id)
+        result = await asyncio.to_thread(
+            gen.generate, query, False, extra_context, session_id
+        )
     except Exception as e:
+        await thinking_msg.remove()
         await cl.Message(content=f"오류가 발생했습니다: {e}").send()
         return
 
-    if result is None:
-        return
+    await thinking_msg.remove()
 
     raw_answer  = result.get("answer", "")
     source_info = result.get("source_info", {})
@@ -431,24 +436,14 @@ async def on_message(message: cl.Message):
     body, _ = split_answer(raw_answer)
 
     # 인라인 인용 마커 → cl.Text 요소
-    body, elements = build_citation_elements(body, result)
+    body, cite_elements = build_citation_elements(body, result)
 
-    # 출처 사이드패널
+    await cl.Message(content=body, elements=cite_elements).send()
+
+    # 출처 요약 별도 메시지
     sources_text = format_sources(source_info)
     if sources_text:
-        body += "\n\n---\n[출처]"
-        elements.append(cl.Text(name="출처", content=sources_text, display="side"))
-
-    # 피드백 + 새 대화 액션
-    actions = [
-        cl.Action(name="helpful",     value="1",     label="👍 도움됐어요"),
-        cl.Action(name="not_helpful", value="0",     label="👎 아쉬워요"),
-        cl.Action(name="new_chat",    value="reset", label="🔄 새 대화"),
-    ]
-
-    # raw 스트리밍 메시지 제거 후 처리된 메시지 새로 전송
-    await stream_msg.remove()
-    await cl.Message(content=body, elements=elements, actions=actions).send()
+        await cl.Message(content=f"**출처**\n{sources_text}", author="출처").send()
 
     # 히스토리 업데이트
     history.append({"q": query, "a": body[:500]})

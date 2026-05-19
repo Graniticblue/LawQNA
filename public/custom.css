@@ -12,19 +12,21 @@ a[href*="github.com/Chainlit"],
     display: none !important;
 }
 
-/* Tailwind CSS 변수 오버라이드 — 전체 primary 색상을 블루로 */
+/* Tailwind/shadcn CSS 변수 오버라이드 — HSL 포맷 (#1565C0 = hsl(212,80%,42%)) */
 :root {
-    --primary: 21 101 192;      /* #1565C0 (RGB) */
-    --primary-foreground: 255 255 255;
-    --ring: 21 101 192;
+    --primary: 212 80% 42%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 212 80% 42%;
 }
 
-/* 전송 버튼 직접 타겟 */
-#chat-submit {
+/* 전송 버튼 + 정지 버튼 */
+#chat-submit,
+#stop-button {
     background-color: #1565C0 !important;
     color: white !important;
 }
 
-#chat-submit:hover:not(:disabled) {
+#chat-submit:hover:not(:disabled),
+#stop-button:hover {
     background-color: #0D47A1 !important;
 }
