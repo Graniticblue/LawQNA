@@ -56,12 +56,17 @@ def get_claude_client():
     return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 
+def _cached_system(system: str) -> list:
+    """시스템 프롬프트를 캐시 블록으로 래핑 (1024 토큰 이상일 때만 효과 있음)."""
+    return [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+
+
 def call_claude(client, system: str, user_msg: str) -> str:
     try:
         message = client.messages.create(
             model=MODEL_NAME,
             max_tokens=16000,
-            system=system,
+            system=_cached_system(system),
             messages=[{"role": "user", "content": user_msg}],
         )
         return message.content[0].text
@@ -76,7 +81,7 @@ def call_claude_stream(client, system: str, user_msg: str, stream_callback) -> s
         with client.messages.stream(
             model=MODEL_NAME,
             max_tokens=16000,
-            system=system,
+            system=_cached_system(system),
             messages=[{"role": "user", "content": user_msg}],
         ) as stream:
             for text in stream.text_stream:
