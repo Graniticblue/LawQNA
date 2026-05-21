@@ -31,7 +31,7 @@ def clean_text(text):
 ARTICLE_PATTERN = re.compile(r'^(제\d+조(?:의\d+)?)(?:\(([^)]+)\))?[ \t]*', re.MULTILINE)
 
 BYEOL_PATTERN = re.compile(
-    r'■\s*도시 및 주거환경정비법 시행령\s*\[별표\s*(제?\d+(?:의\d+)?)\](?:\s*<[^>]+>)?[ \t]*([^\n]*)?',
+    r'■\s*도시\s*및\s*주거환경정비법\s*시행령\s*\[별표\s*(제?\d+(?:의\d+)?)\](?:\s*<[^>]+>)?[ \t]*([^\n]*)?',
 )
 
 def parse_articles(text):
