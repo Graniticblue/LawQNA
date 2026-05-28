@@ -27,7 +27,7 @@ def get_generator():
     global _generator_instance
     if _generator_instance is None:
         spec = importlib.util.spec_from_file_location(
-            "generator_mod", BASE_DIR / "06_Generator.py"
+            "generator_mod", BASE_DIR / "pipeline" / "06_Generator.py"
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
@@ -173,40 +173,252 @@ def clean_article_content(text: str) -> str:
 
 # ── 인라인 인용 마커 파싱 ───────────────────────────────────
 
+def _format_amendment_content(rec: dict) -> str:
+    """amendment dict → 사이드패널 마크다운 문자열"""
+    law  = rec.get("law_name", "")
+    date = rec.get("시행일", "")
+    pub  = rec.get("공포번호", "")
+    lines = [f"**{law}** [{pub}, {date}.]", ""]
+
+    이유 = rec.get("개정이유", "")
+    if 이유:
+        lines += [f"**개정이유**", 이유, ""]
+
+    주요 = rec.get("주요내용", "")
+    if 주요:
+        lines.append("**주요 개정 내용**")
+        if isinstance(주요, str):
+            lines.append(주요)
+        else:
+            for item in 주요:
+                조문 = ", ".join(item.get("조문", []))
+                lines.append(f"· [{조문}] {item.get('항목','')}: {item.get('내용','')}")
+        lines.append("")
+
+    kp = rec.get("목적론적_키포인트", "")
+    if kp:
+        lines.append("**목적론적 키포인트**")
+        if isinstance(kp, list):
+            for k in kp:
+                lines.append(f"· {k}")
+        else:
+            lines.append(kp)
+        lines.append("")
+
+    부칙 = rec.get("부칙_상세", [])
+    if 부칙:
+        lines.append("**부칙(적용례·경과조치)**")
+        if isinstance(부칙, dict):
+            for k, v in 부칙.items():
+                v_str = v if isinstance(v, str) else str(v)
+                lines.append(f"· {k}: {v_str[:200]}")
+        else:
+            for b in 부칙:
+                if isinstance(b, dict):
+                    lines.append(f"· {b.get('조항','')}: {b.get('내용','')}")
+                else:
+                    lines.append(f"· {b}")
+
+    return "\n".join(lines)
+
+
+def _strip_internal_markers(text: str) -> str:
+    """답변에 잘못 남은 내부 마커들을 제거.
+
+    - [법령원문N], [법령N], [해석례N], [판례N], [입법요지N], [memo_NNN], [P-NNN]
+    - [해석례2, 해석례3 참조], [P-004 참조] 같은 결합 형태
+    - 뒤에 따라붙는 공백·구두점도 정리
+    """
+    # 모든 변종을 한 번에 잡는 패턴 (대괄호 안에 마커류 토큰만 포함된 경우)
+    inner = r'(?:법령원문|법령|해석례|판례|입법요지|memo_\d+|P-\d+|직접)'
+    pattern = re.compile(
+        rf'\s*\[\s*{inner}\s*[\d\s,·、]*(?:참조|참고)?\s*\]'
+    )
+    text = pattern.sub('', text)
+    # 빈 괄호류 제거
+    text = re.sub(r'\(\s*\)', '', text)
+    # 중복 공백 정리
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+    return text
+
+
+# 법령명 alias — DB 정식명 → 답변에 등장 가능한 모든 표기 형태 (정식 + 축약)
+# 모델이 "국토계획법 시행령" 등 축약형을 써도 사이드 패널과 연결되도록 필요.
+LAW_ALIASES: dict[str, list[str]] = {
+    "건축법":                              ["건축법"],
+    "건축법 시행령":                        ["건축법 시행령", "건축법시행령"],
+    "건축법 시행규칙":                      ["건축법 시행규칙", "건축법시행규칙"],
+    "국토의 계획 및 이용에 관한 법률":       ["국토의 계획 및 이용에 관한 법률", "국토계획법"],
+    "국토의 계획 및 이용에 관한 법률 시행령": [
+        "국토의 계획 및 이용에 관한 법률 시행령",
+        "국토계획법 시행령",
+        "국토계획법시행령",
+    ],
+    "국토의 계획 및 이용에 관한 법률 시행규칙": [
+        "국토의 계획 및 이용에 관한 법률 시행규칙",
+        "국토계획법 시행규칙",
+        "국토계획법시행규칙",
+    ],
+    "주택법":                              ["주택법"],
+    "주택법 시행령":                        ["주택법 시행령", "주택법시행령"],
+    "주택법 시행규칙":                      ["주택법 시행규칙", "주택법시행규칙"],
+    "도시 및 주거환경정비법":               ["도시 및 주거환경정비법", "도시정비법"],
+    "도시 및 주거환경정비법 시행령":         ["도시 및 주거환경정비법 시행령", "도시정비법 시행령"],
+    "장애인·노인·임산부 등의 편의증진 보장에 관한 법률": [
+        "장애인·노인·임산부 등의 편의증진 보장에 관한 법률",
+        "장애인편의법",
+    ],
+    "다중이용업소의 안전관리에 관한 특별법":  [
+        "다중이용업소의 안전관리에 관한 특별법",
+        "다중이용업법",
+    ],
+    "소방시설 설치 및 관리에 관한 법률":     ["소방시설 설치 및 관리에 관한 법률", "소방시설법"],
+    "소방시설 설치 및 관리에 관한 법률 시행령": [
+        "소방시설 설치 및 관리에 관한 법률 시행령",
+        "소방시설법 시행령",
+    ],
+    "주차장법":                            ["주차장법"],
+    "주차장법 시행령":                      ["주차장법 시행령", "주차장법시행령"],
+    "주차장법 시행규칙":                    ["주차장법 시행규칙", "주차장법시행규칙"],
+    "농지법":                              ["농지법"],
+}
+
+
+def _get_law_aliases(law: str) -> list[str]:
+    """DB 정식 법령명에 대응하는 모든 인용 표기 형태(정식+축약) 반환.
+    매핑에 없는 법령은 원본 이름만 사용."""
+    return LAW_ALIASES.get(law, [law])
+
+
+# 자연 산문 인용 패턴 — 전체 인용 문자열을 통째로 캡처하여 element 이름으로 사용
+# Chainlit auto-link은 element name이 답변 텍스트에 정확히 substring으로 있어야 발동.
+#
+# 매칭 형태 예시 (group 1 = 전체 인용, group 2 = doc_code/case_id):
+#   "법제처 22-0155"
+#   "법제처 2022. 1. 28. 회신 22-0155"
+#   "법제처 2024. 4. 4. 회신 24-0243"
+#   "대법원 2017두73693"
+#   "대법원 2013. 1. 17. 선고 2011다83431"
+_QA_PROSE_PAT = re.compile(
+    r'(?<![가-힣\d])'
+    r'(법제처\s+(?:\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.\s*회신\s+)?'
+    r'(\d{2}-\d{4}))'
+    r'(?!\d)'
+)
+_CASE_PROSE_PAT = re.compile(
+    r'(?<![가-힣\d])'
+    r'(대법원\s+(?:\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.\s*선고\s+)?'
+    r'(\d{2,4}[가-힣]\d{3,5}))'
+    r'(?!\d)'
+)
+
+
 def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
-    law_docs  = result.get("law_docs",  [])
-    qa_docs   = result.get("qa_docs",   [])
-    case_docs = result.get("case_docs", [])
+    law_docs       = result.get("law_docs",       [])
+    qa_docs        = result.get("qa_docs",        [])
+    case_docs      = result.get("case_docs",      [])
+    amendment_docs = result.get("amendment_docs", [])
+
+    # 1) 잔존 내부 마커 제거 (LLM이 가끔 무시하고 출력해도 안전망)
+    answer = _strip_internal_markers(answer)
 
     elements: list = []
-    seen: set[str] = set()
+    seen_names: set[str] = set()
 
-    for m in re.finditer(r'\[(법령|해석례|판례)(\d+)\]', answer):
-        kind = m.group(1)
-        idx  = int(m.group(2)) - 1
-        name = f"{kind}{m.group(2)}"
+    # 2) 자연 산문 인용 패턴 감지 → 사이드 패널 element 생성
+    #    "법제처 22-0155" 같은 문구가 답변에 있으면, 그 이름의 cl.Text element를
+    #    만들어 두면 Chainlit이 자동으로 클릭 가능한 사이드 패널 링크로 변환한다.
 
-        if name in seen:
+    # doc_code → qa_doc lookup
+    qa_lookup = {}
+    for d in qa_docs:
+        code = d.metadata.get("doc_code", "")
+        if code and code not in qa_lookup:
+            qa_lookup[code] = d
+
+    for m in _QA_PROSE_PAT.finditer(answer):
+        ref_name = m.group(1)   # 답변에 실제 나타난 전체 인용 문자열
+        code     = m.group(2)   # doc_code (lookup용)
+        if ref_name in seen_names:
             continue
-        seen.add(name)
-
-        doc = None
-        if kind == "법령"   and 0 <= idx < len(law_docs):
-            doc = law_docs[idx]
-        elif kind == "해석례" and 0 <= idx < len(qa_docs):
-            doc = qa_docs[idx]
-        elif kind == "판례"  and 0 <= idx < len(case_docs):
-            doc = case_docs[idx]
-
+        seen_names.add(ref_name)
+        doc = qa_lookup.get(code)
         if doc is None:
             continue
+        q   = doc.metadata.get("question", "")
+        ans = (doc.content or "")[:3000]
+        date = doc.metadata.get("doc_date", "")
+        header = f"**법제처 {code}**" + (f"  ·  {date}" if date else "")
+        content = f"{header}\n\n**질문**\n{q}\n\n**답변**\n{ans}"
+        elements.append(cl.Text(name=ref_name, content=content, display="side"))
 
-        edate = doc.metadata.get("enforcement_date", "")
-        header_extra = get_law_header(doc.law_name, edate)
-        sep = "  ·  " if header_extra else ""
-        body = clean_article_content(doc.content)
-        content = f"**{doc.law_name}  {doc.article_no}**{sep}{header_extra}\n\n{body}"
-        elements.append(cl.Text(name=name, content=content, display="side"))
+    # case_id → case_doc lookup
+    case_lookup = {}
+    for d in case_docs:
+        cid = d.metadata.get("case_id", d.article_no)
+        if cid and cid not in case_lookup:
+            case_lookup[cid] = d
+
+    for m in _CASE_PROSE_PAT.finditer(answer):
+        ref_name = m.group(1)   # 답변에 실제 나타난 전체 인용 문자열
+        cid      = m.group(2)   # case_id (lookup용)
+        if ref_name in seen_names:
+            continue
+        seen_names.add(ref_name)
+        doc = case_lookup.get(cid)
+        if doc is None:
+            continue
+        court = doc.metadata.get("court", "")
+        date  = doc.metadata.get("decision_date", "")
+        body  = (doc.content or "")[:3000]
+        header_parts = [x for x in [court, cid] if x]
+        if date:
+            header_parts.append(f"({date} 선고)")
+        header = "**" + " ".join(header_parts) + "**"
+        content = f"{header}\n\n{body}"
+        elements.append(cl.Text(name=ref_name, content=content, display="side"))
+
+    # 3) 법령 조문 자연 인용 — 정규식으로 항·호·목까지 통째로 캡처
+    #    축약형 법령명("국토계획법 시행령" 등)도 매칭되어야 하므로 alias 사용.
+
+    # (법령명, 조 번호) → doc 매핑 (중복 제거)
+    law_doc_map: dict = {}
+    for d in law_docs:
+        law = d.law_name
+        art = d.article_no
+        if law and art and (law, art) not in law_doc_map:
+            law_doc_map[(law, art)] = d
+
+    # 조 번호 뒤에 따라붙을 수 있는 항·호·목 패턴 (모두 선택)
+    ART_EXT = r"(?:\s*제\d+항)?(?:\s*제\d+호)?(?:\s*[가-힣]목)?"
+
+    for (law, art), d in law_doc_map.items():
+        is_byeolpyo = "별표" in art
+        if is_byeolpyo:
+            art_pat = re.escape(art)
+        else:
+            # "제70조" 와 "제70조의2" 가 섞이지 않도록 (?!의) 가드
+            art_pat = re.escape(art) + r"(?!의)" + ART_EXT
+
+        # 정식명 + 축약형 모두 매칭 시도
+        for alias in _get_law_aliases(law):
+            patterns = [
+                re.compile(rf"「{re.escape(alias)}」\s*{art_pat}"),
+                re.compile(rf"(?<![가-힣·]){re.escape(alias)}\s+{art_pat}"),
+            ]
+            for pat in patterns:
+                for m in pat.finditer(answer):
+                    ref_name = m.group(0).strip()
+                    if ref_name in seen_names:
+                        continue
+                    seen_names.add(ref_name)
+                    edate = d.metadata.get("enforcement_date", "")
+                    header_extra = get_law_header(law, edate)
+                    sep = "  ·  " if header_extra else ""
+                    body = clean_article_content(d.content)
+                    # 사이드 패널 헤더에는 정식 법령명 노출
+                    content = f"**{law}  {art}**{sep}{header_extra}\n\n{body}"
+                    elements.append(cl.Text(name=ref_name, content=content, display="side"))
 
     return answer, elements
 
@@ -279,7 +491,8 @@ def make_collapsible_html(body: str) -> str:
 
 # ── 스트리밍 생성 ─────────────────────────────────────────────
 
-async def generate_streaming(gen, query: str, extra_context: str, session_id: str):
+async def generate_streaming(gen, query: str, extra_context: str, session_id: str,
+                             provider: str = "gemini", model_label: str = "⚡ Gemini"):
     token_q: _queue.Queue = _queue.Queue()
     result_holder: list = [None]
     error_holder:  list = [None]
@@ -292,13 +505,14 @@ async def generate_streaming(gen, query: str, extra_context: str, session_id: st
             result_holder[0] = gen.generate(
                 query, False, extra_context, session_id,
                 stream_callback=stream_cb,
+                provider=provider,
             )
         except Exception as e:
             error_holder[0] = e
         finally:
             token_q.put(None)
 
-    thinking_msg = cl.Message(content="분석 중…")
+    thinking_msg = cl.Message(content=f"{model_label} 분석 중…")
     await thinking_msg.send()
 
     thread = threading.Thread(target=worker, daemon=True)
@@ -330,10 +544,10 @@ async def generate_streaming(gen, query: str, extra_context: str, session_id: st
         await thinking_msg.remove()
         msg = cl.Message(content="답변을 생성하지 못했습니다.")
         await msg.send()
+        return msg, None
 
-    # 스트리밍 완료 확정 (content 교체는 하지 않음)
     await msg.update()
-    return msg, result_holder[0], True  # True = streamed
+    return msg, result_holder[0]
 
 
 # ── 내장 법령 목록 ───────────────────────────────────────────
@@ -495,6 +709,26 @@ async def on_message(message: cl.Message):
     if not query:
         return
 
+    # ── 모델 선택 버튼 ────────────────────────────────────────
+    gen = get_generator()
+    actions = [
+        cl.Action(name="gemini", label="⚡ Gemini 2.5 Flash", payload={"provider": "gemini"}),
+    ]
+    if gen._claude_client:
+        actions.append(
+            cl.Action(name="claude", label="🔷 Claude Sonnet", payload={"provider": "claude"})
+        )
+
+    if len(actions) > 1:
+        res = await cl.AskActionMessage(
+            content="어떤 모델로 답변할까요?",
+            actions=actions,
+            timeout=30,
+        ).send()
+        provider = (res.get("payload") or {}).get("provider", "gemini") if res else "gemini"
+    else:
+        provider = "gemini"
+
     # 히스토리에서 extra_context 구성
     history = cl.user_session.get("history", [])
     extra_context = ""
@@ -506,34 +740,33 @@ async def on_message(message: cl.Message):
         extra_context = "\n".join(lines)
 
     session_id = cl.user_session.get("session_id", "")
-
-    thinking_msg = cl.Message(content="분석 중…")
-    await thinking_msg.send()
+    model_label = "⚡ Gemini" if provider == "gemini" else "🔷 Claude"
 
     try:
-        gen = get_generator()
-        result = await asyncio.to_thread(
-            gen.generate, query, False, extra_context, session_id
+        msg, result = await generate_streaming(
+            gen, query, extra_context, session_id, provider, model_label
         )
     except Exception as e:
-        await thinking_msg.remove()
         await cl.Message(content=f"오류가 발생했습니다: {e}").send()
         return
 
-    await thinking_msg.remove()
+    if result is None:
+        return
 
     raw_answer  = result.get("answer", "")
     source_info = result.get("source_info", {})
     if not isinstance(source_info, dict):
         source_info = {}
 
-    # [출처 요약] 블록 분리
+    # [출처 요약] 제거 + 인용 마커 처리
     body, _ = split_answer(raw_answer)
-
-    # 인라인 인용 마커 → cl.Text 요소
     body, cite_elements = build_citation_elements(body, result)
 
-    await cl.Message(content=body, elements=cite_elements).send()
+    # 스트리밍된 메시지를 최종 본문으로 업데이트 (출처 요약 제거 + 사이드패널 연결)
+    msg.content = body
+    if cite_elements:
+        msg.elements = cite_elements
+    await msg.update()
 
     # 출처 요약 별도 메시지
     sources_text = format_sources(source_info)

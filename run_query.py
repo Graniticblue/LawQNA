@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 import importlib.util
-spec = importlib.util.spec_from_file_location("generator", Path(__file__).parent / "06_Generator.py")
+spec = importlib.util.spec_from_file_location("generator", Path(__file__).parent / "pipeline" / "06_Generator.py")
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 

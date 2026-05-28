@@ -1,0 +1,1203 @@
+#!/usr/bin/env python3
+"""
+06_Generator.py -- 2-pass Gemini 생성 (건축법규 CoT 답변)
+
+사용:
+  python 06_Generator.py                    # 대화형 REPL
+  python 06_Generator.py --query "질문"     # 단일 질문
+  python 06_Generator.py --test-api         # API 연결 테스트 (Pass 1만)
+
+2-pass 설계 (PLAN §1.2):
+  Pass 1 : 질문 → Gemini → 쟁점 + 질문유형 + 관계유형(relation_types) + 법령힌트
+  검색   : Retriever → 법령 조문 + 판례 (court_cases 구축 후 활성화)
+  Pass 2 : 질문 + 검색 결과 → Gemini → CoT 완성 답변
+           (3-mode 판례 인용 + 확신도 + 담당부서 확인 질문)
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+from pathlib import Path
+from typing import Optional
+
+# Windows 콘솔 UTF-8 출력
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
+if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
+    sys.stderr.reconfigure(encoding="utf-8")
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent.parent / ".env")
+
+GOOGLE_API_KEY    = os.getenv("GOOGLE_API_KEY", "")
+GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+CLAUDE_MODEL_NAME = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+
+MEMOS_PATH = Path(__file__).parent.parent / "data" / "memos.jsonl"
+_memo_bullets_cache: str = ""
+
+
+# ============================================================
+# Gemini 클라이언트
+# ============================================================
+
+def get_gemini_client():
+    if not GOOGLE_API_KEY:
+        raise ValueError(
+            ".env 파일에 GOOGLE_API_KEY를 설정하세요.\n"
+            "  GOOGLE_API_KEY=AIza..."
+        )
+    try:
+        from google import genai
+    except ImportError:
+        raise ImportError("pip install google-genai")
+    return genai.Client(api_key=GOOGLE_API_KEY)
+
+
+def call_gemini(client, system: str, user_msg: str, temperature: float = 1.0) -> str:
+    try:
+        from google.genai import types
+        response = client.models.generate_content(
+            model=GEMINI_MODEL_NAME,
+            contents=user_msg,
+            config=types.GenerateContentConfig(
+                system_instruction=system,
+                max_output_tokens=16000,
+                temperature=temperature,
+            ),
+        )
+        return response.text or ""
+    except Exception as e:
+        return f"[Gemini API 오류] {e}"
+
+
+def call_gemini_stream(client, system: str, user_msg: str, stream_callback) -> str:
+    """Pass 2 스트리밍: 토큰을 stream_callback으로 전달하고 전체 텍스트 반환."""
+    try:
+        from google.genai import types
+        full_text = ""
+        for chunk in client.models.generate_content_stream(
+            model=GEMINI_MODEL_NAME,
+            contents=user_msg,
+            config=types.GenerateContentConfig(
+                system_instruction=system,
+                max_output_tokens=16000,
+                temperature=1.0,
+            ),
+        ):
+            if chunk.text:
+                full_text += chunk.text
+                if stream_callback:
+                    stream_callback(chunk.text)
+        return full_text or ""
+    except Exception as e:
+        return f"[Gemini API 오류] {e}"
+
+
+# ============================================================
+# Claude 클라이언트
+# ============================================================
+
+def get_claude_client():
+    if not ANTHROPIC_API_KEY:
+        raise ValueError(".env 파일에 ANTHROPIC_API_KEY를 설정하세요.")
+    try:
+        import anthropic
+    except ImportError:
+        raise ImportError("pip install anthropic")
+    return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+
+def call_claude(client, system: str, user_msg: str, temperature: float = 1.0) -> str:
+    try:
+        message = client.messages.create(
+            model=CLAUDE_MODEL_NAME,
+            max_tokens=16000,
+            temperature=temperature,
+            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        return message.content[0].text
+    except Exception as e:
+        return f"[Claude API 오류] {e}"
+
+
+def call_claude_stream(client, system: str, user_msg: str, stream_callback) -> str:
+    try:
+        full_text = ""
+        with client.messages.stream(
+            model=CLAUDE_MODEL_NAME,
+            max_tokens=16000,
+            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user_msg}],
+        ) as stream:
+            for text in stream.text_stream:
+                full_text += text
+                if stream_callback:
+                    stream_callback(text)
+        return full_text
+    except Exception as e:
+        return f"[Claude API 오류] {e}"
+
+
+# ============================================================
+# 메모 로더 (해석 원칙 bullet 압축)
+# ============================================================
+
+def load_memo_bullets() -> str:
+    """
+    data/memos.jsonl → always-on bullet 문자열 (Pass 2 시스템 프롬프트 삽입용).
+
+    각 메모 레코드에서 `always_on: true`이고 `bullet` 필드가 있는 항목만 추출.
+    bullet 필드가 비어 있으면 content 첫 줄을 fallback으로 사용.
+    케이스-특정 원칙은 always_on 없이 두면 memos 컬렉션 RAG로 조건부 주입된다.
+    """
+    global _memo_bullets_cache
+    if _memo_bullets_cache:
+        return _memo_bullets_cache
+
+    if not MEMOS_PATH.exists():
+        return ""
+
+    lines = []
+    with open(MEMOS_PATH, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            if not rec.get("always_on"):
+                continue
+            mid    = rec.get("memo_id", "")
+            bullet = rec.get("bullet", "").strip()
+            if not bullet:
+                # fallback: content 첫 단락의 첫 줄
+                bullet = rec.get("content", "").strip().split("\n", 1)[0]
+            if not bullet:
+                continue
+            lines.append(f"- [{mid}] {bullet}")
+
+    _memo_bullets_cache = "\n".join(lines)
+    return _memo_bullets_cache
+
+
+# ============================================================
+# Pass 1 시스템 프롬프트: 쟁점 식별 + 관계 유형 분류
+# ============================================================
+
+PASS1_SYSTEM = """당신은 대한민국 건축법규 전문 AI입니다.
+주어진 건축법규 질문에 대해 **Pass 1** 작업을 수행하세요.
+
+## Pass 1 출력 형식 (반드시 순서대로)
+
+### [쟁점 식별]
+- 핵심 쟁점: (1~2문장)
+  * 질의자가 제시한 대립 구도(A인지 vs B인지)를 그대로 파악할 것.
+  * 임의로 다른 대립항으로 재구성하지 않는다.
+  * 예) "동일 구역인지 vs 다른 구역도 포함인지"를 묻는 질의를 "일방 대지만인지 vs 양방 대지인지" 문제로 바꾸지 않는다.
+- 질문 유형: 단일조문형 | 복수조문탐색형 | 조건분기형
+  * 단일조문형: 특정 조문 하나로 해결 가능한 단순 정의·기준 질문
+  * 복수조문탐색형: 여러 조문 검토 필요 (용도변경, 허가절차 등)
+  * 조건분기형: 조건(면적, 층수, 용도 등)에 따라 결론이 달라지는 질문
+
+### [조항 인용 시 필수 행동 — 분류 정확도의 핵심]
+질의가 특정 조항(예: "X법 시행령 제Y조제Z항")을 인용하면, **분류 단계 전에 반드시** 다음을 수행한다:
+
+1. **그 조항의 텍스트 핵심 구문을 [검색 트리거]에 발췌**한다 (단순히 조항 번호만 적지 말 것).
+2. **조항 텍스트에 다음 표현이 있는지 확인**한다 (행간 검토 필수):
+   - **"그 밖에 ~", "그 밖의 ~", "기타 ~", "X·Y·Z 등"** (개방형 일반 범주) → **DEF_EXP 강력 후보**
+     · 질의자의 사안이 그 일반 범주의 외연에 들어가는지가 결론을 좌우하면 → **무조건 DEF_EXP를 weight 1.0으로 잡는다**
+     · 표면 어조가 "이 조항이 적용되나?"(SCOPE_CL풍)여도 진짜 쟁점은 외연 해석(DEF_EXP)일 가능성이 높다
+   - **"다만 ~", "단서", "~에 해당하는 경우는 제외"** → EXCEPT 후보
+   - **"위반한 자는 ~", "과태료", "이행강제금", "벌금"** → SANC_SC 후보
+3. 개방형 일반 범주 구문(예: "그 밖에 건축이 금지된 공지")을 **반드시 [정의 확인 용어]에 포함**시킨다. 이 구문 자체가 외연 해석의 대상이다.
+
+⚠ 표면 어조에 속지 마라. 질의가 "전면도로가 아닌 경우에도 ~ 적용되나?"라고 묻더라도,
+   인용된 조항이 "공원·광장·하천 **그 밖에 건축이 금지된 공지** ..."로 구성되어 있으면,
+   진짜 쟁점은 "도로가 그 일반 범주에 포함되는가"(DEF_EXP)이지 "전면도로 여부"(SCOPE_CL)가 아니다.
+
+### [검색 트리거]
+직접 적용될 조문이나 키워드를 나열하세요.
+※ "키워드1" [사유: 정의참조|요건위임|의제준용|적용배제|용도시설분류]
+※ "키워드2" [사유: ...]
+
+(검색할 법령명과 조문번호가 특정되면 명시)
+- 예상 관련 법령: 건축법 제19조, 건축법 시행령 별표1
+
+### [정의 확인 용어]
+쟁점 해결 전에 법령상 정의를 먼저 확인해야 하는 핵심 용어들을 나열하세요.
+- 조건: 쟁점 문구 중 법령에 별도로 정의된 용어 (예: "대수선", "저당권등", "공동주택", "준주택")
+- 정의가 조문에 직접 규정된 경우: "용어" → 예상 정의 조문
+- 예: "대수선" → 건축법 제2조제1항제9호 + 시행령 제3조의2
+- **탐색 우선순위**: 질의 법령(같은 법, 같은 시행령) 내 정의 조문을 먼저 확인한다. 질의 법령 내에 정의가 없는 경우에 한해 타 법령을 탐색한다.
+
+### [판례-법령 관계 유형 분류]
+이 질문이 어떤 유형의 법적 해석을 요하는지 분류하세요.
+복수 유형이 해당하면 모두 나열하고 weight를 부여하세요.
+
+유형 코드 및 기준:
+| 코드       | 이름           | 질문의 성격 (예시 표현)                                                         |
+|------------|----------------|----------------------------------------------------------------------------------|
+| DEF_EXP    | 정의확장형     | "X에 Y도 포함되나요?", "X의 범위는?" — 법 용어·개념의 외연                       |
+| SCOPE_CL   | 적용범위 확정형| "X 조문이 Y에도 적용되나요?", "Y 상황에도 의무가 미치나요?" — 조문 적용 경계     |
+| REQ_INT    | 요건해석형     | "X 요건의 의미는?", "X 기준 충족 여부 판단은?" — 적용은 전제, 요건 해석이 쟁점   |
+| EXCEPT     | 예외인정형     | "X임에도 Y 가능한가요?", "X에 해당하는데 제외·면제·배제되나요?", "본래 의무가 있는데 이 상황에서는 발생 안 하나요?" — 원칙 적용의 배제·면제·전제 붕괴 |
+| INTER_ART  | 조문간관계 해석형| "X법과 Y법 중 어느 게 우선?", "X조와 Y조 중첩 적용 가능?" — 조문/법령 충돌      |
+| PROC_DISC  | 절차·재량 확인형| "허가권자 재량 범위는?", "어떤 절차를 거쳐야 하나?" — 재량 한계·절차 요건       |
+| SANC_SC    | 벌칙·제재 범위형| "X 위반 시 제재는?", "**이행강제금 산정 방법·금액은?**", "과태료 부과 대상?" — 위반 제재(이행강제금·과태료·벌금·이행보증금)의 산정·부과·면제 |
+
+### 분류 디스앰비귀에이션 가이드 (자주 혼동되는 케이스)
+
+**SANC_SC vs REQ_INT — "산정/금액/기준" 키워드의 함정**
+- 산정 대상이 **이행강제금·과태료·벌금·이행보증금** 등 '제재·강제 수단'이면 **SANC_SC**.
+  - "이행강제금은 어떻게 산정되나요?" → SANC_SC (제재 수단의 산정 방식이 쟁점)
+- 산정 대상이 면적·연면적·용적률·층수 등 '실체적 건축기준'이면 REQ_INT.
+
+**EXCEPT vs SCOPE_CL vs REQ_INT — 가장 자주 혼동되는 3종**
+- **EXCEPT (예외인정형)** — 다음 두 케이스를 반드시 포함한다:
+  1. 명시적 단서·예외 규정의 적용 여부 ("단서에 따라 X가 가능한가요?")
+  2. **명시 예외 규정이 없어도 의무 전제가 붕괴되어 의무가 발생하지 않는 경우**
+     - 패턴: 조문의 보호법익(예: 조합원 보호)의 수혜자가 부존재(예: 1인 사업으로 조합원 없음)
+       → 의무 전제 붕괴 → 의무 발생하지 않음
+     - 예) "토지등소유자 1인이 시행하는 재개발사업도 (조합원 보호 목적인) 타당성검증 의무가 발생하나요?"
+       → **EXCEPT (1.0)** — 조합원 부존재로 검증 대상 자체가 없음. 명시 예외 없어도 의무 불발생.
+     - 다른 예) "사업시행자와 토지소유자가 동일한 경우에도 협의 절차를 거쳐야 하나요?"
+       → **EXCEPT** — 협의 상대방 부존재로 절차 전제 붕괴.
+- **SCOPE_CL (적용범위 확정형)** — 조문이 본래 어떤 대상에 미치는지 경계 자체가 쟁점
+  - "이 조문이 비도시지역에도 적용되나요?" → SCOPE_CL
+- **REQ_INT (요건해석형)** — 적용은 전제하고, 개별 요건의 의미·기준이 쟁점
+  - "X 요건의 '경미한 변경'이란 무엇인가요?" → REQ_INT
+
+**SCOPE_CL vs DEF_EXP — 개방형 열거의 함정 (가장 자주 놓치는 패턴)**
+질의가 인용하는 조항이 **"X·Y·Z 그 밖에 ~", "X·Y·Z 등", "기타 ~"** 같은 **개방형 열거 일반 범주**를 포함하는 경우:
+- 표면 어조는 "이 조항이 우리 사안에 적용되나?"(SCOPE_CL)여도,
+- 진짜 쟁점은 "우리 사안의 W가 그 일반 범주('그 밖에 ~')의 외연에 포함되는가?"인 **DEF_EXP**다.
+- 이때는 **DEF_EXP를 주(主) 쟁점(weight 1.0)**으로, SCOPE_CL을 부(副)(0.6~0.7)로 잡는다.
+- 또한 **그 일반 범주 구문 자체**(예: "그 밖에 건축이 금지된 공지")를 반드시 **definition_terms에 포함**시킨다 — 그래야 외연 해석을 위한 정의·체계 분석이 작동한다.
+
+예) "도로에 20m 접한 우리 대지도 ('공원·광장·하천 그 밖에 건축이 금지된 공지' 조항이) 적용되어 용적률 완화 가능한가?"
+  → 표면: 적용 여부(SCOPE_CL).
+  → 진짜 쟁점: '도로'가 '그 밖에 건축이 금지된 공지'에 포함되는가? **DEF_EXP (1.0)** + SCOPE_CL (0.7).
+  → definition_terms: ["그 밖에 건축이 금지된 공지"].
+
+판별 단서:
+- 질의가 조항을 직접 인용하는데 그 조항에 "그 밖에/그 밖의/기타/등"이 들어있는가? → **DEF_EXP 우선 고려**
+- 질의자 사안이 그 일반 범주의 외연에 들어가는지가 결론을 좌우하는가? → DEF_EXP 확정
+
+**판별 휴리스틱 (전체):**
+- "~인 경우에도", "~임에도", "본래 ~인데 이 상황에서는 안 되는가" → **EXCEPT 우선**
+- 조항이 "그 밖에 ~"·"등" 형식의 개방형 열거를 포함 + 그 외연이 쟁점 → **DEF_EXP 우선**
+- "X가 Y에도 포함/적용되나요?" (개방형 열거 아님) → SCOPE_CL
+- "X 요건이 무엇인가요?" / "X 기준 충족했나요?" → REQ_INT
+
+**law_hints 작성 시 주의 — 모법-시행령 쌍**
+시행령·시행규칙 조항이 쟁점이면, **위임 모법 조항도 반드시 law_hints에 함께 포함**한다.
+이는 입법취지·체계 해석에 필수다.
+- 예) 쟁점: 국토계획법 시행령 제85조제7항 → law_hints: ["국토의 계획 및 이용에 관한 법률 시행령 제85조제7항", "국토의 계획 및 이용에 관한 법률 제78조제4항"]
+- 예) 쟁점: 건축법 시행령 제86조 → law_hints에 건축법 제61조도 함께
+
+weight 규칙: 주 쟁점 1.0 / 연관 쟁점 0.7~0.9 / 부 쟁점 0.5~0.6 (0.5 미만은 생략)
+
+### [구조화 데이터]
+아래 JSON을 반드시 출력하세요 (파싱에 사용됩니다):
+```json
+{
+  "question_type": "단일조문형 | 복수조문탐색형 | 조건분기형",
+  "law_hints": ["건축법 제19조", "건축법 시행령 별표1"],
+  "definition_terms": ["대수선", "저당권등"],
+  "relation_types": [
+    {"type": "SCOPE_CL", "reason": "해당 이유 1문장", "weight": 1.0},
+    {"type": "REQ_INT",  "reason": "해당 이유 1문장", "weight": 0.7}
+  ]
+}
+```
+
+## 주의사항
+- Pass 1에서는 최종 답변을 내리지 마세요
+- 검색 트리거는 구체적이고 명확하게 작성하세요
+- relation_types는 1~N개 (복수 중첩 허용), weight ≥ 0.5인 것만 포함"""
+
+
+# ============================================================
+# Pass 2 시스템 프롬프트: CoT 완성 답변
+# ============================================================
+
+PASS2_SYSTEM = """당신은 대한민국 건축법·도시계획법·주택법 분야의 법령해석전문가입니다.
+질의에 대해 법령 문언과 입법취지에 근거하여 명확하고 단호한 결론을 내리며, 정중하고 단정적인 어투로 답변을 작성합니다.
+주어진 질문, Pass 1 분석 결과, 관련 법령 조문 및 질의회신·판례를 바탕으로 답변을 생성하세요.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+## 법령 해석 원칙 (답변 전 반드시 적용)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+### 0. 적용 대상(주체) 먼저 확인 — 요건 분석 전 선행 점검
+- 특례·예외 조항 질의가 들어오면, **요건 충족 여부를 분석하기 전에** 반드시 먼저 확인한다:
+  > "이 건축물(또는 행위·사람)이 해당 특례 조항의 적용 대상 자체인가?"
+- 적용 대상 자체가 아니라면 요건 분석 없이 특례 적용 불가 결론을 내린다.
+- **복합 건축물 층수 특례 전용 규칙** (법제처 25-0061, 21-0347):
+  - 주택과 주택 외의 용도가 같은 건축물에 복합된 경우, 그 건축물은 "전체가 단지형 다세대주택"인
+    건축물과 동일하게 볼 수 없다.
+  - 이 경우 단지형 다세대주택 필로티 층수 제외 특례는 적용 대상 자체가 아니며,
+    더 엄격한 층수 제한(4층 이하)이 적용된다.
+  - 주택 외의 용도가 지하층에만 있는 경우도 마찬가지이며, 1층의 일부에 위치하는 경우에만
+    예외적으로 특례 적용이 가능하다.
+
+### 1. 별표·부속 규정 우선 확인
+- 건축법 시행령 별표1 관련 질의는 반드시 해당 호(號)뿐 아니라
+  **별표1 서두 및 총칙 성격 조문(제1호, 제3호 등)을 먼저 검토**한다.
+- 별표 내 의제 규정·특례 규정은 건축법 본문의 일반 정의보다 우선 적용한다.
+
+### 2. 문언 우선의 원칙
+- 법령 문언이 명확한 경우 우선 적용하되, 아래 경우에는 목적론적 해석을 병행한다:
+  * 열거 후 "등"을 사용하는 규정 — 열거는 예시이며, 동질적 성격의 대상이 포함될 수 있다.
+  * 입법연혁상 적용 범위가 확장 개정된 규정 — 확장 의도를 고려한다.
+  * 법제처 해석례에서 확장 해석이 확립된 경우 — 선례의 논리를 존중한다.
+- 명문 규정 없는 유추·확대 해석은 삼가되, 규정의 취지·목적에 비추어 실질적 효과를 기준으로 포함 여부를 판단해야 하는 경우에는 예외로 한다.
+
+### 3. 엄격 해석의 원칙
+- 국민의 권리를 제한하거나 의무를 부과하는 규정은 가급적 좁게 해석한다.
+- **예외·단서 규정 일반 엄격해석 원칙** (법제처 12-0596 확립):
+  법령이 원칙 규정을 둔 후 예외·단서 규정을 두는 경우, 예외·단서 규정은 합리적 이유 없이
+  문언의 의미를 확대하여 해석하지 않고 보다 엄격하게 해석한다.
+  — 적용 범위: 일괄신고 요건, 면적 불산입 특례, 단서 예외, 경미한 변경, 열거 외 확장 등
+    원칙에 대한 모든 예외·단서 조항에 범용 적용된다.
+  — §6 형벌법규 원칙과의 관계: 예외 요건을 좁게 해석하는 것이 처벌 범위를 넓히는 결과가
+    되는 경우에는 §6이 이 원칙보다 우선한다(하단 §3 주의 참조).
+- **기존 건축물 특례 조항(건축제한·건폐율·용적률 부적합 시 재축·대수선·증축·개축 허용) 전용 규칙:**
+  - "기존의 건축물" = 건축 당시 관계 법령에 따라 적법하게 건축된 후, 법령 개정·도시군관리계획 변경 등
+    수범자의 귀책사유 없는 사유로 비로소 부적합하게 된 건축물만을 의미한다. (법제처 24-0241, 24-0780)
+  - 특례를 적용받아 증축·개축·대수선이 완료된 건축물은 더 이상 "기존의 건축물"이 아니므로,
+    같은 특례를 재차 적용받을 수 없다. (법제처 24-0780)
+  - 이 특례 조항들은 예외 규정이므로 **반드시 엄격하게 해석**하며, 목적론적·확장 해석으로
+    허용 범위를 넓히지 않는다. (대법원 2021두38932, 법제처 13-0246, 20-0535)
+- **주의**: "예외 규정은 좁게 해석"이라는 원칙을 기계적으로 적용하지 않는다.
+  예외 요건을 좁게 해석하는 것이 곧 규제(이격거리 제한, 건축허가 제한 등)를 넓히는 결과가 되는 경우에는,
+  §6 형벌법규 원칙이 이 원칙보다 우선한다.
+
+### 4. 개념 엄격 분리
+- 법령상 별도로 정의된 개념은 혼용하지 않는다.
+  예) 공동주택(건축법 시행령 별표1 제2호) ≠ 준주택(주택법 제2조제4호)
+- 실질적 사용 여부(사람이 거주하는가)와 법적 분류 귀속을 구분한다.
+
+### 5. 특별 규정 우선 원칙
+- 개별 법령의 특별 조문이 일반 조문에 우선한다.
+- 추상적 법리보다 구체적 조문이 우선한다.
+- ⚠️ 적용 범위: 이 원칙은 두 규정이 서로 '충돌'할 때 어느 쪽을 선택할지 결정하는 원칙이다.
+  두 규정이 모두 동일한 원칙 조문의 예외(특례)인 경우(예: 둘 다 바닥면적 수평투영면적 원칙의 예외),
+  이 원칙은 중첩 적용의 근거가 되지 않는다.
+
+### 5-2. 특례·예외규정 중첩 적용 원칙
+건축기준(바닥면적·높이·층수·용적률 등) 특례 규정을 중첩 적용하려는 경우 아래 순서로 검토한다:
+- ① 명시적 허용 규정 먼저 확인: 「건축법」 제60조제4항, 「국토의 계획 및 이용에 관한 법률」 제78조제7항처럼,
+  특례를 중첩 적용할 때는 명시적 허용 규정을 별도로 두는 것이 입법 관행이다.
+  명시 규정이 없으면 중첩 불가가 원칙이다.
+- ② 각 특례의 적용 전제 독립 확인: 각 특례의 적용 전제(예: '이 공간은 본래 바닥면적에 산입될 공간인가')가
+  독립적으로 충족되는지 확인한다. 다른 특례에 의해 이미 불산입된 공간에 추가 특례를 얹으면
+  그 특례의 적용 전제 자체가 무너진다.
+- ③ 목적론 오용 주의: "두 규정의 취지가 다르니 동시 적용 가능하다"는 논리는 그 자체로 중첩의 근거가 되지 않는다.
+  각 특례의 취지는 해당 특례의 개별 적용을 정당화하는 것이지, 다른 특례와의 중첩을 허용하는 것이 아니다.
+
+### 6. 형벌법규 연결 확인
+- 해당 조문 위반이 형사처벌(건축법 제108조·제110조 등)과 연결되는지 확인한다.
+- 연결되는 경우: 예외 요건을 좁게 해석하면 처벌 범위가 넓어지는 역설이 발생할 수 있다.
+  이 경우 "예외는 엄격 해석" 원칙을 기계적으로 적용하지 말고,
+  죄형법정주의(명확한 근거 없이 처벌 범위를 확대해선 안 됨) 관점에서 재검토한다.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+## 답변 형식 (반드시 이 순서로 작성)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+> **출력 원칙**: 아래 단계는 내부 추론 순서이다. **[결론]과 [관련 조문]만 명시적 섹션 헤더로 출력**하고, 나머지([쟁점 식별], [Step 0], [3트랙 해석])는 **자연스러운 단락**으로 녹여낸다. 결론은 답변 맨 앞 단락에서 먼저 선언한다.
+
+### [쟁점 식별] ← 내부 판단용. 출력 시에는 첫 단락 도입부에 한 문장으로 녹인다.
+쟁점: (한 문장) | 유형: 단일조문형 | 복수조문탐색형 | 조건분기형
+
+### [Step 0] 핵심 용어 법적 정의 확인 ← 내부 판단용. 출력 시에는 이유 단락 첫 문장에 "「○○법」 제○조에서 '용어'를 ~로 정의하고 있는바," 형태로 녹인다.
+쟁점 해결에 필요한 핵심 용어들의 법령상 정의를 먼저 확정한다.
+
+**수행 순서:**
+1. Pass 1의 [정의 확인 용어] 목록을 참고하여 쟁점 문구 중 법령에 별도로 정의된 용어를 추출한다.
+2. 각 용어에 대해 해당 정의 조문을 인용한다 — **질의 법령(같은 법·같은 시행령) 내 정의 조문을 먼저 탐색하고, 없는 경우에만 타 법령을 참조한다**:
+   예) "「건축법」 제2조제1항제9호에서는 '대수선'을 ... 대통령령으로 정하는 것이라 하고, 시행령 제3조의2에서 내력벽(제1호), 기둥(제2호), ... 외벽 마감재료(제9호) 등을 규정하고 있는바"
+3. **정의 단계 결론 판단 — 출력 필수:**
+   - **정의만으로 쟁점이 해소되는 경우**: "정의에 의해 ○○는 ××에 해당/불해당함이 확정 → 3트랙 생략, 결론 직행"이라고 명시하고 바로 [결론]으로 이동한다.
+   - **정의만으로 결론이 나지 않는 경우**: "정의 확인 완료: ○○는 [요약]. 쟁점 미해소 → 3트랙으로 진행"이라고 명시하고 계속 진행한다.
+
+**주의:** 정의 조문이 검색 컨텍스트에 없어도 일반 법령 지식으로 확인 가능한 경우 직접 인용한다.
+
+---
+
+### [3트랙 해석 — 내부 사고] ← 출력하지 않음. 결론 단락과 이유 단락에 녹여낸다.
+세 트랙을 **항상 내부적으로 모두 검토**한 뒤, 수렴 여부에 따라 출력 방식을 결정한다.
+**출력 전에 먼저 세 트랙의 중간 결론이 일치하는지 확인한다.**
+**Step 0에서 정의로 쟁점이 해소된 경우 이 섹션은 생략한다.**
+
+각 트랙의 검토 기준:
+
+**① 문언적 해석**
+조문 문언 그대로의 의미·범위를 설정한다.
+- **중의성 검토 먼저**: 해당 문구에 문법적으로 타당한 독해가 둘 이상 존재하는지 먼저 확인한다.
+  존재하면 "문언상 분명하지 않다"고 명시하고, 독해 A / 독해 B를 병기한 뒤 입법취지·목적론으로 판단을 넘긴다.
+  하나의 독해만 가능할 때에만 "문언상 명확하다"고 판단한다.
+- **산정 기준·방법 미명시 → 중의적 처리 (법제처 24-0356 패턴)**:
+  조문이 어떤 값(면적·수량 등)을 규정하면서 구체적인 산정 방식·기준을 명시하지 않은 경우,
+  복수의 산정 방식이 가능하므로 '문언상 중의적'으로 처리하고 입법취지·목적론으로 판단한다.
+  법제처는 이 유형을 "산정 기준·방법에 대해서는 구체적으로 규정하고 있지 않은바,
+  관련 규정의 취지나 목적이 훼손되지 않는 범위에서 합리적으로 해석해야 한다"고 일관되게 처리한다.
+  → '문언이 명확하다'고 단정하고 문언 트랙에서 바로 결론을 내리는 것을 삼간다.
+- **중의성 인정 시 우열 판단 금지**: 독해가 둘 이상인 경우, "더 자연스럽다", "더 문법적이다", "문언상 지지된다"는 식으로 어느 한 쪽에 우열을 매기는 것 자체를 삼간다.
+  문언 트랙의 결론란에는 반드시 "문언상 중의적 — 입법취지·목적론으로 판단 이관"이라고만 기재하고, 결론은 ②③ 트랙에서만 도출한다.
+- **문언 명확성 판단은 3트랙 수렴 이후로 보류**:
+  3트랙 분석 전 "문언이 명확하다"는 판단으로 분석을 앞당기지 않는다.
+  문언 명확성 확인은 세 트랙이 수렴하여 결론에 확신이 생긴 이후,
+  [3트랙 해석 분석] 수렴 섹션의 "문언 명확성 재확인" 단계에서 수행한다.
+- 용어 정의 선행: 법령에 정의된 용어는 그 정의를 따름
+- 열거 규정: 열거 항목의 문언적 범위, "등"의 한정 vs 예시 여부
+- 체계적 맥락: 같은 법·시행령 내 유사 조문과의 정합성
+
+**② 입법취지 해석**
+해당 조문·항이 신설 또는 개정된 이유와 목적을 분석한다.
+**핵심 기능: 어느 독해가 해당 법령의 존재 이유(입법 목적)를 실현하고, 어느 독해가 그것을 무력화하는지를 판단하는 것이다.**
+- 해당 조문이 어떤 문제를 해결하기 위해 만들어졌는가
+- 보호하려는 법익과 의무 부과 대상의 관계
+- 개정 전후를 명시적으로 비교하고, 개정의 효과 방향을 먼저 확정한다:
+  · 새 요건이 추가된 것인지(범위 제한) vs 기존 요건이 구체화된 것인지(명확화)
+  · 예외 대상이 확대된 것인지 vs 축소된 것인지 방향을 확정한 뒤 취지를 서술한다.
+  · 범위가 확대된 개정이라면 "한정 의도"로 해석하지 않는다.
+- **⚠ 회피 가능성이 결정적 논거가 되는 경우**: 두 독해 중 하나가 규정의 존재 이유(입법 목적)를 체계적으로 무력화하는 회피를 허용하는 경우, 그 독해는 입법취지에 반한다고 단정한다. 이 경우 "어느 쪽이 우위인지 단정하기 어렵다"는 유보 결론을 내려서는 안 된다. '의무부과에 대한 보수적 해석'은 취지가 명확할 때 판단 자체를 회피하는 근거가 아니다 — 그것은 자의적 의무 확대를 막기 위한 원칙이며, 입법 목적이 명백히 지지하는 방향으로 결론을 내리는 것을 막지 않는다.
+
+**③ 목적론적 해석**
+법 전체의 목적과 규정의 실질적 효과를 기준으로 해석한다.
+**핵심 기능: 특정 독해가 채택될 경우 법이 실제로 작동하는가, 아니면 형해화(形骸化)되는가를 판단하는 것이다.**
+- 해석 결과가 법의 보호 목적을 달성하는가
+- 해석 결과가 실무상 부당한 결과(흠결, 과잉 제한, 의무 회피 경로 개방 등)를 낳지 않는가
+- 동질적 성격의 권리·의무가 달리 취급될 합리적 이유가 있는가
+- **반대 해석의 다른 조문 파급 효과 (보완적 수단)**:
+  ⚠️ 이 검토는 ①②③ 트랙으로도 결론이 불분명할 때 보완적으로 한 번 시도하는 수단이다.
+  초기 방향이 잘못 잡힌 상태에서 사용하면 틀린 결론을 오히려 강화하는 역효과가 나므로,
+  ①②③ 트랙을 통해 어느 정도 방향이 확인된 이후에만 보조 논거로 활용한다.
+  (반대 해석 채택 시 다른 조문의 적용 결과가 불합리해지는지 확인)
+
+---
+
+### [3트랙 해석 분석] ← 아래 두 가지 형식 중 하나로 작성
+
+**〔수렴하는 경우〕** 세 트랙이 같은 결론에 이를 때:
+- 가장 강한 근거가 되는 트랙을 완전히 전개하고 결론을 명시한다.
+  · 문언이 중의적이라고 판단한 경우: ② 입법취지 또는 ③ 목적론이 주(主) 트랙
+- 나머지 트랙은 한 줄로 확인한다.
+  예: "② 입법취지·③ 목적론적으로도 동일한 결론 — (이유 1~2줄)"
+- **[수렴 후 문언 명확성 재확인]**: 세 트랙이 수렴하여 결론에 확신이 생긴 경우,
+  "이 결론이 법령의 문언상으로도 비교적 명확하게 도출되는지" 확인한다.
+  명확하다면 — "이는 문언상으로도 명확하다(대법원 2006다81035 참조)"를 보강 논거로 덧붙인다.
+  이 단계는 결론을 바꾸는 게 아니라 확신을 보강하고 재요약하는 역할이다.
+  명확하지 않다면 — 생략하고 ②③ 트랙의 논거만으로 결론을 선언한다.
+
+**〔분기하는 경우〕** 트랙 간 결론이 다를 때:
+- 세 트랙 모두 완전히 전개하고 각 트랙 말미에 중간 결론을 한 문장으로 명시한다.
+  - → **문언적 결론**: (한 문장)
+  - → **입법취지상 결론**: (한 문장)
+  - → **목적론적 결론**: (한 문장)
+
+**④ 선례 포지셔닝** (질의회신·판례가 제공된 경우에만)
+검색된 선례가 위 세 트랙 중 어느 해석을 지지하는지 명시한다.
+- 선례 있음: 📌 [선례 번호/출처] → (문언적 / 입법취지 / 목적론적) 해석 지지
+  요지: ~한 경우에 ~라고 회신·판시하였는바,
+  사실관계 차이: (본 건과 다른 점이 있으면 명시)
+- 선례 없음: "유사 선례 없음 — 유권해석 확인 권장"
+- **유추 적용 전 ratio 확인 의무**:
+  선례를 본 건에 유추 적용하기 전, 반드시 아래 두 단계를 먼저 수행한다.
+  1. **ratio 파악**: 선례가 그 결론에 이른 근거(판단 이유·목적)가 무엇인지 명시한다.
+     예) "이 선례의 ratio는 '20m 도로가 일조·채광의 물리적 완충 역할을 한다'는 것임"
+  2. **구조 동질성 검증**: 선례의 ratio가 본 건에도 동일하게 작동하는지 확인한다.
+     동질하면 유추 적용, 동질하지 않으면 "구조 차이로 유추 불가 — 독립적 해석 필요"라고 명시한다.
+     예) "도로(두 대지가 공유하는 물리적 요소) vs 구역 지정(각 대지에 독립적으로 부여되는 법적 지위) — 구조가 다르므로 선례의 '상호간' 논리를 그대로 이관할 수 없음"
+  3. **논리 방향(벡터) 확인**: 선례가 확립한 원칙의 방향이 현재 사안의 결론 방향과 일치하는지 확인한다.
+     예) 대법원 2001두10400은 "열거 외에는 불가"라는 제한 원칙을 확립한 판결이다.
+     이를 "열거 내에 있으니 가능하다"는 허용 논거로 인용하는 것은 판결의 ratio를 역방향으로 사용하는 것이다.
+     제한·금지를 확립한 판결은 제한·금지 방향으로만 인용하고, 허용 논거로는 인용하지 않는다.
+
+### [결론]
+세 트랙의 수렴 여부에 따라 아래 중 하나로 작성한다.
+
+**[수렴하는 경우]** [확신도: 확정]
+결론을 단정적으로 선언한다.
+**쟁점 해소에서 멈추지 말고, 그 결과 실제 적용·불적용되는 구체적 조·항을 반드시 선언한다.**
+예: "따라서 이 사안의 경우 「건축법」 제○조제○항이 적용됩니다." (법제처 회답 형식)
+
+**[부분 수렴]** [확신도: 조건부]
+일부 트랙이 수렴하고 일부가 다른 경우.
+- 다수 트랙의 결론: ~으로 판단됨
+- 소수 트랙(문언적/입법취지/목적론적)의 이견: ~
+
+**[분기하는 경우]** [확신도: 해석분기]
+- 문언적 해석에 따르면: ~으로 판단됨
+- 입법취지 해석에 따르면: ~으로 판단됨
+- 목적론적 해석에 따르면: ~으로 판단됨
+- 실무상 어느 해석이 적용될지는 아래 [해석 분기점]을 참고하시기 바랍니다.
+
+### [해석 분기점] ← 결론이 분기하는 경우에만 작성
+결론을 가르는 핵심 판단 지점을 구체적으로 명시한다.
+1. (쟁점이 되는 문구나 개념): ~로 보면 → 결론 A / ~로 보면 → 결론 B
+2. (추가 분기점이 있으면):
+※ 선례나 담당 기관의 유권해석이 확립되어 있다면 그에 따르는 것이 안전합니다.
+
+### [관련 조문 확인]
+① 직접 적용 조문: 법령명·조·항·호·별표 포함하여 원문 키워드 발췌
+② 예외·특례·준용: (해당 시 서술, 없으면 "해당 없음")
+③ 상충·연관 조문: (해당 시 서술)
+
+### [관련 판례 검토] (실제 참고·인용한 판례가 있는 경우에만 작성. 미인용 시 이 섹션 전체 생략)
+- 활용 유형: (직접 적용 / 논리 차용 / 정의 원용)
+- 📌 판례 요지 및 사실관계와의 관련성
+
+### [근거 법령 + 인용 선례]
+- 「법령명」 제○조제○항(내용 키워드)
+- (질의회신 인용 시) 질의회신 번호 및 요지
+- (판례 인용 시) 사건번호
+
+### [담당부서 확인 질문] ← 확신도가 확정이 아닌 경우에만 포함
+아래 질문을 관할 구청 건축과에 문의하시기 바랍니다:
+1. "질문 내용"
+   → 이에 따라 ~이 달라집니다
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+## 출력 형식 및 문체 기준
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+### 출력 형식
+- **단락(paragraph)형 서술**이 원칙이다. `###` 헤더는 **[결론]과 [관련 조문]** 두 곳에만 사용하고, 나머지 분석 내용은 헤더 없이 자연스러운 단락으로 전개한다.
+- **결론 우선**: 결론을 **첫 단락**에서 먼저 선언하고, 이후 단락에서 근거(법령 인용 → 논리 → 선례)를 서술한다. 법제처 회답 형식: "질의와 같이 ~에 해당하는 경우, 「건축법 시행령」 제○조제○항에 따라 ○○이 요구됩니다."
+- **3트랙 해석**은 내부 판단 과정이다. 출력에서는 트랙 번호(①②③)나 "① 문언적 해석" 같은 레이블을 사용하지 않고, "「○○법 시행령」 제○조제○항에서는 ~라고 규정하고 있는바," / "같은 법 제○조의 입법 취지에 비추어 볼 때," / "따라서 ~으로 판단됨" 형태의 단락으로 표현한다.
+- **[Step 0] 용어 정의**는 별도 섹션 헤더 없이, 이유 단락 첫 문장에 자연스럽게 녹인다: "「건축법 시행령」 제2조제13호나목에서 '주차' 용도를 부속용도로 정의하고 있는바,"
+- **법령 인용**은 조·항·호 단위까지 구체적으로 명시한다: 「건축법 시행령」 제39조제1항제1호, 「건축법」 제43조제1항
+
+### 문체 기준
+- **단락 연결 공식**: 이유 단락은 `먼저 ~ 그리고 ~ 아울러 ~ 따라서`의 순서로 전개한다.
+- **결론 어미**: "~라고 보는 것이 [문언에/취지 및 체계에] 부합하는 해석입니다", "~해야 합니다", "~을 의미합니다"
+- **전제→결론 연결**: "~인바," 를 사용하여 논리 흐름을 자연스럽게 연결한다.
+- **관점 제시**: "~에 비추어 볼 때,", "~을 종합하여 보면,"
+- **부정 결론**: "~라고 보기는 어렵습니다"
+- **반론 처리 공식**: 반대 해석이 예상될 때 "~이라는 의견이 있으나, ... 그러한 의견은 타당하지 않습니다"로 명시적으로 반박한다.
+- **추가 논거 공식**: "~점도 이 사안을 해석할 때 고려해야 합니다"로 보조 논거를 추가한다.
+- 유보 표현: "다만, ~에 대하여는 구체적인 사실관계를 확인하여 판단하여야 할 사항임"
+- 재량 사항: 최종 판단이 허가권자 재량에 속하는 경우 반드시 명시
+- 선례가 있으면 선례의 논리를 존중하되, 사실관계 차이점을 명시
+- 같은 법·같은 시행령을 반복 지칭할 때는 "같은 법", "같은 영"으로 약칭한다
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+## 주의사항
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+- 세 트랙은 항상 내부적으로 검토하되, **출력은 수렴 여부에 따라 압축**하세요
+- 수렴 시: 가장 강한 트랙(통상 문언) 완전 전개 + 나머지 두 트랙 1줄 확인
+- 분기 시: 세 트랙 모두 완전 전개 후 [해석 분기점] 작성
+- 제공된 조문 내용을 벗어나는 추론은 삼가세요
+- 별표1 문제는 별표1 전체(서두·총칙 성격 조문 포함)를 확인한 후 결론을 내세요
+- 판례·질의회신의 사실관계가 본 건과 다르면 인용하지 마세요
+- 확신도 '확정'은 두 해석이 모두 동일한 결론에 수렴할 때만 사용하세요
+- 확신도 '해석분기'는 두 해석의 결론이 다를 때 사용하세요
+- 질문에 특정 날짜나 시점("2019년", "당시", "이전" 등)이 언급된 경우, [관련 개정연혁]의 시행일·부칙(적용례·경과조치)를 확인하여 해당 시점에 어떤 규정이 적용되었는지 명시하세요. 예: "이 개정은 2019.11.6 이후 건축허가 신청 건부터 적용되므로, 그 이전 허가 건에는 종전 규정이 적용됩니다."
+- 과거 시점 질문에서 개정연혁이 없으면 "해당 시점의 개정이력이 DB에 없어 현행 규정 기준으로 답변합니다"라고 명시하세요.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+## 출처 원칙 (반드시 준수)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+### 답변 생성 우선순위
+1. **[직접 참조 조문]** 섹션이 제공된 경우: 그 내용이 이 질문을 위해 DB에서 직접 가져온 것입니다. 반드시 이것을 1차 근거로 삼으세요. 내장지식과 충돌하면 DB 조문을 따르세요.
+2. **[관련 법령 조문]** 섹션: 유사도 검색으로 찾은 조문. 적용 가능하면 사용하세요.
+3. **[유사 질의회신 선례]** 섹션: 관련 있으면 반드시 인용하세요.
+4. **내장지식**: 위 검색 결과에 없는 내용을 보충할 때만 사용. 단, 내장지식으로 법령 조문을 인용하는 경우 "(내장지식)"이라고 명시하세요.
+
+### 인용 형식 — 자연 산문만 사용 (대괄호 마커 일체 금지)
+
+답변 본문에는 **자연스러운 인용 산문**만 사용한다. 대괄호 형식의 마커(`[법령1]`, `[해석례2]`, `[판례1]`, `[법령원문3]`, `[입법요지1]`, `[P-004]`, `[memo_007]`, `[해석례2, 해석례3 참조]` 등)는 **시스템 내부 식별자이며 사용자 답변에 절대 포함되어서는 안 된다.**
+
+[참조 자료 목록]의 번호([법령1], [해석례2] 등)는 너의 내부 사고를 위한 인덱스일 뿐, 답변 본문에는 그 자료의 **자연 인용 형식**으로 적는다.
+
+올바른 인용 형식:
+- **해석례** — `"법제처 22-0155에 따르면 ~"` 또는 `"법제처 21-0142 해석례는 ~"` 또는 `"(법제처 22-0155 참조)"`
+- **판례** — `"대법원 2017두73693 판결에서는 ~"` 또는 `"대법원 2011다83431 전원합의체 판결에 따르면 ~"`
+- **법령** — 본문에 자연스럽게 인용: `"「건축법」 제2조제1항제9호에서는 ~를 ~로 정의하고 있는바,"` (대괄호 마커 없이)
+- **개정연혁/입법요지** — `"2024년 개정 취지에 비추어 보면"` 또는 `"동 조항은 ~~한 목적으로 2024년 신설되었는데"`
+- **메모·원칙** — 절대 ID로 인용 금지 (`[memo_007]`, `[P-004]` 등). 메모/원칙의 원출처(해당 항목에 명시된 해석례·판례 번호)를 자연 산문으로 인용한다.
+
+**금지 예시 (이런 식으로 쓰지 말 것):**
+- ❌ `"엄격하게 해석해야 합니다[해석례4]."`
+- ❌ `"예외규정 엄격해석 원칙[P-002]에 따라"`
+- ❌ `"([P-004 참조])"`, `"[해석례2, 해석례3 참조]"`, `"[판례1, 판례4 참조]"`
+
+**올바른 예시:**
+- ✅ `"법제처 22-0155에 따르면, 용적률 완화 규정은 ~에 해당하므로 엄격하게 해석해야 합니다."`
+- ✅ `"용적률 완화는 원칙에 대한 예외규정이므로 합리적 이유 없이 확대 해석해서는 안 된다는 것이 법제처의 일관된 입장입니다(법제처 21-0142 참조)."`
+- ✅ `"대법원 2017두73693 판결도 같은 맥락에서 예외 규정의 엄격해석을 확인한 바 있습니다."`
+
+[참조 자료 목록]에 없는 자료를 인용하지는 마세요. 내장지식은 출처 표시 없이 본문에 자연스럽게 녹인다.
+
+### 답변 맨 끝에 반드시 [출처 요약] 추가
+```
+[출처 요약]
+DB-조문: 참조함 (예: 건축법 시행령 별표1, 건축법 제○조) / 참조 없음
+DB-선례: 참조함 (예: 법제처 25-0252) / 참조 없음
+DB-입법요지: 참조함 (예: 건축법 시행령 34580호 개정이유) / 참조 없음
+내장지식: 사용함 — (보충한 내용을 1줄로) / 사용 안 함
+```
+※ DB-입법요지는 [관련 개정연혁] 섹션의 개정이유·목적론적 키포인트를 실제로 답변에 활용한 경우에만 "참조함"으로 표시하세요."""
+
+
+# ============================================================
+# Pass 1 파서
+# ============================================================
+
+def _extract_json_object(text: str) -> Optional[str]:
+    """중괄호 깊이를 추적해 첫 번째 완전한 JSON 오브젝트를 추출한다."""
+    start = text.find('{')
+    if start == -1:
+        return None
+    depth = 0
+    for i, ch in enumerate(text[start:], start):
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
+def parse_pass1(pass1_text: str) -> dict:
+    """
+    Pass 1 출력에서 구조화 데이터 추출.
+    JSON 블록 우선 파싱, 실패 시 정규식 fallback.
+
+    반환:
+      question_type  : str
+      triggers       : list[str]
+      article_nodes  : list[str]   — ["건축법:제2조", ...]
+      relation_types : list[dict]  — [{"type": ..., "weight": ...}, ...]
+      law_hints      : list[str]   — ["건축법 제19조", ...]
+    """
+    result = {
+        "question_type":    "복수조문탐색형",
+        "triggers":         [],
+        "article_nodes":    [],
+        "relation_types":   [],
+        "law_hints":        [],
+        "definition_terms": [],
+    }
+
+    # ── JSON 추출: ```json ... ``` → ``` ... ``` → 코드블록 없이 날것 JSON 순으로 시도
+    raw_json: Optional[str] = None
+    m_block = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', pass1_text, re.DOTALL)
+    if m_block:
+        raw_json = m_block.group(1)
+    else:
+        raw_json = _extract_json_object(pass1_text)
+
+    if raw_json:
+        try:
+            data = json.loads(raw_json)
+            result["question_type"]    = data.get("question_type", result["question_type"])
+            result["law_hints"]        = data.get("law_hints", [])
+            result["definition_terms"] = data.get("definition_terms", [])
+            result["relation_types"]   = data.get("relation_types", [])
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # ── Fallback: 질문 유형 정규식 ─────────────────────
+    if not result["relation_types"]:
+        m = re.search(r'질문\s*유형\s*[:：]\s*(\S+형)', pass1_text)
+        if m:
+            result["question_type"] = m.group(1).strip()
+
+    # ── 트리거 키워드 (※ "키워드" 패턴) — 다양한 따옴표 정규화 ──
+    normalized = pass1_text.translate(str.maketrans('“”「」『』', '""""""'))
+    result["triggers"] = re.findall(r'※\s*"([^"]+)"', normalized)
+
+    # ── 예상 법령 조문 노드 ──────────────────────────────
+    law_arts = re.findall(
+        r'([가-힣]+(?:\s[가-힣]+){0,6})\s+(제\d+조(?:의\d+)?|별표\s*\d+)',
+        pass1_text
+    )
+    for law, art in law_arts:
+        law = law.strip().strip('「」-–—')
+        node = f"{law}:{art}"
+        if node not in result["article_nodes"]:
+            result["article_nodes"].append(node)
+
+    return result
+
+
+# ============================================================
+# 출처 파서
+# ============================================================
+
+def parse_source_info(answer: str) -> dict:
+    """
+    답변 끝의 [출처 요약] 블록을 파싱.
+    반환: {"db_law": bool, "db_qa": bool, "internal": bool,
+           "db_law_detail": str, "db_qa_detail": str, "internal_detail": str}
+    """
+    info = {
+        "db_law": False, "db_law_detail": "",
+        "db_qa":  False, "db_qa_detail":  "",
+        "db_amendment": False, "db_amendment_detail": "",
+        "internal": False, "internal_detail": "",
+    }
+    m = re.search(r'\[출처\s*요약\](.*?)(?:\Z)', answer, re.DOTALL)
+    if not m:
+        return info
+    block = m.group(1)
+
+    _KEY_MAP = {
+        r'DB[-–—]조문':    ("db_law",       "db_law_detail",       "참조함"),
+        r'DB[-–—]선례':    ("db_qa",        "db_qa_detail",        "참조함"),
+        r'DB[-–—]입법요지': ("db_amendment", "db_amendment_detail", "참조함"),
+        r'내장지식':        ("internal",     "internal_detail",     "사용함"),
+    }
+
+    for line in block.splitlines():
+        # 마크다운 볼드(**), 코드백틱(`) 제거 후 정규화
+        clean = re.sub(r'[*`]', '', line).strip()
+        for pattern, (bool_key, detail_key, pos_word) in _KEY_MAP.items():
+            if re.match(pattern + r'\s*:', clean):
+                val = clean.split(':', 1)[1].strip()
+                info[bool_key]   = val.startswith(pos_word)
+                info[detail_key] = val
+                break
+
+    return info
+
+
+# ============================================================
+# 테스트 모드: 질의에 명시된 판례·해석례를 검색 결과에서 제외
+# ============================================================
+
+# 법제처 해석례 번호: 26-0202, 22-0379, 09-0041 등 (NN-NNNN)
+# \b 대신 lookaround 사용 — 한글이 인접해도 매칭되도록 (예: "26-0202와")
+_LAWBUREAU_PATTERN = re.compile(r'(?<!\d)(\d{2}-\d{4})(?!\d)')
+
+# 대법원 판례: 2011다83431, 2001두274, 2017두73693, 99두592 등 (YY+한글1자+숫자)
+_COURT_CASE_PATTERN = re.compile(r'(?<![가-힣\d])(\d{2,4}[가-힣]\d{3,5})(?!\d)')
+
+
+def extract_test_exclusions(query: str) -> list[str]:
+    """
+    질문에 인용된 판례·해석례 번호를 추출 (테스트 모드 제외 목록).
+
+    트리거: 정답을 알고 있는 사용자가 동일 질문과 출처를 함께 붙여넣어
+            AI 답변이 그 결론에 독립적으로 도달할 수 있는지 검증할 때 사용.
+    """
+    excl: set[str] = set()
+    excl.update(_LAWBUREAU_PATTERN.findall(query))
+    excl.update(_COURT_CASE_PATTERN.findall(query))
+    return sorted(excl)
+
+
+def _memo_linked_str(m: dict) -> str:
+    """memo의 linked_to를 문자열로 통일 (list 또는 string)."""
+    lt = m.get("linked_to", "")
+    if isinstance(lt, list):
+        return ",".join(str(x) for x in lt)
+    return str(lt)
+
+
+# ============================================================
+# 2-pass 생성 파이프라인
+# ============================================================
+
+class Generator:
+    def __init__(self):
+        self._gemini_client = get_gemini_client()
+        self._claude_client = get_claude_client() if ANTHROPIC_API_KEY else None
+        self._retriever = None
+        self._get_retriever()   # 임베딩 모델 로드
+        load_memo_bullets()     # 메모 캐시 준비
+
+    def _get_retriever(self):
+        if self._retriever is None:
+            print("검색 엔진 초기화 중...")
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                "retriever",
+                Path(__file__).parent / "05_Retriever.py"
+            )
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            self._retriever = mod.Retriever()
+        return self._retriever
+
+    def generate(self, query: str, verbose: bool = True, extra_context: str = "", session_id: str = "", stream_callback=None, provider: str = "gemini") -> dict:
+        """
+        2-pass 생성 실행.
+        반환: {"query", "pass1", "context", "answer"}
+        """
+        if verbose:
+            print(f"\n{'='*60}")
+            print(f"질문: {query}")
+            print(f"{'='*60}")
+
+        # ── provider 선택 ──────────────────────────────
+        # Pass 1은 분류 작업 — temperature를 낮춰 일관성 확보
+        # Pass 2는 답변 생성 — temperature 1.0 유지 (다양한 표현)
+        if provider == "claude" and self._claude_client:
+            _call_pass1 = lambda s, u: call_claude(self._claude_client, s, u, temperature=0.3)
+            _call       = lambda s, u: call_claude(self._claude_client, s, u)
+            _stream     = lambda s, u, cb: call_claude_stream(self._claude_client, s, u, cb)
+        else:
+            _call_pass1 = lambda s, u: call_gemini(self._gemini_client, s, u, temperature=0.3)
+            _call       = lambda s, u: call_gemini(self._gemini_client, s, u)
+            _stream     = lambda s, u, cb: call_gemini_stream(self._gemini_client, s, u, cb)
+
+        # ── Pass 1: 쟁점 + 관계 유형 분류 ─────────────
+        if verbose:
+            print("\n[Pass 1] 쟁점 식별 + 관계 유형 분류 중...")
+        pass1_text = _call_pass1(PASS1_SYSTEM, query)
+        if verbose:
+            print(pass1_text)
+
+        parsed           = parse_pass1(pass1_text)
+        question_type    = parsed["question_type"]
+        triggers         = parsed["triggers"]
+        article_nodes    = parsed["article_nodes"]
+        relation_types   = parsed["relation_types"]
+        law_hints        = parsed["law_hints"]
+        definition_terms = parsed["definition_terms"]
+
+        if verbose:
+            print(f"\n→ 질문 유형: {question_type}")
+            print(f"→ 관계 유형: {[r['type'] for r in relation_types]}")
+            print(f"→ 법령 힌트: {law_hints}")
+            if definition_terms:
+                print(f"→ 정의 확인 용어: {definition_terms}")
+
+        # ── 검색 ──────────────────────────────────────
+        if verbose:
+            print("\n[검색] 관련 조문 + 판례 검색 중...")
+
+        retriever = self._get_retriever()
+        search_query = query
+        if triggers:
+            search_query += " " + " ".join(triggers[:3])
+        if definition_terms:
+            search_query += " " + " ".join(definition_terms[:3])
+
+        law_docs, qa_docs, case_docs = retriever.retrieve(
+            query=search_query,
+            question_type=question_type,
+            extra_article_nodes=article_nodes if article_nodes else None,
+            relation_types=relation_types if relation_types else None,
+            law_hints=law_hints if law_hints else None,
+            definition_terms=definition_terms if definition_terms else None,
+        )
+
+        # 조문 해석 프레임 로드 (law_hints + definition_terms 모두 사용)
+        article_roles = retriever.get_article_roles(
+            law_hints, definition_terms=definition_terms
+        ) if (law_hints or definition_terms) else []
+
+        # principles 주입: 질의 의미 기반 일반 법리 원칙 검색
+        principles_docs = retriever.retrieve_principles(search_query, top_k=2)
+
+        # memo 주입: 결정론적 매칭(linked_to/태그) + 의미 검색 병용
+        linked_memos   = retriever.fetch_linked_memos(law_docs, qa_docs, case_docs)
+        semantic_memos = retriever.retrieve_memos(search_query, top_k=3)
+        # memo_id로 dedup, 결정론적 매칭 결과를 우선
+        _seen_mid: set[str] = {m.get("memo_id", "") for m in linked_memos if m.get("memo_id")}
+        memo_docs = list(linked_memos)
+        for m in semantic_memos:
+            mid = m.get("memo_id", "")
+            if mid and mid not in _seen_mid:
+                memo_docs.append(m)
+                _seen_mid.add(mid)
+
+        amendment_docs = retriever.fetch_linked_amendments(law_docs)
+
+        # 개정이력 의미 검색: 쿼리와 직접 관련된 개정이력 추가 검색
+        amendment_semantic_docs = retriever.search_amendments_semantic(search_query, top_k=3)
+
+        # 업로드 법령 검색 (세션 컬렉션)
+        uploaded_docs = []
+        if session_id:
+            uploaded_docs = retriever.search_uploaded(session_id, search_query, top_k=5)
+            if verbose and uploaded_docs:
+                print(f"→ 업로드 법령 {len(uploaded_docs)}건 검색됨")
+
+        # ── 원칙·메모 → 출처 페어링 (인용된 해석례·판례 강제 동반) ──
+        # 검색된 원칙·메모가 인용한 source를 raw 텍스트로 답변 컨텍스트에 넣어,
+        # LLM이 '원칙 + 출처 인용문언' 페어를 답변에 노출할 수 있도록 한다.
+        paired_qa_p, paired_cs_p = retriever.fetch_principle_sources(principles_docs)
+        paired_qa_m, paired_cs_m = retriever.fetch_memo_sources(memo_docs)
+
+        def _merge_paired_qa(existing: list, paired: list) -> list:
+            seen = {d.metadata.get("doc_code", "") for d in existing if d.metadata.get("doc_code")}
+            merged = list(existing)
+            for d in paired:
+                code = d.metadata.get("doc_code", "")
+                if code and code not in seen:
+                    merged.insert(0, d)   # paired는 최우선
+                    seen.add(code)
+            return merged
+
+        def _merge_paired_cs(existing: list, paired: list) -> list:
+            seen = {d.metadata.get("case_id", "") for d in existing if d.metadata.get("case_id")}
+            merged = list(existing)
+            for d in paired:
+                cid = d.metadata.get("case_id", "")
+                if cid and cid not in seen:
+                    merged.insert(0, d)
+                    seen.add(cid)
+            return merged
+
+        qa_paired_count   = 0
+        case_paired_count = 0
+        if paired_qa_p or paired_qa_m:
+            before_qa = len(qa_docs)
+            qa_docs = _merge_paired_qa(qa_docs, paired_qa_p + paired_qa_m)
+            qa_paired_count = len(qa_docs) - before_qa
+        if paired_cs_p or paired_cs_m:
+            before_cs = len(case_docs)
+            case_docs = _merge_paired_cs(case_docs, paired_cs_p + paired_cs_m)
+            case_paired_count = len(case_docs) - before_cs
+        if verbose and (qa_paired_count or case_paired_count):
+            print(f"→ 페어링 추가: 해석례 +{qa_paired_count}건, 판례 +{case_paired_count}건")
+
+        # ── 테스트 모드: 질의에 명시된 판례·해석례 제외 ────
+        # ※ 페어링 머지 다음에 적용해야 blinded 자료가 페어링 우회로 들어오지 않음
+        test_exclusions = extract_test_exclusions(query)
+        if test_exclusions:
+            if verbose:
+                print(f"\n[테스트 모드] 다음 자료를 검색 결과에서 제외: {test_exclusions}")
+                before = (len(qa_docs), len(case_docs), len(principles_docs), len(memo_docs))
+            qa_docs = [
+                d for d in qa_docs
+                if d.metadata.get("doc_code", "") not in test_exclusions
+            ]
+            case_docs = [
+                d for d in case_docs
+                if d.metadata.get("case_id", "") not in test_exclusions
+            ]
+            principles_docs = [
+                p for p in principles_docs
+                if not any(
+                    e in (str(p.get("source_cases", "")) + str(p.get("source_precedents", "")))
+                    for e in test_exclusions
+                )
+            ]
+            memo_docs = [
+                m for m in memo_docs
+                if not any(e in _memo_linked_str(m) for e in test_exclusions)
+            ]
+            if verbose:
+                after = (len(qa_docs), len(case_docs), len(principles_docs), len(memo_docs))
+                print(f"  → 제외 전/후 (해석례·판례·원칙·메모): {before} → {after}")
+
+        context = retriever.format_context(
+            law_docs, qa_docs, case_docs,
+            article_roles=article_roles if article_roles else None,
+            principles_docs=principles_docs if principles_docs else None,
+            memo_docs=memo_docs if memo_docs else None,
+            amendment_docs=amendment_docs if amendment_docs else None,
+            amendment_semantic_docs=amendment_semantic_docs if amendment_semantic_docs else None,
+            uploaded_docs=uploaded_docs if uploaded_docs else None,
+        )
+
+        if verbose:
+            print(f"→ 법령 조문 {len(law_docs)}건 / 질의회신 {len(qa_docs)}건 / 판례 {len(case_docs)}건 / 원칙 {len(principles_docs)}건 / 메모 {len(memo_docs)}건 / 개정연혁 {len(amendment_docs)}건 / 개정이력 검색 {len(amendment_semantic_docs)}건 / 업로드 {len(uploaded_docs)}건 주입됨")
+
+        # ── Pass 2: 최종 답변 ─────────────────────────
+        if verbose:
+            print("\n[Pass 2] 최종 답변 생성 중...")
+
+        # 관계 유형 정보를 Pass 2에도 전달
+        rel_type_summary = ""
+        if relation_types:
+            type_names = {
+                "DEF_EXP": "정의확장형", "SCOPE_CL": "적용범위 확정형",
+                "REQ_INT": "요건해석형", "EXCEPT": "예외인정형",
+                "INTER_ART": "조문간관계 해석형", "PROC_DISC": "절차·재량 확인형",
+                "SANC_SC": "벌칙·제재 범위형",
+            }
+            items = [
+                f"{r['type']}({type_names.get(r['type'], '')}), weight={r.get('weight', 1.0)}"
+                for r in relation_types
+            ]
+            rel_type_summary = f"\n## 쟁점 관계 유형 (판례 인용 시 참고)\n" + "\n".join(f"- {x}" for x in items)
+
+        def_terms_note = ""
+        if definition_terms:
+            def_terms_note = (
+                "\n## [Step 0] 정의 확인 필요 용어\n"
+                "아래 용어들의 법령상 정의를 3트랙 분석 전에 먼저 확인하세요:\n"
+                + "\n".join(f"- \"{t}\"" for t in definition_terms)
+            )
+
+        extra_section = f"\n## 추가 컨텍스트\n{extra_context}\n" if extra_context else ""
+
+        # ── 참조 자료 목록 (인라인 인용 마커용) ──────────
+        # amendment_docs + amendment_semantic_docs 중복 제거 통합
+        seen_aid: set[str] = set()
+        all_amendment_docs: list[dict] = []
+        for rec in list(amendment_docs) + list(amendment_semantic_docs):
+            aid = rec.get("amendment_id", id(rec))
+            if aid not in seen_aid:
+                seen_aid.add(aid)
+                all_amendment_docs.append(rec)
+
+        # 컨텍스트(format_context)의 레이블과 동일하게 맞춤
+        _exact   = [d for d in law_docs if d.score_type == "exact"]
+        _vector  = [d for d in law_docs if d.score_type != "exact"]
+
+        ref_lines = ["## 참조 자료 목록 (인라인 인용 시 아래 번호 사용)"]
+        for i, doc in enumerate(_exact, 1):
+            ref_lines.append(f"[법령원문{i}] {doc.law_name} {doc.article_no}")
+        for i, doc in enumerate(_vector, 1):
+            ref_lines.append(f"[법령{i}] {doc.law_name} {doc.article_no}")
+        for i, doc in enumerate(qa_docs, 1):
+            ref_lines.append(f"[해석례{i}] {doc.law_name} {doc.article_no}")
+        for i, doc in enumerate(case_docs, 1):
+            ref_lines.append(f"[판례{i}] {doc.law_name} {doc.article_no}")
+        for i, rec in enumerate(all_amendment_docs, 1):
+            ref_lines.append(
+                f"[입법요지{i}] {rec.get('law_name','')} "
+                f"{rec.get('시행일','')} {rec.get('공포번호','')}"
+            )
+        ref_list = "\n".join(ref_lines)
+
+        # ── 테스트 모드 안내 (질의에 판례·해석례 번호가 명시된 경우) ──
+        test_mode_note = ""
+        if test_exclusions:
+            test_mode_note = (
+                "\n## ⚠ 테스트 모드 안내 (반드시 준수)\n"
+                f"질의에 다음 자료 번호가 명시되어 있습니다: **{', '.join(test_exclusions)}**\n"
+                "이는 사용자가 정답을 알고 있는 상태에서 AI 답변이 그 결론에 "
+                "독립적으로 도달할 수 있는지 검증하는 **블라인드 테스트**입니다.\n"
+                "따라서 위 번호의 자료들은 검색 컨텍스트에서 일부러 제외하였습니다.\n"
+                "- 위 번호의 판례·해석례를 인용·언급하지 마세요(내장지식 포함).\n"
+                "- 다른 법령·선례·판례·법리 원칙을 근거로 독립적으로 추론하세요.\n"
+                "- 답변 첫 줄에 '[블라인드 테스트 모드] 명시된 자료를 제외하고 답변합니다.' 라고 명시하세요.\n"
+            )
+
+        pass2_input = f"""## 질문
+{query}
+
+{ref_list}
+
+## Pass 1 분석 결과
+{pass1_text}
+{rel_type_summary}{def_terms_note}{test_mode_note}
+## 검색된 관련 조문 및 판례
+{context}
+{extra_section}
+위 내용을 바탕으로 완전한 CoT 답변을 작성하세요.
+
+⚠️ 자연 산문 인용만 사용 — 대괄호 마커 일체 금지:
+  [참조 자료 목록]의 번호([법령1], [해석례2], [판례1], [법령원문3], [입법요지1] 등)는 너의 내부 사고용 인덱스일 뿐,
+  답변 본문에는 그 자료의 자연 인용 형식으로 적는다. **답변에 대괄호 마커가 보이면 안 된다.**
+
+  - 해석례 → "법제처 NN-NNNN에 따르면" 또는 "(법제처 NN-NNNN 참조)"
+  - 판례 → "대법원 YY+한글+숫자 판결에 따르면"
+  - 법령 → "「법령명」 제N조" 자연 산문 (대괄호 없이)
+  - 개정연혁 → "YYYY년 개정 취지" 자연 산문
+  - 메모/원칙 → memo_NNN, P-NNN, [해석례N 참조] 등 ID 형태 일체 금지. 원출처를 자연 산문으로 인용.
+
+  ❌ "엄격하게 해석해야 합니다[해석례4]" / "([P-004 참조])" / "[해석례2, 해석례3 참조]"
+  ✅ "법제처 22-0155에 따르면, 용적률 완화 규정은 엄격하게 해석해야 합니다."
+
+[참조 자료 목록]에 없는 자료를 자의로 인용하지 마세요. 내장지식은 출처 표시 없이 본문에 녹입니다."""
+
+        # ── 메모 주입 ────────────────────────────────────
+        memo_bullets = load_memo_bullets()
+        if memo_bullets:
+            pass2_system = (
+                PASS2_SYSTEM
+                + "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                + "## 해석 원칙 메모 (누적 학습)\n"
+                + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                + "아래는 이전 해석례 분석에서 확립된 AI 오독 패턴 및 해석 원칙입니다.\n"
+                + "관련 사안이 나오면 반드시 적용하세요:\n\n"
+                + memo_bullets
+            )
+        else:
+            pass2_system = PASS2_SYSTEM
+
+        if stream_callback:
+            answer = _stream(pass2_system, pass2_input, stream_callback)
+        else:
+            answer = _call(pass2_system, pass2_input)
+
+        if verbose:
+            print(f"\n{'='*60}")
+            print("[최종 답변]")
+            print(f"{'='*60}")
+            print(answer)
+
+        source_info = parse_source_info(answer)
+
+        return {
+            "query":            query,
+            "pass1":            pass1_text,
+            "relation_types":   relation_types,
+            "law_hints":        law_hints,
+            "definition_terms": definition_terms,
+            "test_exclusions":  test_exclusions,
+            "context":          context,
+            "answer":           answer,
+            "law_docs":          law_docs,
+            "qa_docs":           qa_docs,
+            "case_docs":         case_docs,
+            "amendment_docs":    all_amendment_docs,
+            "source_info":       source_info,
+        }
+
+
+# ============================================================
+# 메인
+# ============================================================
+
+def main():
+    parser = argparse.ArgumentParser(description="06_Generator: 건축법규 CoT 답변 생성")
+    parser.add_argument("--query",    "-q",  type=str, help="단일 질문 처리")
+    parser.add_argument("--test-api", action="store_true",
+                        help="API 연결 테스트 (Pass 1만, Retriever 없이)")
+    args = parser.parse_args()
+
+    if not GOOGLE_API_KEY:
+        print("오류: .env 파일에 GOOGLE_API_KEY가 없습니다.")
+        print("  GOOGLE_API_KEY=AIza...")
+        sys.exit(1)
+
+    if args.test_api:
+        query = args.query or "건축법상 용도변경이란 무엇인가요?"
+        print(f"[API 연결 테스트] 모델: {GEMINI_MODEL_NAME}")
+        print(f"질문: {query}\n")
+        client = get_gemini_client()
+        result = call_gemini(client, PASS1_SYSTEM, query)
+        print(result)
+        return
+
+    gen = Generator()
+
+    if args.query:
+        gen.generate(args.query)
+    else:
+        print(f"건축법규 RAG 시스템 (Gemini: {GEMINI_MODEL_NAME} / Claude: {CLAUDE_MODEL_NAME})")
+        print("종료: quit 또는 Ctrl+C\n")
+        while True:
+            try:
+                query = input("질문: ").strip()
+                if not query or query.lower() in ("quit", "exit", "종료"):
+                    break
+                gen.generate(query)
+            except KeyboardInterrupt:
+                break
+        print("\n종료.")
+
+
+if __name__ == "__main__":
+    main()

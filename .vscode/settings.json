@@ -1,0 +1,6 @@
+{
+  "python.defaultInterpreterPath": "C:\\Users\\605\\.pyenv\\pyenv-win\\versions\\3.11.9\\python.exe",
+  "python.analysis.extraPaths": [
+    "C:\\Users\\605\\.pyenv\\pyenv-win\\versions\\3.11.9\\Lib\\site-packages"
+  ]
+}
