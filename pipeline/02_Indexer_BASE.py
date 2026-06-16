@@ -216,11 +216,17 @@ def load_qa_documents(jsonl_path: Path, source_label: str = "") -> list:
             if not question:
                 continue
 
-            search_tags = _extract_search_tags(answer)
+            # 검색태그: top-level search_tags 필드(법제처 JSONL) 우선,
+            # 없으면 답변 본문의 ### [검색 태그] 섹션에서 추출
+            search_tags   = rec.get("search_tags", "").strip() or _extract_search_tags(answer)
+            label_summary = rec.get("label_summary", "").strip()
 
             # 임베딩 텍스트 구성
-            # 전략: 질문을 앞에 놓고 검색태그 추가 -> 유사 질문 매칭에 최적화
-            #       답변도 포함 -> 검색 결과로 전체 CoT 답변 반환 가능
+            # 전략: 변별력 높은 순서로 맨 앞에 배치 -> 임베딩 모델 max_seq_length(128토큰)가
+            #       긴 질문·답변에 잠식되지 않고 핵심 신호를 확실히 반영.
+            #       [태그]+[요약](결론)이 앞 128토큰을 채움. 질문 도입부가 일반적 법령
+            #       인용이라 변별력이 약한 케이스(예: 21-0347)도 요약으로 보완됨.
+            #       답변은 뒤에 둬도 documents 반환에는 그대로 포함됨.
             # doc 필드 (labeled_with_doc.jsonl 등에서 존재)
             doc_ref    = rec.get("doc_ref", "")
             doc_agency = rec.get("doc_agency", "")
@@ -228,11 +234,14 @@ def load_qa_documents(jsonl_path: Path, source_label: str = "") -> list:
             doc_date   = rec.get("doc_date", "")
             tag        = rec.get("tag", "")
 
-            embed_text = f"[질문]\n{question}"
+            embed_text = ""
+            if search_tags:
+                embed_text += f"[태그] {search_tags}\n"
+            if label_summary:
+                embed_text += f"[요약] {label_summary}\n"
+            embed_text += f"[질문]\n{question}"
             if doc_ref:
                 embed_text += f"\n[참조] {doc_ref}"
-            if search_tags:
-                embed_text += f"\n[검색태그] {search_tags}"
             embed_text += f"\n\n[답변]\n{answer}"
 
             meta = {

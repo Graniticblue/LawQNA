@@ -47,6 +47,34 @@ MEMOS_PATH        = DATA_DIR / "memos.jsonl"
 PRINCIPLES_PATH   = DATA_DIR / "principles.jsonl"
 AMENDMENTS_PATH   = DATA_DIR / "law_amendments" / "amendments.jsonl"
 
+
+# ============================================================
+# 시점 컷오프 (eval 전용) — 미래 자료 판별
+# ============================================================
+
+def _doc_is_after_cutoff(meta: dict, as_of_date: Optional[str]) -> bool:
+    """meta가 가리키는 해석례/판례가 as_of_date('YYYY-MM-DD')보다 미래이면 True.
+
+    - doc_date/decision_date가 있으면 문자열(ISO) 비교로 정확히 판단.
+    - 날짜 메타가 비어 있으면 doc_code/case_id의 'YY-NNNN' 연도로 보수적 판단:
+      코드 연도가 기준 연도보다 '명백히' 클 때만 미래로 간주(같은 해는 통과).
+    - 어느 쪽도 판단 불가하면 통과(False) — 과배제 방지.
+    """
+    if not as_of_date:
+        return False
+    dd = meta.get("doc_date", "") or meta.get("decision_date", "")
+    if dd:
+        return dd > as_of_date
+    code = meta.get("doc_code", "") or meta.get("case_id", "")
+    m = re.match(r"(\d{2})-\d", str(code))
+    if m:
+        code_year = 2000 + int(m.group(1))
+        try:
+            return code_year > int(as_of_date[:4])
+        except ValueError:
+            return False
+    return False
+
 # 법령명 축약어 → 정식명칭 매핑 (메모 태그 매칭용)
 LAW_ABBREV_MAP: dict[str, str] = {
     "건축법시행령":      "건축법 시행령",
@@ -496,9 +524,9 @@ class HybridSearcher:
         if not documents:
             return []
 
-        tokenized = [list(doc) for doc in documents]
+        tokenized = [doc.split() for doc in documents]
         bm25 = BM25Okapi(tokenized)
-        scores = bm25.get_scores(list(query))
+        scores = bm25.get_scores(query.split())
         top_indices = np.argsort(scores)[::-1][:top_k]
 
         docs = []
@@ -529,15 +557,23 @@ class HybridSearcher:
         query: str,
         top_k: int = 5,
         min_score: float = 0.60,
+        as_of_date: Optional[str] = None,
+        exclude_codes: Optional[set] = None,
     ) -> list[RetrievedDoc]:
-        """qa_precedents + precedents_2026_april 벡터 검색."""
+        """qa_precedents + precedents_2026_april 벡터 검색.
+
+        as_of_date    : 'YYYY-MM-DD'. 지정 시 doc_date가 이 날짜보다 미래인
+                        해석례는 제외(그 시점에 존재하지 않았으므로). eval 전용.
+        exclude_codes : 제외할 doc_code 집합(평가 대상 자기 자신 등 정답 누수 차단).
+        """
         query_emb = self._embed_text(query)
         docs = []
+        exclude_codes = exclude_codes or set()
 
         for col, label in [(self._qa_col, "qa_precedents"), (self._prec_col, "precedents_2026_april")]:
             if col is None or col.count() == 0:
                 continue
-            # dedup 후에도 top_k 채울 수 있도록 후보를 넉넉히 확보 (중복 자료 다수 존재)
+            # dedup·날짜필터 후에도 top_k 채울 수 있도록 후보를 넉넉히 확보
             n = min(top_k * 6, col.count())
             try:
                 res = col.query(
@@ -552,6 +588,12 @@ class HybridSearcher:
             ):
                 score = max(0.0, 1.0 - dist)
                 if score < min_score:
+                    continue
+                # 시점 컷오프: 미래 해석례·자기 자신 제외
+                doc_code = meta.get("doc_code", "")
+                if doc_code and doc_code in exclude_codes:
+                    continue
+                if _doc_is_after_cutoff(meta, as_of_date):
                     continue
                 docs.append(RetrievedDoc(
                     source=label,
@@ -713,6 +755,73 @@ class HybridSearcher:
                 count += 1
                 if count >= top_n:
                     break
+
+        return result
+
+    # ----------------------------------------------------------
+    # 사각지대 감지 — law_hints 중 DB 미수록 법령 식별
+    # ----------------------------------------------------------
+
+    # 과거 시점·폐지 법령을 가리키는 한글 패턴 (캐싱 어려운 경우 분류)
+    _PAST_LAW_PAT = re.compile(
+        r'(?:^|\s)(?:구\s+[가-힣]+법|폐지|과거|당시)|'
+        r'\d{4}년\s*\d{1,2}월\s*\d{1,2}일\s*당시|'
+        r'\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.\s*시행'
+    )
+
+    def detect_blind_spots(self, law_hints: list[str]) -> dict:
+        """
+        law_hints를 분류하여 사각지대를 식별한다 (DB 조회만, API 호출 없음).
+
+        반환 형식:
+          {
+            "fetchable": [{"hint": "신탁법 제22조", "law_name": "신탁법", "article_no": "제22조"}],
+            "manual_check": [
+              {"hint": "...", "reason": "별표"|"과거시점"|"미상"}
+            ],
+          }
+        """
+        result = {"fetchable": [], "manual_check": []}
+        if not law_hints:
+            return result
+
+        # law_articles에서 law_name 단독 존재 여부 빠르게 조회
+        # (n_results=1 + where 필터)
+        for hint in law_hints:
+            law_name, art_prefix, is_byeolpyo = _parse_law_hint(hint)
+            if not law_name:
+                continue
+
+            # 분기 1: 별표 → 수동 확인
+            if is_byeolpyo or "별표" in hint:
+                result["manual_check"].append({"hint": hint, "reason": "별표"})
+                continue
+
+            # 분기 2: 과거 시점·폐지 → 수동 확인
+            if self._PAST_LAW_PAT.search(hint):
+                result["manual_check"].append({"hint": hint, "reason": "과거시점"})
+                continue
+
+            # 분기 3: 법령 자체가 DB에 있는지 확인
+            try:
+                res = self._law_col.get(
+                    where={"law_name": {"$eq": law_name}},
+                    include=[],
+                    limit=1,
+                )
+                exists_in_db = bool(res.get("ids"))
+            except Exception:
+                exists_in_db = False
+
+            if not exists_in_db:
+                # 법령 자체 부재 → API 페치 가능
+                result["fetchable"].append({
+                    "hint": hint,
+                    "law_name": law_name,
+                    "article_no": art_prefix,
+                })
+            # 법령은 있는데 조문이 매칭 안 된 경우 (별표 외) — 정상 운영상 거의 없음.
+            # 발생 시 fetch_exact_articles의 prefix 매칭으로 잡혀야 정상. 여기선 무시.
 
         return result
 
@@ -1046,9 +1155,9 @@ class HybridSearcher:
         if not documents:
             return []
 
-        tokenized = [list(doc) for doc in documents]
+        tokenized = [doc.split() for doc in documents]
         bm25 = BM25Okapi(tokenized)
-        scores = bm25.get_scores(list(query))
+        scores = bm25.get_scores(query.split())
         top_indices = np.argsort(scores)[::-1][:top_k]
 
         docs = []
@@ -1252,6 +1361,8 @@ class Retriever:
         definition_terms: Optional[list[str]] = None,
         top_k_law: Optional[int] = None,
         top_k_case: Optional[int] = None,
+        as_of_date: Optional[str] = None,
+        exclude_doc_codes: Optional[set] = None,
     ) -> tuple[list[RetrievedDoc], list[RetrievedDoc], list[RetrievedDoc]]:
         """
         Parameters
@@ -1297,9 +1408,15 @@ class Retriever:
         # law_hints + definition_terms를 검색 쿼리에 보강
         search_q = query
         if law_hints:
-            search_q += " " + " ".join(law_hints[:3])
+            search_q += " " + " ".join(
+                h.get("law", str(h)) if isinstance(h, dict) else str(h)
+                for h in law_hints[:3]
+            )
         if definition_terms:
-            search_q += " " + " ".join(definition_terms[:3])
+            search_q += " " + " ".join(
+                t.get("term", str(t)) if isinstance(t, dict) else str(t)
+                for t in definition_terms[:3]
+            )
 
         vector_law = self._searcher.search_laws(search_q, law_filter, top_k=top_k_law * 2)
         bm25_law   = self._searcher.bm25_search_laws(search_q, law_filter, top_k=top_k_law * 2)
@@ -1324,10 +1441,15 @@ class Retriever:
                 law_docs = new_exact + law_docs   # exact match를 컨텍스트 앞에 배치
 
         # ── 질의회신 선례 검색 (qa_precedents) ────────────
-        qa_docs = self._searcher.search_qa(search_q, top_k=5)
+        qa_docs = self._searcher.search_qa(
+            search_q, top_k=5,
+            as_of_date=as_of_date, exclude_codes=exclude_doc_codes,
+        )
 
         # ── 판례 검색 (court_cases, PLAN §4.2) ────────────
-        case_docs = self._search_cases(query, all_laws, relation_types, top_k_case)
+        case_docs = self._search_cases(
+            query, all_laws, relation_types, top_k_case, as_of_date=as_of_date,
+        )
 
         return law_docs, qa_docs, case_docs
 
@@ -1337,10 +1459,13 @@ class Retriever:
         all_laws: list[str],
         relation_types: Optional[list[dict]],
         top_k: int,
+        as_of_date: Optional[str] = None,
     ) -> list[RetrievedDoc]:
         """
         weight ≥ 0.5인 유형별로 (법규 × 유형) 쌍 검색 후 RRF 병합.
         weight < 0.5는 court_cases 구축 후 부스트 계수로 활용 예정.
+
+        as_of_date: 'YYYY-MM-DD'. 지정 시 decision_date가 미래인 판례 제외(eval 전용).
         """
         if not relation_types:
             return []
@@ -1363,7 +1488,37 @@ class Retriever:
             typed_results.append((docs, rt.get("weight", 1.0)))
 
         bm25_docs = self._searcher.bm25_search_cases(query, top_k=top_k)
-        return merge_case_results(typed_results, bm25_docs, top_k=top_k)
+        cases = merge_case_results(typed_results, bm25_docs, top_k=top_k)
+
+        # 시점 컷오프: 판결일이 미래인 판례 제외 (eval 전용)
+        if as_of_date:
+            cases = [c for c in cases if not _doc_is_after_cutoff(c.metadata, as_of_date)]
+        return cases
+
+    @staticmethod
+    def apply_date_cutoff(
+        docs: list,
+        as_of_date: Optional[str],
+        exclude_codes: Optional[set] = None,
+    ) -> list:
+        """문서 리스트에서 시점 이후 자료·제외 코드를 걸러낸다.
+
+        원칙·메모 페어링(fetch_*_sources)처럼 doc_code 직접 fetch로 검색 컷오프를
+        우회하는 경로에 사후 적용하기 위한 공용 필터. eval 전용.
+        """
+        if not as_of_date and not exclude_codes:
+            return docs
+        exclude_codes = exclude_codes or set()
+        out = []
+        for d in docs:
+            meta = getattr(d, "metadata", {}) or {}
+            code = meta.get("doc_code", "") or meta.get("case_id", "")
+            if code and code in exclude_codes:
+                continue
+            if _doc_is_after_cutoff(meta, as_of_date):
+                continue
+            out.append(d)
+        return out
 
     def retrieve_memos(self, query: str, top_k: int = 3) -> list[dict]:
         """질의와 관련된 해석 원칙 메모 검색 (memos 컬렉션)."""
@@ -1415,9 +1570,12 @@ class Retriever:
             if cid:
                 retrieved_ids.add(cid)
         for d in qa_docs:
-            ref = d.metadata.get("doc_ref", "") or d.metadata.get("doc_code", "")
-            if ref:
-                retrieved_ids.add(ref)
+            doc_ref  = d.metadata.get("doc_ref", "")
+            doc_code = d.metadata.get("doc_code", "")
+            if doc_ref:
+                retrieved_ids.add(doc_ref)
+            if doc_code:
+                retrieved_ids.add(doc_code)
 
         # ── 검색된 법령조문 키 집합 ───────────────────────────
         # key 형식: "<법령명(공백제거)><제XX조>"  예: "건축법제11조"
@@ -1586,6 +1744,10 @@ class Retriever:
     ) -> list[dict]:
         """law_hints + definition_terms로 조문 해석 프레임 JSON 로드."""
         return load_article_roles(law_hints, definition_terms=definition_terms)
+
+    def detect_blind_spots(self, law_hints: list[str]) -> dict:
+        """law_hints 중 DB 미수록 법령(API 페치 가능) + 수동 확인 필요 항목 식별."""
+        return self._searcher.detect_blind_spots(law_hints)
 
     def format_context(
         self,
