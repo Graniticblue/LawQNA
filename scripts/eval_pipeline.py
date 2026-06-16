@@ -89,9 +89,17 @@ def load_case(jsonl_path: Path) -> dict | None:
             contents = rec.get("contents", [])
             if len(contents) < 2:
                 continue
+            # 질문에 박힌 자기 안건번호 마스킹 (정답 누수 방지).
+            # "(안건번호 25-0061)" 같은 명시 노출이 generator 자기인용을 유발하므로 제거.
+            q    = contents[0]["parts"][0]["text"]
+            code = rec.get("doc_code", "")
+            if code:
+                q = re.sub(r"[\(（][^)）]*" + re.escape(code) + r"[^)）]*[\)）]", "", q)
+                q = q.replace(code, "")
+                q = re.sub(r"[\(（]\s*[\)）]", "", q)
             return {
-                "case_id":       rec.get("doc_code", jsonl_path.stem),
-                "question":      contents[0]["parts"][0]["text"],
+                "case_id":       code or jsonl_path.stem,
+                "question":      q,
                 "ground_truth":  contents[1]["parts"][0]["text"],
                 "label_summary": rec.get("label_summary", ""),
                 "doc_date":      rec.get("doc_date", ""),
@@ -192,7 +200,7 @@ def run_judge(question: str, ground_truth: str, system_answer: str,
 ## AI 시스템 답변
 {system_answer}
 
-## AI가 검색한 해석례 목록 (doc_code)
+## AI가 검색한 해석례·판례 목록 (doc_code / 사건번호)
 {json.dumps(retrieved_qa_ids, ensure_ascii=False)}"""
 
     if provider == "claude" and ANTHROPIC_API_KEY:
@@ -235,6 +243,14 @@ def evaluate_case(case: dict, provider: str = "gemini",
         d.metadata.get("doc_code", "")
         for d in result.get("qa_docs", [])
         if d.metadata.get("doc_code")
+    ]
+    # 판례 검색결과(case_docs)의 사건번호도 인용 검증 목록에 포함한다.
+    # 누락하면 정당하게 검색·인용된 판례(예: 대법원 2017두73693)를
+    # judge가 "목록에 없다"며 거짓인용으로 오판한다.
+    retrieved_qa_ids += [
+        d.metadata.get("case_id", "")
+        for d in result.get("case_docs", [])
+        if d.metadata.get("case_id")
     ]
 
     judge = run_judge(
