@@ -52,27 +52,44 @@ AMENDMENTS_PATH   = DATA_DIR / "law_amendments" / "amendments.jsonl"
 # 시점 컷오프 (eval 전용) — 미래 자료 판별
 # ============================================================
 
-def _doc_is_after_cutoff(meta: dict, as_of_date: Optional[str]) -> bool:
-    """meta가 가리키는 해석례/판례가 as_of_date('YYYY-MM-DD')보다 미래이면 True.
+def _qa_code_key(code: str):
+    """법제처 안건번호 'YY-NNNN' → (연도2자리, 일련번호) 튜플. 형식 불일치 시 None."""
+    m = re.match(r"(\d{2})-(\d{4})", str(code))
+    return (int(m.group(1)), int(m.group(2))) if m else None
 
-    - doc_date/decision_date가 있으면 문자열(ISO) 비교로 정확히 판단.
-    - 날짜 메타가 비어 있으면 doc_code/case_id의 'YY-NNNN' 연도로 보수적 판단:
-      코드 연도가 기준 연도보다 '명백히' 클 때만 미래로 간주(같은 해는 통과).
+
+def _doc_is_after_cutoff(meta: dict, as_of_date: Optional[str],
+                         as_of_code: Optional[str] = None) -> bool:
+    """meta가 가리키는 해석례/판례가 기준 시점보다 미래이면 True.
+
+    - as_of_date('YYYY-MM-DD')가 있으면 doc_date/decision_date와 ISO 비교.
+      retrieved 날짜가 비면 doc_code 연도로 보수적 판단(같은 해는 통과).
+    - as_of_date가 없고 as_of_code('YY-NNNN', 평가 대상 안건번호)만 있으면
+      doc_code 안건번호의 (연도, 일련번호)로 비교. 평가 대상의 doc_date가
+      비어 컷오프가 무력화되는 것을 막는다(법제처 안건번호 = 처리 순서).
     - 어느 쪽도 판단 불가하면 통과(False) — 과배제 방지.
     """
-    if not as_of_date:
+    if not as_of_date and not as_of_code:
         return False
-    dd = meta.get("doc_date", "") or meta.get("decision_date", "")
-    if dd:
-        return dd > as_of_date
+    dd   = meta.get("doc_date", "") or meta.get("decision_date", "")
     code = meta.get("doc_code", "") or meta.get("case_id", "")
-    m = re.match(r"(\d{2})-\d", str(code))
-    if m:
-        code_year = 2000 + int(m.group(1))
-        try:
-            return code_year > int(as_of_date[:4])
-        except ValueError:
-            return False
+
+    if as_of_date:
+        if dd:
+            return dd > as_of_date
+        key = _qa_code_key(code)
+        if key:
+            try:
+                return key[0] > int(as_of_date[:4]) - 2000
+            except ValueError:
+                return False
+        return False
+
+    # as_of_date 없음 → 안건번호 (연도, 일련번호) 비교
+    a_key = _qa_code_key(as_of_code)
+    r_key = _qa_code_key(code)
+    if a_key and r_key:
+        return r_key > a_key
     return False
 
 # 법령명 축약어 → 정식명칭 매핑 (메모 태그 매칭용)
@@ -559,12 +576,15 @@ class HybridSearcher:
         min_score: float = 0.60,
         as_of_date: Optional[str] = None,
         exclude_codes: Optional[set] = None,
+        as_of_code: Optional[str] = None,
     ) -> list[RetrievedDoc]:
         """qa_precedents + precedents_2026_april 벡터 검색.
 
         as_of_date    : 'YYYY-MM-DD'. 지정 시 doc_date가 이 날짜보다 미래인
                         해석례는 제외(그 시점에 존재하지 않았으므로). eval 전용.
         exclude_codes : 제외할 doc_code 집합(평가 대상 자기 자신 등 정답 누수 차단).
+        as_of_code    : 평가 대상 안건번호('YY-NNNN'). doc_date가 비어 컷오프가
+                        무력화될 때 안건번호 순서로 미래 자료를 거른다.
         """
         query_emb = self._embed_text(query)
         docs = []
@@ -593,7 +613,7 @@ class HybridSearcher:
                 doc_code = meta.get("doc_code", "")
                 if doc_code and doc_code in exclude_codes:
                     continue
-                if _doc_is_after_cutoff(meta, as_of_date):
+                if _doc_is_after_cutoff(meta, as_of_date, as_of_code):
                     continue
                 docs.append(RetrievedDoc(
                     source=label,
@@ -1363,6 +1383,7 @@ class Retriever:
         top_k_case: Optional[int] = None,
         as_of_date: Optional[str] = None,
         exclude_doc_codes: Optional[set] = None,
+        as_of_code: Optional[str] = None,
     ) -> tuple[list[RetrievedDoc], list[RetrievedDoc], list[RetrievedDoc]]:
         """
         Parameters
@@ -1444,6 +1465,7 @@ class Retriever:
         qa_docs = self._searcher.search_qa(
             search_q, top_k=5,
             as_of_date=as_of_date, exclude_codes=exclude_doc_codes,
+            as_of_code=as_of_code,
         )
 
         # ── 판례 검색 (court_cases, PLAN §4.2) ────────────
@@ -1500,13 +1522,14 @@ class Retriever:
         docs: list,
         as_of_date: Optional[str],
         exclude_codes: Optional[set] = None,
+        as_of_code: Optional[str] = None,
     ) -> list:
         """문서 리스트에서 시점 이후 자료·제외 코드를 걸러낸다.
 
         원칙·메모 페어링(fetch_*_sources)처럼 doc_code 직접 fetch로 검색 컷오프를
         우회하는 경로에 사후 적용하기 위한 공용 필터. eval 전용.
         """
-        if not as_of_date and not exclude_codes:
+        if not as_of_date and not exclude_codes and not as_of_code:
             return docs
         exclude_codes = exclude_codes or set()
         out = []
@@ -1515,7 +1538,7 @@ class Retriever:
             code = meta.get("doc_code", "") or meta.get("case_id", "")
             if code and code in exclude_codes:
                 continue
-            if _doc_is_after_cutoff(meta, as_of_date):
+            if _doc_is_after_cutoff(meta, as_of_date, as_of_code):
                 continue
             out.append(d)
         return out

@@ -231,6 +231,7 @@ def evaluate_case(case: dict, provider: str = "gemini",
         provider=provider,
         as_of_date=case.get("doc_date", ""),
         exclude_doc_codes={case["case_id"]},
+        as_of_code=case["case_id"],
     )
     elapsed = round(time.time() - t0, 1)
 

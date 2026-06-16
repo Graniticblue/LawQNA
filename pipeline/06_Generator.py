@@ -1001,7 +1001,7 @@ class Generator:
             self._retriever = mod.Retriever()
         return self._retriever
 
-    def generate(self, query: str, verbose: bool = True, extra_context: str = "", session_id: str = "", stream_callback=None, provider: str = "gemini", as_of_date: str = "", exclude_doc_codes: set = None) -> dict:
+    def generate(self, query: str, verbose: bool = True, extra_context: str = "", session_id: str = "", stream_callback=None, provider: str = "gemini", as_of_date: str = "", exclude_doc_codes: set = None, as_of_code: str = "") -> dict:
         """
         2-pass 생성 실행.
         반환: {"query", "pass1", "context", "answer"}
@@ -1073,6 +1073,7 @@ class Generator:
             definition_terms=definition_terms if definition_terms else None,
             as_of_date=as_of_date or None,
             exclude_doc_codes=exclude_doc_codes,
+            as_of_code=as_of_code or None,
         )
 
         # 조문 해석 프레임 로드 (law_hints + definition_terms 모두 사용)
@@ -1187,10 +1188,10 @@ class Generator:
         # 회신일 이후의 해석례·판례 + 평가 대상 자기 자신 제외.
         # ※ 페어링 머지(fetch_*_sources) 다음에 적용해야 doc_code 직접 fetch로
         #   들어온 미래 자료까지 차단된다.
-        if as_of_date or exclude_doc_codes:
+        if as_of_date or exclude_doc_codes or as_of_code:
             before_cut = (len(qa_docs), len(case_docs))
-            qa_docs   = retriever.apply_date_cutoff(qa_docs, as_of_date or None, exclude_doc_codes)
-            case_docs = retriever.apply_date_cutoff(case_docs, as_of_date or None, exclude_doc_codes)
+            qa_docs   = retriever.apply_date_cutoff(qa_docs, as_of_date or None, exclude_doc_codes, as_of_code or None)
+            case_docs = retriever.apply_date_cutoff(case_docs, as_of_date or None, exclude_doc_codes, as_of_code or None)
             if verbose and (len(qa_docs), len(case_docs)) != before_cut:
                 print(f"  [시점 컷오프 {as_of_date}] 해석례·판례: {before_cut} → ({len(qa_docs)}, {len(case_docs)})")
 
