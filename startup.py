@@ -36,10 +36,18 @@ if __name__ == "__main__":
     force = os.environ.get("FORCE_REINDEX", "").strip().lower() in ("1", "true", "yes")
 
     if force or chroma_is_empty():
-        if force and CHROMA_DIR.exists():
+        if force:
             import shutil
-            print(f"[startup] FORCE_REINDEX 설정됨 — 기존 ChromaDB 삭제: {CHROMA_DIR}")
-            shutil.rmtree(CHROMA_DIR, ignore_errors=True)
+            if CHROMA_DIR.exists():
+                print(f"[startup] FORCE_REINDEX 설정됨 — 기존 ChromaDB 삭제: {CHROMA_DIR}")
+                shutil.rmtree(CHROMA_DIR, ignore_errors=True)
+            # manifest 삭제: 없으면 02_Indexer가 SKIP 없이 해석례를 전체 재인덱싱한다.
+            # (chroma_db만 지우고 manifest를 남기면 qa_precedents가 전부 SKIP되어 빈 채로 남음)
+            for _mf in (BASE_DIR / "data" / "qa_precedents" / "manifest.json",
+                        BASE_DIR / "data" / "qa_precedents" / "manifest_법제처.json"):
+                if _mf.exists():
+                    _mf.unlink()
+                    print(f"[startup] manifest 삭제: {_mf.name}")
         print(f"[startup] ChromaDB 인덱스 빌드 시작 ({CHROMA_DIR})...")
         CHROMA_DIR.mkdir(parents=True, exist_ok=True)
         result = subprocess.run(
