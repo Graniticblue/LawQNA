@@ -86,6 +86,27 @@ def _extract_search_tags(answer_text: str) -> str:
 # Document 로더 -- 법령
 # ============================================================
 
+_HANG_MARKERS = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳㉑㉒㉓㉔㉕㉖㉗㉘㉙㉚"
+
+
+def split_article_into_hangs(content: str):
+    """조문 content를 항(①②③) 단위로 분할.
+
+    반환: [(항마커, 항텍스트), ...]. 항 마커가 2개 미만이면 None(분할 안 함).
+    긴 다항(多項) 조문이 하나의 벡터로 임베딩되면 max_seq_length(128토큰)에
+    뒷항이 잘려 검색되지 않으므로(예: 제55조의2 제3항 돌봄센터 단서가 309번째
+    토큰), 항 단위로 쪼개 각 항이 독립 벡터를 갖게 한다.
+    """
+    positions = [(m.start(), m.group()) for m in re.finditer(f"[{_HANG_MARKERS}]", content)]
+    if len(positions) < 2:
+        return None
+    hangs = []
+    for i, (pos, marker) in enumerate(positions):
+        end = positions[i + 1][0] if i + 1 < len(positions) else len(content)
+        hangs.append((marker, content[pos:end].strip()))
+    return hangs
+
+
 def load_law_documents() -> list:
     """
     all_articles.jsonl (법령 조문)
@@ -103,27 +124,44 @@ def load_law_documents() -> list:
                 if not line:
                     continue
                 rec = json.loads(line)
+                law_name      = rec.get("law_name", "")
+                article_no    = rec.get("article_no", "")
+                article_title = rec.get("article_title", "")
+                content       = rec.get("content", "")
+                law_id        = rec.get("law_id", "")
 
-                # 임베딩 텍스트: 법령명 + 조번호 + 제목 + 내용
-                # (법령명을 앞에 붙여서 검색 정밀도 향상)
-                text = (
-                    f"[{rec.get('law_name', '')}] "
-                    f"{rec.get('article_no', '')} {rec.get('article_title', '')}\n"
-                    f"{rec.get('content', '')}"
-                ).strip()
-
-                meta = {
-                    "law_id":           truncate(rec.get("law_id", ""), 100),
-                    "law_name":         truncate(rec.get("law_name", ""), 100),
+                base_meta = {
+                    "law_id":           truncate(law_id, 100),
+                    "law_name":         truncate(law_name, 100),
                     "law_type":         rec.get("law_type", ""),
-                    "article_no":       rec.get("article_no", ""),
-                    "article_title":    truncate(rec.get("article_title", ""), 200),
+                    "article_no":       article_no,
+                    "article_title":    truncate(article_title, 200),
                     "enforcement_date": rec.get("enforcement_date", ""),
                     "source_url":       truncate(rec.get("source_url", ""), 300),
                     "is_byeolpyo":      "false",
                 }
-                doc_id = f"art_{rec.get('law_id', '')}_{rec.get('article_no', '')}"
-                docs.append({"id": doc_id, "text": text, "meta": meta})
+
+                # 다항(多項) 조문은 항 단위로 분할 — 긴 조문의 뒷항이 128토큰에
+                # 잘려 검색되지 않는 문제 방지. 각 항에 조문 헤더([법령] 조번호 제목)를
+                # 붙여 맥락을 유지하고, 항이 1개뿐이면 조문 통째로 1개 doc을 만든다.
+                hangs = split_article_into_hangs(content)
+                if hangs:
+                    for hno, (marker, htext) in enumerate(hangs, 1):
+                        text = (
+                            f"[{law_name}] {article_no} {article_title} {marker}\n{htext}"
+                        ).strip()
+                        meta = dict(base_meta)
+                        meta["hang_no"] = marker
+                        doc_id = f"art_{law_id}_{article_no}_h{hno}"
+                        docs.append({"id": doc_id, "text": text, "meta": meta})
+                else:
+                    text = (
+                        f"[{law_name}] {article_no} {article_title}\n{content}"
+                    ).strip()
+                    meta = dict(base_meta)
+                    meta["hang_no"] = ""
+                    doc_id = f"art_{law_id}_{article_no}"
+                    docs.append({"id": doc_id, "text": text, "meta": meta})
 
         print(f"    -> {len(docs):,}개 조문 로드 완료")
     else:
