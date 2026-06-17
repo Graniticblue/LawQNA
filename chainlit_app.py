@@ -56,6 +56,22 @@ def parse_pdf(path: str) -> str:
 
 # ── PDF 청킹 ────────────────────────────────────────────────
 
+# 항(項) 분할 — 02_Indexer_BASE.split_article_into_hangs와 동일 로직.
+# 다항 조문이 하나의 청크로 임베딩되면 max_seq_length(128토큰)에 뒷항이 잘려
+# 검색되지 않으므로(예: 제55조의2 제3항 돌봄센터 단서), 항 단위로 쪼갠다.
+_HANG_MARKERS = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳㉑㉒㉓㉔㉕㉖㉗㉘㉙㉚"
+
+
+def _split_hangs(content: str):
+    positions = [(m.start(), m.group()) for m in re.finditer(f"[{_HANG_MARKERS}]", content)]
+    if len(positions) < 2:
+        return None
+    return [
+        (marker, content[pos:(positions[i + 1][0] if i + 1 < len(positions) else len(content))].strip())
+        for i, (pos, marker) in enumerate(positions)
+    ]
+
+
 def chunk_law_pdf(text: str, law_name: str) -> list[dict]:
     pattern = r'(?=제\d+조(?:의\d+)?[\s(（])'
     parts = re.split(pattern, text)
@@ -66,11 +82,22 @@ def chunk_law_pdf(text: str, law_name: str) -> list[dict]:
             continue
         m = re.match(r'(제\d+조(?:의\d+)?)', part)
         article_no = m.group(1) if m else f"chunk_{len(chunks)}"
-        chunks.append({
-            "law_name": law_name,
-            "article_no": article_no,
-            "content": part[:2000],
-        })
+
+        # 다항 조문은 항 단위로 분할 (법령 DB와 동일 룰). 단항/짧은 조문은 통째로.
+        hangs = _split_hangs(part)
+        if hangs:
+            for marker, htext in hangs:
+                chunks.append({
+                    "law_name": law_name,
+                    "article_no": f"{article_no} {marker}",
+                    "content": htext[:2000],
+                })
+        else:
+            chunks.append({
+                "law_name": law_name,
+                "article_no": article_no,
+                "content": part[:2000],
+            })
     if not chunks:
         for i in range(0, len(text), 500):
             chunks.append({
