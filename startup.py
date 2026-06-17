@@ -43,7 +43,7 @@ if __name__ == "__main__":
         print(f"[startup] ChromaDB 인덱스 빌드 시작 ({CHROMA_DIR})...")
         CHROMA_DIR.mkdir(parents=True, exist_ok=True)
         result = subprocess.run(
-            [sys.executable, str(BASE_DIR / "02_Indexer_BASE.py"), "--collection", "all"],
+            [sys.executable, str(BASE_DIR / "pipeline" / "02_Indexer_BASE.py"), "--collection", "all"],
             check=False,
         )
         if result.returncode != 0:
