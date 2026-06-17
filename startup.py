@@ -30,8 +30,17 @@ def chroma_is_empty() -> bool:
         return True
 
 if __name__ == "__main__":
-    if chroma_is_empty():
-        print(f"[startup] ChromaDB 비어있음 ({CHROMA_DIR}) — 인덱스 빌드 시작...")
+    # FORCE_REINDEX=1 이면 기존 DB가 있어도 삭제 후 재빌드한다.
+    # (임베딩 방식 변경 등으로 영구 볼륨의 DB를 갱신해야 할 때 사용.
+    #  재빌드 후에는 이 변수를 제거해야 재시작마다 재빌드되지 않는다.)
+    force = os.environ.get("FORCE_REINDEX", "").strip().lower() in ("1", "true", "yes")
+
+    if force or chroma_is_empty():
+        if force and CHROMA_DIR.exists():
+            import shutil
+            print(f"[startup] FORCE_REINDEX 설정됨 — 기존 ChromaDB 삭제: {CHROMA_DIR}")
+            shutil.rmtree(CHROMA_DIR, ignore_errors=True)
+        print(f"[startup] ChromaDB 인덱스 빌드 시작 ({CHROMA_DIR})...")
         CHROMA_DIR.mkdir(parents=True, exist_ok=True)
         result = subprocess.run(
             [sys.executable, str(BASE_DIR / "02_Indexer_BASE.py"), "--collection", "all"],
