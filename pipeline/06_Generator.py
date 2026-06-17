@@ -948,6 +948,14 @@ _COURT_CITE_FULL = re.compile(
     r'(?:대법원\s*)?(?:\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.\s*선고\s*)?'
     r'(?<![가-힣\d])(\d{2,4}[가-힣]\d{3,5})(?!\d)(?:\s*(?:전원합의체\s*)?판결(?:례)?)?'
 )
+# 번호 없는 날짜형 인용(기관 + 날짜 + 회신/판결류). 식별 번호가 없어 검증 불가
+# → 사실상 환각이므로 일반 표현으로 치환. 뒤에 번호가 따라오면(검증 가능) 제외.
+_DATED_NONUM_CITE = re.compile(
+    r'(법제처|국토교통부|국토부|행정안전부|행정자치부|대법원|헌법재판소)\s*'
+    r'\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.?\s*'
+    r'(?:선고\s*)?(질의회신|질의|회신|판결|결정|유권해석)'
+    r'(?!\s*[\d가-힣]*\s*\d)'
+)
 
 
 def strip_unverified_citations(answer: str, allowed_codes: set) -> tuple[str, list[str]]:
@@ -971,8 +979,15 @@ def strip_unverified_citations(answer: str, allowed_codes: set) -> tuple[str, li
         removed.append(code)
         return "관련 대법원 판례"
 
+    def _dated(m):
+        org, kind = m.group(1), m.group(2)
+        removed.append(m.group(0).strip()[:30])
+        is_court = ("판결" in kind or "결정" in kind or org in ("대법원", "헌법재판소"))
+        return f"관련 {org} 판례" if is_court else f"관련 {org} 회신"
+
     out = _COURT_CITE_FULL.sub(_court, answer)   # 판례(YY+한글+숫자) 먼저
     out = _QA_CITE_FULL.sub(_qa, out)            # 해석례(NN-NNNN) 다음
+    out = _DATED_NONUM_CITE.sub(_dated, out)     # 번호 없는 날짜형 인용
     return out, removed
 
 
