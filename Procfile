@@ -1,1 +1,1 @@
-web: python startup.py && streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
+web: python startup.py && chainlit run chainlit_app.py --port=$PORT --host=0.0.0.0
