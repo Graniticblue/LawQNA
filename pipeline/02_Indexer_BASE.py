@@ -294,6 +294,19 @@ def build_index(
     existing_ids = set(col.get(limit=200_000, include=[])["ids"])
     new_docs = [d for d in documents if d["id"] not in existing_ids]
 
+    # 같은 빌드 배치 내 중복 ID 제거 (소스 jsonl에 동일 ID가 중복될 수 있음 —
+    # 중복 시 chromadb add가 DuplicateIDError로 전체 빌드를 중단시킨다)
+    _seen: set = set()
+    _deduped = []
+    for d in new_docs:
+        if d["id"] in _seen:
+            continue
+        _seen.add(d["id"])
+        _deduped.append(d)
+    if len(_deduped) < len(new_docs):
+        print(f"  [{collection_name}] 빌드 내 중복 ID {len(new_docs) - len(_deduped)}개 제거")
+    new_docs = _deduped
+
     if not new_docs:
         print(f"  [{collection_name}] 신규 없음 (전부 중복)")
         return
