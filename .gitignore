@@ -19,6 +19,9 @@ __pycache__/
 .venv/
 venv/
 
+# 로컬 gemma 모델·가상환경 (대용량, 재현 가능)
+gemma_local/
+
 # Claude Code 로컬 설정 및 세션 데이터
 .claude/
 

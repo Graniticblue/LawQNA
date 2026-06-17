@@ -443,8 +443,10 @@ def format_sources(source_info: dict) -> str:
         badges.append(f"📌 **해석례** {source_info['db_qa_detail']}")
     if source_info.get("db_amendment"):
         badges.append(f"📖 **입법요지** {source_info['db_amendment_detail']}")
+    if source_info.get("blind_spot"):
+        badges.append(f"⚠️ **법률 서치 필요** {source_info['blind_spot_detail']}")
     if source_info.get("internal"):
-        badges.append(f"💡 **내장지식** {source_info['internal_detail']}")
+        badges.append(f"💡 **내장지식 (일반 법리)** {source_info['internal_detail']}")
     return "\n".join(badges)
 
 
@@ -709,25 +711,39 @@ async def on_message(message: cl.Message):
     if not query:
         return
 
-    # ── 모델 선택 버튼 ────────────────────────────────────────
-    gen = get_generator()
-    actions = [
-        cl.Action(name="gemini", label="⚡ Gemini 2.5 Flash", payload={"provider": "gemini"}),
-    ]
-    if gen._claude_client:
-        actions.append(
-            cl.Action(name="claude", label="🔷 Claude Sonnet", payload={"provider": "claude"})
-        )
+    # ── 비밀 트리거: (gemma) prefix → 로컬 Gemma로 강제 라우팅 ─
+    # 트리거는 prefix만 인식. 우연 충돌 방지 + 모델 선택 버튼 우회.
+    gemma_forced = False
+    if query.lower().startswith("(gemma)"):
+        gemma_forced = True
+        query = query[len("(gemma)"):].strip()
+        if not query:
+            await cl.Message(content="(gemma) 트리거 뒤에 질문을 입력해 주세요.").send()
+            return
 
-    if len(actions) > 1:
-        res = await cl.AskActionMessage(
-            content="어떤 모델로 답변할까요?",
-            actions=actions,
-            timeout=30,
-        ).send()
-        provider = (res.get("payload") or {}).get("provider", "gemini") if res else "gemini"
+    # ── 모델 선택 ─────────────────────────────────────────────
+    gen = get_generator()
+    if gemma_forced:
+        provider = "gemma"
+        model_label = "🟢 Gemma (Local)"
     else:
-        provider = "gemini"
+        actions = [
+            cl.Action(name="gemini", label="⚡ Gemini 2.5 Flash", payload={"provider": "gemini"}),
+        ]
+        if gen._claude_client:
+            actions.append(
+                cl.Action(name="claude", label="🔷 Claude Sonnet", payload={"provider": "claude"})
+            )
+
+        if len(actions) > 1:
+            res = await cl.AskActionMessage(
+                content="어떤 모델로 답변할까요?",
+                actions=actions,
+                timeout=30,
+            ).send()
+            provider = (res.get("payload") or {}).get("provider", "gemini") if res else "gemini"
+        else:
+            provider = "gemini"
 
     # 히스토리에서 extra_context 구성
     history = cl.user_session.get("history", [])
@@ -740,7 +756,12 @@ async def on_message(message: cl.Message):
         extra_context = "\n".join(lines)
 
     session_id = cl.user_session.get("session_id", "")
-    model_label = "⚡ Gemini" if provider == "gemini" else "🔷 Claude"
+    # provider별 라벨 — gemma_forced 케이스에서 이미 설정된 model_label은 보존
+    model_label = {
+        "gemma":  "🟢 Gemma (Local)",
+        "claude": "🔷 Claude",
+        "gemini": "⚡ Gemini",
+    }.get(provider, "⚡ Gemini")
 
     try:
         msg, result = await generate_streaming(
@@ -773,9 +794,184 @@ async def on_message(message: cl.Message):
     if sources_text:
         await cl.Message(content=f"**출처**\n{sources_text}", author="출처").send()
 
+    # 사각지대 알림 + 재생성 액션 (DB 미수록 법령이 있을 때만)
+    await _render_blind_spot_notice(
+        result.get("blind_spots", {}),
+        query=query,
+        provider=provider,
+        model_label=model_label,
+    )
+
     # 히스토리 업데이트
     history.append({"q": query, "a": body[:500]})
     cl.user_session.set("history", history)
+
+
+# ── 사각지대 알림 + 재생성 ──────────────────────────────────────
+
+async def _render_blind_spot_notice(
+    blind_spots: dict,
+    query: str,
+    provider: str,
+    model_label: str,
+) -> None:
+    """사각지대 알림 카드 + '캐싱 후 재생성' 액션 버튼."""
+    if not isinstance(blind_spots, dict):
+        return
+    fetchable    = blind_spots.get("fetchable", [])
+    manual_check = blind_spots.get("manual_check", [])
+    if not fetchable and not manual_check:
+        return
+
+    lines: list[str] = ["📡 **사각지대 법령 감지**"]
+    if fetchable:
+        lines.append("\n**API 페치 가능 (현행 법령, DB 미수록):**")
+        for f in fetchable:
+            art = f.get("article_no", "") or "(법령 전체)"
+            lines.append(f"  · 「{f['law_name']}」 {art}")
+    if manual_check:
+        lines.append("\n**수동 확인 필요:**")
+        for m in manual_check:
+            reason = m.get("reason", "미상")
+            tag = {"별표": "📎 별표", "과거시점": "🕰 과거시점", "미상": "❓ 미상"}.get(reason, reason)
+            lines.append(f"  · {m['hint']} — {tag}")
+
+    actions: list = []
+    if fetchable:
+        # 페이로드에 필요한 정보 전부 담아 콜백에서 그대로 사용
+        actions.append(cl.Action(
+            name="regenerate_with_fetch",
+            label="🔄 해당 법령을 캐싱 후 답변 다시 생성",
+            payload={
+                "query":      query,
+                "provider":   provider,
+                "model_label": model_label,
+                "fetchable":  fetchable,
+            },
+        ))
+
+    await cl.Message(
+        content="\n".join(lines),
+        actions=actions,
+        author="사각지대 알림",
+    ).send()
+
+
+@cl.action_callback("regenerate_with_fetch")
+async def on_regenerate_with_fetch(action: cl.Action):
+    """사용자가 '캐싱 후 재생성' 클릭 시 — API 페치 + Pass 2 재호출."""
+    payload = action.payload or {}
+    fetchable = payload.get("fetchable", [])
+    query     = payload.get("query", "")
+    provider  = payload.get("provider", "gemini")
+    model_label = payload.get("model_label", "⚡ Gemini")
+
+    if not query or not fetchable:
+        await action.remove()
+        await cl.Message(content="재생성 정보가 부족합니다.", author="사각지대 알림").send()
+        return
+
+    # 버튼 제거 (중복 클릭 방지)
+    await action.remove()
+
+    # 페치 진행 메시지
+    fetch_msg = cl.Message(
+        content=f"📡 법제처 API에서 {len(fetchable)}건 페치 중…",
+        author="사각지대 알림",
+    )
+    await fetch_msg.send()
+
+    # API 페치 (백그라운드 스레드)
+    from ingest import law_api_fetcher
+
+    success: list[dict] = []
+    failed:  list[dict] = []
+
+    def do_fetch_one(law_name: str, article_no: str):
+        # 조문 단위. 같은 법령의 다른 조문은 캐시에서 즉시.
+        if article_no:
+            content = law_api_fetcher.fetch_article(law_name, article_no)
+            return content
+        # article_no 없으면 법령 전체 — 일단 캐시만 채우고 본문은 None 처리
+        law_id = law_api_fetcher._fetch_law_id(law_name)
+        if not law_id:
+            return None
+        articles = law_api_fetcher._fetch_full_law(law_id)
+        if articles:
+            law_api_fetcher._save_cache(law_name, articles)
+            # 대표로 첫 조문 반환
+            return next(iter(articles.values()), None)
+        return None
+
+    for f in fetchable:
+        content = await asyncio.to_thread(
+            do_fetch_one, f["law_name"], f.get("article_no", "")
+        )
+        entry = {**f, "content": content or ""}
+        if content:
+            success.append(entry)
+        else:
+            failed.append(entry)
+
+    # 결과 알림
+    result_lines = ["📡 **페치 결과**"]
+    if success:
+        result_lines.append("\n**✓ 캐싱 성공:**")
+        for s in success:
+            art = s.get("article_no", "") or "(전체)"
+            result_lines.append(f"  · 「{s['law_name']}」 {art}")
+    if failed:
+        result_lines.append("\n**✗ 페치 실패 (API에서 못 찾음):**")
+        for fa in failed:
+            art = fa.get("article_no", "") or "(전체)"
+            result_lines.append(f"  · 「{fa['law_name']}」 {art}")
+
+    await fetch_msg.remove()
+    await cl.Message(content="\n".join(result_lines), author="사각지대 알림").send()
+
+    if not success:
+        await cl.Message(
+            content="페치 성공 자료가 없어 재생성을 진행하지 않습니다.",
+            author="사각지대 알림",
+        ).send()
+        return
+
+    # extra_context로 페치된 raw 텍스트 주입 + 재생성
+    extra_lines = ["=== [API 페치 자료 — 캐싱 완료] ==="]
+    extra_lines.append("※ 아래는 사각지대 법령을 법제처 API로 실시간 페치한 자료입니다. "
+                       "검색 컨텍스트의 일부로 활용하세요.")
+    for s in success:
+        extra_lines.append(f"\n[법령원문] 「{s['law_name']}」 {s.get('article_no', '')}")
+        extra_lines.append(s["content"])
+    extra_context = "\n".join(extra_lines)
+
+    gen = get_generator()
+    session_id = cl.user_session.get("session_id", "")
+    try:
+        msg, result = await generate_streaming(
+            gen, query, extra_context, session_id, provider, model_label
+        )
+    except Exception as e:
+        await cl.Message(content=f"재생성 오류: {e}").send()
+        return
+    if result is None:
+        return
+
+    raw_answer  = result.get("answer", "")
+    source_info = result.get("source_info", {})
+    if not isinstance(source_info, dict):
+        source_info = {}
+
+    body, _ = split_answer(raw_answer)
+    body, cite_elements = build_citation_elements(body, result)
+    msg.content = body
+    if cite_elements:
+        msg.elements = cite_elements
+    await msg.update()
+
+    sources_text = format_sources(source_info)
+    if sources_text:
+        await cl.Message(content=f"**출처 (재생성)**\n{sources_text}", author="출처").send()
 
 
 @cl.on_chat_end
