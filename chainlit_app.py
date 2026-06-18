@@ -678,6 +678,7 @@ async def on_new_chat(action: cl.Action):
     cl.user_session.set("history", [])
     cl.user_session.set("pdf_list", [])
     cl.user_session.set("pdf_ready", False)
+    cl.user_session.set("provider", None)   # 모델 선택 초기화 → 새 채팅 첫 질문에 다시 선택
     await cl.Message(content="대화 이력이 초기화되었습니다. 새 질의를 입력해 주세요.").send()
 
 
@@ -754,23 +755,30 @@ async def on_message(message: cl.Message):
         provider = "gemma"
         model_label = "🟢 Gemma (Local)"
     else:
-        actions = [
-            cl.Action(name="gemini", label="⚡ Gemini 2.5 Flash", payload={"provider": "gemini"}),
-        ]
-        if gen._claude_client:
-            actions.append(
-                cl.Action(name="claude", label="🔷 Claude Sonnet", payload={"provider": "claude"})
-            )
-
-        if len(actions) > 1:
-            res = await cl.AskActionMessage(
-                content="어떤 모델로 답변할까요?",
-                actions=actions,
-                timeout=30,
-            ).send()
-            provider = (res.get("payload") or {}).get("provider", "gemini") if res else "gemini"
+        saved = cl.user_session.get("provider")
+        if saved:
+            # 한 번 선택한 모델을 세션 내내 재사용 (후속 질문엔 다시 묻지 않음).
+            # 모델을 바꾸려면 새 채팅을 시작하면 된다.
+            provider = saved
         else:
-            provider = "gemini"
+            actions = [
+                cl.Action(name="gemini", label="⚡ Gemini 2.5 Flash", payload={"provider": "gemini"}),
+            ]
+            if gen._claude_client:
+                actions.append(
+                    cl.Action(name="claude", label="🔷 Claude Sonnet", payload={"provider": "claude"})
+                )
+
+            if len(actions) > 1:
+                res = await cl.AskActionMessage(
+                    content="어떤 모델로 답변할까요?",
+                    actions=actions,
+                    timeout=30,
+                ).send()
+                provider = (res.get("payload") or {}).get("provider", "gemini") if res else "gemini"
+            else:
+                provider = "gemini"
+            cl.user_session.set("provider", provider)   # 첫 선택을 세션에 저장
 
     # 히스토리에서 extra_context 구성
     history = cl.user_session.get("history", [])
