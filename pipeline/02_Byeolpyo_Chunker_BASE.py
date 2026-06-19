@@ -23,8 +23,11 @@ import pdfplumber
 # 설정
 # ──────────────────────────────────────────────
 
-BYEOLPYO_DIR = Path(r"D:\Workspace(0309 RAG)\별표")
-OUTPUT_DIR   = Path(r"D:\Workspace(0309 RAG)\data\raw_laws\byeolpyo")
+# 입력 별표 PDF·출력 모두 워크스페이스 내부 (이전엔 외부 경로 하드코딩이라
+# 청킹 결과가 워크스페이스 byeolpyo_chunks.jsonl에 반영되지 않아 별표가 누락됐었음)
+BASE_DIR     = Path(__file__).parent.parent
+BYEOLPYO_DIR = BASE_DIR / "data" / "raw_laws" / "byeolpyo_pdf"
+OUTPUT_DIR   = BASE_DIR / "data" / "raw_laws" / "byeolpyo"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
