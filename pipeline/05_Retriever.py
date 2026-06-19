@@ -789,6 +789,31 @@ class HybridSearcher:
         r'\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.\s*시행'
     )
 
+    def _byeolpyo_in_db(self, law_name: str, art_prefix: str) -> bool:
+        """해당 법령의 별표가 law_articles에 실제 인덱싱돼 있는지 확인."""
+        if self._law_col is None:
+            return False
+        try:
+            res = self._law_col.get(
+                where={"$and": [
+                    {"law_name":    {"$eq": law_name}},
+                    {"is_byeolpyo": {"$eq": "true"}},
+                ]},
+                include=["metadatas"],
+                limit=300,
+            )
+        except Exception:
+            return False
+        if not res.get("ids"):
+            return False
+        key = (art_prefix or "").replace(" ", "")
+        if not key:
+            return True   # 별표 번호 불명이지만 그 법령 별표가 있으면 통과
+        return any(
+            a == key or a.startswith(key + "의")
+            for a in (str(m.get("article_no", "")).replace(" ", "") for m in res["metadatas"])
+        )
+
     def detect_blind_spots(self, law_hints: list[str]) -> dict:
         """
         law_hints를 분류하여 사각지대를 식별한다 (DB 조회만, API 호출 없음).
@@ -812,9 +837,11 @@ class HybridSearcher:
             if not law_name:
                 continue
 
-            # 분기 1: 별표 → 수동 확인
+            # 분기 1: 별표 → DB에 실제 인덱싱돼 있으면 정상(수동확인 생략),
+            #         없을 때만 수동 확인 안내
             if is_byeolpyo or "별표" in hint:
-                result["manual_check"].append({"hint": hint, "reason": "별표"})
+                if not self._byeolpyo_in_db(law_name, art_prefix):
+                    result["manual_check"].append({"hint": hint, "reason": "별표"})
                 continue
 
             # 분기 2: 과거 시점·폐지 → 수동 확인
