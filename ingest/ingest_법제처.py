@@ -209,6 +209,48 @@ def enrich_with_claude(question: str, answer: str) -> dict:
     return {}
 
 
+def enrich_with_gemini(question: str, answer: str) -> dict:
+    """Gemini로 검색태그·relation_type·label_summary·logic_steps 생성 (Claude 대체)."""
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError:
+        print("  [WARN] google-genai 패키지 없음 — 기본값 사용")
+        return {}
+
+    api_key = os.getenv("GOOGLE_API_KEY", "")
+    if not api_key:
+        print("  [WARN] GOOGLE_API_KEY 없음 — 기본값 사용")
+        return {}
+
+    client = genai.Client(api_key=api_key)
+    prompt = ENRICH_PROMPT.format(question=question[:1500], answer=answer[:2000])
+
+    try:
+        # gemini 2.5 flash는 thinking 토큰이 출력 budget을 잠식하므로 넉넉히 +
+        # thinking 비활성화(지원 시). 안 그러면 search_tags/logic_steps가 MAX_TOKENS로 잘림.
+        try:
+            cfg = types.GenerateContentConfig(
+                max_output_tokens=8000, temperature=0.3,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            )
+        except Exception:
+            cfg = types.GenerateContentConfig(max_output_tokens=8000, temperature=0.3)
+        response = client.models.generate_content(
+            model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+            contents=prompt,
+            config=cfg,
+        )
+        raw = (response.text or "").strip()
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        if m:
+            return json.loads(m.group())
+    except Exception as e:
+        print(f"  [WARN] Gemini 분석 실패: {e}")
+
+    return {}
+
+
 # ─── JSONL 레코드 생성 ────────────────────────────────────────
 def build_record(sections: dict, meta: dict, enriched: dict) -> dict:
     question    = sections.get("【질의요지】", "").strip()
@@ -269,10 +311,10 @@ def process_pdf(pdf_path: Path, enrich: bool = True) -> Path | None:
 
     enriched = {}
     if enrich:
-        print("  Claude 분석 중...")
+        print("  Gemini 분석 중...")
         question = sections.get("【질의요지】", "")
         answer   = sections.get("【회답】", "") + "\n" + sections.get("【이유】", "")
-        enriched = enrich_with_claude(question, answer)
+        enriched = enrich_with_gemini(question, answer)
         if enriched:
             print(f"  relation_type: {enriched.get('relation_type')}")
             print(f"  search_tags:   {enriched.get('search_tags', '')[:60]}")
