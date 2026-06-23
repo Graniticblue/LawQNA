@@ -666,29 +666,8 @@ _LAW_LIST_TRIGGER = "📋 내장 법령 목록"
 
 @cl.set_starters
 async def set_starters():
-    return [
-        cl.Starter(
-            label="📋 내장 법령 목록",
-            message=_LAW_LIST_TRIGGER,
-            icon="/public/starter_list.svg",
-        ),
-        cl.Starter(
-            label="🏗️ 건축허가·신고",
-            message="건축허가와 건축신고의 대상 기준과 차이를 알려주세요.",
-        ),
-        cl.Starter(
-            label="🗺️ 용도지역 제한",
-            message="용도지역별 건폐율·용적률 기준과 건축 제한을 알려주세요.",
-        ),
-        cl.Starter(
-            label="🔥 피난·방화 기준",
-            message="피난계단 및 방화구획 설치 기준을 알려주세요.",
-        ),
-        cl.Starter(
-            label="👷 감리 대상·절차",
-            message="건축 감리 대상 건축물과 감리 절차를 알려주세요.",
-        ),
-    ]
+    # new chat·첫 진입 시 추천질문(홈화면) 없이 깨끗한 빈 채팅으로 시작.
+    return []
 
 
 def _init_session():
