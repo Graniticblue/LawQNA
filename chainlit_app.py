@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import queue as _queue
+import random
 import re
 import sys
 import threading
@@ -664,10 +665,26 @@ _LAW_LIST_TRIGGER = "📋 내장 법령 목록"
 
 # ── Chainlit 핸들러 ─────────────────────────────────────────
 
+_STARTER_POOL = [
+    cl.Starter(label="📋 내장 법령 목록", message=_LAW_LIST_TRIGGER, icon="/public/starter_list.svg"),
+    cl.Starter(label="🏗️ 건축허가·신고", message="건축허가와 건축신고의 대상 기준과 차이를 알려주세요."),
+    cl.Starter(label="🗺️ 용도지역 제한", message="용도지역별 건폐율·용적률 기준과 건축 제한을 알려주세요."),
+    cl.Starter(label="🔥 피난·방화 기준", message="피난계단 및 방화구획 설치 기준을 알려주세요."),
+    cl.Starter(label="👷 감리 대상·절차", message="건축 감리 대상 건축물과 감리 절차를 알려주세요."),
+    cl.Starter(label="🚗 주차장 설치기준", message="건축물 용도별 부설주차장 설치 기준을 알려주세요."),
+    cl.Starter(label="☀️ 일조권 높이제한", message="전용주거·일반주거지역의 일조권 높이 제한 기준을 알려주세요."),
+    cl.Starter(label="🛠️ 대수선 범위", message="대수선의 정의와 범위, 허가·신고 대상을 알려주세요."),
+    cl.Starter(label="📐 건폐율·용적률", message="용도지역별 건폐율과 용적률 상한 기준을 알려주세요."),
+    cl.Starter(label="🛣️ 접도의무", message="건축물 대지의 접도의무 요건과 예외를 알려주세요."),
+    cl.Starter(label="🏢 다중이용 건축물", message="다중이용 건축물의 정의와 강화되는 기준을 알려주세요."),
+    cl.Starter(label="🪜 직통계단 설치", message="직통계단 2개소 이상 설치 대상과 보행거리 기준을 알려주세요."),
+]
+
+
 @cl.set_starters
 async def set_starters():
-    # new chat·첫 진입 시 추천질문(홈화면) 없이 깨끗한 빈 채팅으로 시작.
-    return []
+    # 풀에서 매번 무작위 4개 — new chat·새 진입마다 추천질문이 바뀐다.
+    return random.sample(_STARTER_POOL, k=min(4, len(_STARTER_POOL)))
 
 
 def _init_session():
@@ -797,11 +814,11 @@ async def on_message(message: cl.Message):
             provider = saved
         else:
             actions = [
-                cl.Action(name="gemini", label="⚡ Gemini 2.5 Flash", payload={"provider": "gemini"}),
+                cl.Action(name="gemini", label="⚡ Gemini", payload={"provider": "gemini"}),
             ]
             if gen._claude_client:
                 actions.append(
-                    cl.Action(name="claude", label="🔷 Claude Sonnet", payload={"provider": "claude"})
+                    cl.Action(name="claude", label="🔷 Claude", payload={"provider": "claude"})
                 )
 
             if len(actions) > 1:

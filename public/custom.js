@@ -56,16 +56,29 @@
         inputBox.parentNode.insertBefore(wrap, inputBox);
     }
 
-    function update() {
-        const submitBtn = document.getElementById('chat-submit');
-        const inputBox = submitBtn?.parentElement?.parentElement?.parentElement;
+    // 추천질문(starters)을 한 줄에 가로 배치 (기본은 두 줄로 wrap됨)
+    function layoutStarters() {
+        const btns = Array.prototype.slice.call(document.querySelectorAll('button'))
+            .filter(function (b) {
+                return b.className.indexOf('rounded-3xl') !== -1 && b.querySelector('p.truncate');
+            });
+        if (btns.length >= 2 && btns[0].parentElement) {
+            const c = btns[0].parentElement;
+            c.style.flexWrap = 'nowrap';
+            c.style.overflowX = 'auto';
+            c.style.justifyContent = 'flex-start';
+            // 버튼이 줄어들어 라벨이 잘리지 않도록 가로스크롤 허용
+            btns.forEach(function (b) { b.style.flexShrink = '0'; });
+        }
+    }
 
+    function update() {
         if (hasMessages()) {
             removeLogo();
         } else {
             insertLogo();
         }
-
+        layoutStarters();
     }
 
     const observer = new MutationObserver(update);
