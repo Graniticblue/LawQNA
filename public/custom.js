@@ -1,3 +1,17 @@
+// ── 익명 사용자 식별 쿠키 (chat history용) ──────────────────
+// 로그인 없이 브라우저별로 대화 내역을 사이드바에 유지하기 위해,
+// anon_id 쿠키가 없으면 즉시 발급하고 1회 새로고침해 인증에 반영한다.
+(function ensureAnonId() {
+    const has = document.cookie.split('; ').some(c => c.startsWith('anon_id='));
+    if (!has) {
+        const rnd = (crypto && crypto.randomUUID)
+            ? crypto.randomUUID().replace(/-/g, '').slice(0, 16)
+            : (Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
+        document.cookie = 'anon_id=anon_' + rnd + '; path=/; max-age=' + (60 * 60 * 24 * 365) + '; SameSite=Lax';
+        location.reload();
+    }
+})();
+
 (function () {
     // ── 로고 ────────────────────────────────────────────────
     const LOGO_WRAP_ID = 'usun-logo-wrap';

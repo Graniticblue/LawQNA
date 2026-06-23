@@ -29,7 +29,109 @@ def chroma_is_empty() -> bool:
     except Exception:
         return True
 
+_CHAT_HISTORY_DDL = """
+CREATE TABLE IF NOT EXISTS users (
+    "id" UUID PRIMARY KEY,
+    "identifier" TEXT NOT NULL UNIQUE,
+    "metadata" JSONB NOT NULL,
+    "createdAt" TEXT
+);
+CREATE TABLE IF NOT EXISTS threads (
+    "id" UUID PRIMARY KEY,
+    "createdAt" TEXT,
+    "name" TEXT,
+    "userId" UUID,
+    "userIdentifier" TEXT,
+    "tags" TEXT[],
+    "metadata" JSONB,
+    FOREIGN KEY ("userId") REFERENCES users("id") ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS steps (
+    "id" UUID PRIMARY KEY,
+    "name" TEXT NOT NULL,
+    "type" TEXT NOT NULL,
+    "threadId" UUID NOT NULL,
+    "parentId" UUID,
+    "streaming" BOOLEAN NOT NULL,
+    "waitForAnswer" BOOLEAN,
+    "isError" BOOLEAN,
+    "metadata" JSONB,
+    "tags" TEXT[],
+    "input" TEXT,
+    "output" TEXT,
+    "createdAt" TEXT,
+    "command" TEXT,
+    "start" TEXT,
+    "end" TEXT,
+    "generation" JSONB,
+    "showInput" TEXT,
+    "language" TEXT,
+    "indent" INT,
+    "defaultOpen" BOOLEAN,
+    "modes" JSONB,
+    FOREIGN KEY ("threadId") REFERENCES threads("id") ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS elements (
+    "id" UUID PRIMARY KEY,
+    "threadId" UUID,
+    "type" TEXT,
+    "url" TEXT,
+    "chainlitKey" TEXT,
+    "name" TEXT NOT NULL,
+    "display" TEXT,
+    "objectKey" TEXT,
+    "size" TEXT,
+    "page" INT,
+    "language" TEXT,
+    "forId" UUID,
+    "mime" TEXT,
+    "props" JSONB,
+    FOREIGN KEY ("threadId") REFERENCES threads("id") ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS feedbacks (
+    "id" UUID PRIMARY KEY,
+    "forId" UUID NOT NULL,
+    "threadId" UUID NOT NULL,
+    "value" INT NOT NULL,
+    "comment" TEXT,
+    FOREIGN KEY ("threadId") REFERENCES threads("id") ON DELETE CASCADE
+);
+"""
+
+
+def ensure_chat_history_schema():
+    """Chainlit 대화 영속성용 5개 테이블을 생성(이미 있으면 무시).
+    DATABASE_URL이 없으면(로컬 등) 조용히 생략한다."""
+    url = (os.environ.get("DATABASE_URL", "") or "").strip()
+    if not url:
+        print("[startup] DATABASE_URL 없음 — chat history 스키마 생략")
+        return
+    # asyncpg.connect는 순수 postgres(ql):// 만 받음
+    if url.startswith("postgresql+asyncpg://"):
+        url = "postgresql://" + url[len("postgresql+asyncpg://"):]
+    try:
+        import asyncio
+        import asyncpg
+    except ImportError:
+        print("[startup] asyncpg 미설치 — chat history 스키마 생략")
+        return
+
+    async def _run():
+        conn = await asyncpg.connect(url)
+        try:
+            await conn.execute(_CHAT_HISTORY_DDL)
+        finally:
+            await conn.close()
+
+    try:
+        asyncio.run(_run())
+        print("[startup] chat history 스키마 확인/생성 완료")
+    except Exception as e:
+        print(f"[startup] chat history 스키마 생성 실패(앱은 계속): {e}")
+
+
 if __name__ == "__main__":
+    ensure_chat_history_schema()
     # FORCE_REINDEX=1 이면 기존 DB가 있어도 삭제 후 재빌드한다.
     # (임베딩 방식 변경 등으로 영구 볼륨의 DB를 갱신해야 할 때 사용.
     #  재빌드 후에는 이 변수를 제거해야 재시작마다 재빌드되지 않는다.)

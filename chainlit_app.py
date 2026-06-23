@@ -6,16 +6,59 @@ chainlit_app.py -- 건축법규 AI 자문 시스템 (Chainlit 인터페이스)
 import asyncio
 import importlib.util
 import json
+import os
 import queue as _queue
 import re
 import sys
 import threading
+import uuid
 from pathlib import Path
 
 import chainlit as cl
 
 BASE_DIR = Path(__file__).parent
 sys.path.insert(0, str(BASE_DIR))
+
+
+# ── 익명 인증 + 대화 영속성 (Chat History) ──────────────────────
+# 로그인 화면 없이 브라우저별 익명 사용자로 식별해 사이드바에 대화 내역을 유지한다.
+# custom.js가 발급한 anon_id 쿠키를 읽어 사용자로 매핑한다.
+
+@cl.header_auth_callback
+def header_auth(headers) -> cl.User | None:
+    cookie = headers.get("cookie", "") or ""
+    anon_id = None
+    for part in cookie.split(";"):
+        part = part.strip()
+        if part.startswith("anon_id="):
+            anon_id = part[len("anon_id="):]
+            break
+    # 쿠키 발급 전(첫 요청)이면 임시 ID — custom.js가 reload하면 안정 ID로 대체된다.
+    if not anon_id:
+        anon_id = "anon_" + uuid.uuid4().hex[:16]
+    return cl.User(identifier=anon_id, metadata={"role": "anonymous"})
+
+
+def _asyncpg_conninfo() -> str | None:
+    """Railway가 주는 DATABASE_URL(postgres://…)을 asyncpg 드라이버 형식으로 변환.
+    DATABASE_URL이 없으면(로컬 등) None → 영속성 비활성."""
+    url = (os.environ.get("DATABASE_URL", "") or "").strip()
+    if not url:
+        return None
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    if url.startswith("postgresql://") and "+asyncpg" not in url:
+        url = "postgresql+asyncpg://" + url[len("postgresql://"):]
+    return url
+
+
+@cl.data_layer
+def get_data_layer():
+    conninfo = _asyncpg_conninfo()
+    if not conninfo:
+        return None  # DATABASE_URL 미설정 시 영속성 없이 동작
+    from chainlit.data.sql_alchemy import SQLAlchemyDataLayer
+    return SQLAlchemyDataLayer(conninfo=conninfo)
 
 
 # ── Generator 싱글턴 ────────────────────────────────────────
@@ -648,8 +691,7 @@ async def set_starters():
     ]
 
 
-@cl.on_chat_start
-async def on_start():
+def _init_session():
     cl.user_session.set("pdf_list", [])
     cl.user_session.set("pdf_ready", False)
     cl.user_session.set("history", [])
@@ -659,6 +701,20 @@ async def on_start():
     retriever = gen._get_retriever()
     retriever.create_session_collection(session_id)
     cl.user_session.set("session_id", session_id)
+
+
+@cl.on_chat_start
+async def on_start():
+    _init_session()
+
+
+@cl.on_chat_resume
+async def on_resume(thread):
+    # 과거 대화를 사이드바에서 클릭해 재개할 때 호출.
+    # 화면의 메시지는 Chainlit이 thread에서 자동 복원하고,
+    # 여기선 검색용 세션 컬렉션·업로드 상태만 새로 초기화한다.
+    # (내부 대화맥락 history는 비운 채 시작 — 이어지는 질문부터 새 맥락)
+    _init_session()
 
 
 @cl.action_callback("helpful")

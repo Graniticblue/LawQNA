@@ -9,3 +9,5 @@ python-dotenv==1.2.1
 huggingface-hub==0.36.2
 llama-index-embeddings-huggingface==0.6.1
 requests
+sqlalchemy>=2.0.0
+asyncpg>=0.29.0
