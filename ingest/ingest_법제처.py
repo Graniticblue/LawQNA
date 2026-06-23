@@ -274,6 +274,14 @@ def build_record(sections: dict, meta: dict, enriched: dict) -> dict:
 
     answer_full = "\n\n".join(answer_parts)
 
+    # 문단 단위 논지(gist) 추출 — 논지별 독립 검색용 (02_Indexer가 _p{n} 청크 생성)
+    try:
+        from paragraph_extractor import extract_paragraphs_with_gist
+        paragraphs = extract_paragraphs_with_gist(answer_full)
+    except Exception as e:
+        print(f"  [WARN] 문단 논지 추출 건너뜀: {e}")
+        paragraphs = []
+
     return {
         "contents": [
             {"role": "user",  "parts": [{"text": question}]},
@@ -285,6 +293,7 @@ def build_record(sections: dict, meta: dict, enriched: dict) -> dict:
         "label_summary": enriched.get("label_summary", answer_head[:200]),
         "logic_steps":   enriched.get("logic_steps", []),
         "search_tags":   search_tags,
+        "paragraphs":    paragraphs,
         "doc_ref":       meta["doc_ref"],
         "doc_agency":    meta["doc_agency"],
         "doc_code":      meta["doc_code"],

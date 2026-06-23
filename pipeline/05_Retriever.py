@@ -224,13 +224,20 @@ DEFAULT_LAWS = ["건축법", "건축법 시행령"]
 # law_hint 파서 (직접 조문 페칭용)
 # ============================================================
 
+def _normalize_middot(s: str) -> str:
+    """법령명 가운뎃점 변종을 U+00B7(·)로 통일.
+    국가법령정보센터 PDF는 한글 가운뎃점 ㆍ(U+318D)를 쓰는데 코드 상수·검색 키는
+    라틴 ·(U+00B7)을 써서 ChromaDB $eq 매칭이 빗나가 핵심 조문이 검색 누락됐었음."""
+    return s.replace("ㆍ", "·").replace("・", "·").replace("‧", "·")
+
+
 def _parse_law_hint(hint: str) -> tuple[str, str, bool]:
     """
     "건축법 시행령 별표1" → ("건축법 시행령", "별표1", True)
     "건축법 시행령 제86조제2항" → ("건축법 시행령", "제86조", False)
     Returns: (law_name, article_prefix, is_byeolpyo)
     """
-    hint = hint.strip().strip("「」")
+    hint = _normalize_middot(hint.strip().strip("「」"))
     m = re.match(r"^(.+?)\s+(별표\s*\d+)", hint)
     if m:
         return m.group(1).strip(), m.group(2).replace(" ", ""), True
@@ -469,6 +476,7 @@ class HybridSearcher:
         """law_articles 벡터 검색. law_filter가 있으면 해당 법령만."""
         where_clause = None
         if law_filter:
+            law_filter = [_normalize_middot(x) for x in law_filter]
             if len(law_filter) == 1:
                 where_clause = {"law_name": {"$eq": law_filter[0]}}
             else:
@@ -521,6 +529,7 @@ class HybridSearcher:
 
         where_clause = None
         if law_filter and len(law_filter) <= 10:
+            law_filter = [_normalize_middot(x) for x in law_filter]
             if len(law_filter) == 1:
                 where_clause = {"law_name": {"$eq": law_filter[0]}}
             else:

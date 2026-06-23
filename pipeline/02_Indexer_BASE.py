@@ -107,6 +107,12 @@ def split_article_into_hangs(content: str):
     return hangs
 
 
+def _normalize_middot(s: str) -> str:
+    """법령명 가운뎃점 변종을 U+00B7(·)로 통일. 검색측(05_Retriever)·코드 상수와
+    표기를 맞춰 ChromaDB $eq 매칭 누락을 방지한다."""
+    return s.replace("ㆍ", "·").replace("・", "·").replace("‧", "·")
+
+
 def load_law_documents() -> list:
     """
     all_articles.jsonl (법령 조문)
@@ -124,7 +130,7 @@ def load_law_documents() -> list:
                 if not line:
                     continue
                 rec = json.loads(line)
-                law_name      = rec.get("law_name", "")
+                law_name      = _normalize_middot(rec.get("law_name", ""))
                 article_no    = rec.get("article_no", "")
                 article_title = rec.get("article_title", "")
                 content       = rec.get("content", "")
@@ -179,10 +185,11 @@ def load_law_documents() -> list:
                     continue
                 rec = json.loads(line)
 
+                bp_law_name = _normalize_middot(rec.get("law_name", ""))
                 section  = rec.get("section_title", "")
                 related  = rec.get("related_article", "")
                 text = (
-                    f"[{rec.get('law_name', '')}] "
+                    f"[{bp_law_name}] "
                     f"{rec.get('article_no', '')} {rec.get('article_title', '')}"
                     + (f" [{section}]" if section else "")
                     + (f" (관련조문: {related})" if related else "")
@@ -191,7 +198,7 @@ def load_law_documents() -> list:
 
                 meta = {
                     "law_id":           truncate(rec.get("law_id", ""), 100),
-                    "law_name":         truncate(rec.get("law_name", ""), 100),
+                    "law_name":         truncate(bp_law_name, 100),
                     "law_type":         rec.get("law_type", ""),
                     "article_no":       rec.get("article_no", ""),
                     "article_title":    truncate(rec.get("article_title", ""), 200),
@@ -296,6 +303,21 @@ def load_qa_documents(jsonl_path: Path, source_label: str = "") -> list:
             }
             doc_id = f"qa_{jsonl_path.stem}_{i}"
             docs.append({"id": doc_id, "text": embed_text, "meta": meta})
+
+            # 문단 청크 (jsonl에 paragraphs 있으면) — 논지별 독립 검색용.
+            # 통째 doc과 같은 doc_code라, search_qa dedup이 "1해석례=1대표결과"를
+            # 유지하면서(쿼리에 가장 맞는 문단 OR 통째가 대표로 노출됨) 정밀도를 높인다.
+            for pi, para in enumerate(rec.get("paragraphs", []), 1):
+                gist = (para.get("gist", "") or "").strip()
+                body = (para.get("text", "") or "").strip()
+                if not gist or gist == "SKIP" or not body:
+                    continue
+                p_text = f"[{doc_ref}] 논지: {gist}\n{body}"
+                p_meta = dict(meta)
+                p_meta["is_paragraph"] = "true"
+                p_meta["para_seq"]     = str(pi)
+                p_meta["gist"]         = truncate(gist, 300)
+                docs.append({"id": f"{doc_id}_p{pi}", "text": p_text, "meta": p_meta})
 
     return docs
 
