@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 # ── 경로 설정 ──────────────────────────────────────────────────
-BASE_DIR        = Path(__file__).parent.parent
+BASE_DIR        = Path(__file__).parent.parent.parent  # scripts/misc → 워크스페이스 루트
 DATA_DIR        = BASE_DIR / "data"
 CHROMA_DIR      = Path(os.environ.get("CHROMA_DB_PATH", str(DATA_DIR / "chroma_db")))
 AMENDMENTS_PATH = DATA_DIR / "law_amendments" / "amendments.jsonl"

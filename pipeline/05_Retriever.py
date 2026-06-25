@@ -1509,7 +1509,63 @@ class Retriever:
             query, all_laws, relation_types, top_k_case, as_of_date=as_of_date,
         )
 
+        # 항(①②③) 단위 청크를 전체 조문으로 재구성 — 답변·표시에 조문 전체 제공
+        law_docs = self._expand_hang_chunks(law_docs)
+
         return law_docs, qa_docs, case_docs
+
+    _HANG_ORDER = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳㉑㉒㉓㉔㉕㉖㉗㉘㉙㉚"
+
+    def _expand_hang_chunks(self, law_docs):
+        """항(①②③) 단위 청크를 같은 조문의 '전체 조문'으로 재구성한다.
+
+        검색은 항 단위로 정밀하게 하되(긴 조문 뒷항 검색 보장), 답변 생성·표시에는
+        조문 전체를 제공해 맥락이 잘리지 않게 한다. 같은 (법령, 조) 가 여러 항으로
+        매칭되면 1개 doc으로 병합한다(첫 등장 doc의 score·score_type 유지)."""
+        if not law_docs:
+            return law_docs
+        col = self._searcher._law_col
+        order = self._HANG_ORDER
+        out, seen = [], set()
+        for doc in law_docs:
+            key = (doc.law_name, doc.article_no)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                rows = col.get(
+                    where={"$and": [
+                        {"law_name":   {"$eq": doc.law_name}},
+                        {"article_no": {"$eq": doc.article_no}},
+                    ]},
+                    include=["documents", "metadatas"], limit=50,
+                )
+                # hang_no별 본문 — 같은 항이 중복(빈 마커 청크 등)이면 본문이 가장 긴 것
+                best: dict[str, str] = {}
+                title = ""
+                for d, m in zip(rows["documents"], rows["metadatas"]):
+                    if not title:
+                        title = m.get("article_title", "") or ""
+                    hn = m.get("hang_no", "")
+                    if not hn:
+                        continue
+                    parts = d.split("\n", 1)
+                    body = parts[1].strip() if len(parts) > 1 else ""
+                    if len(body) <= 2:      # 마커만 있는 빈 항 청크 제외
+                        continue
+                    if hn not in best or len(body) > len(best[hn]):
+                        best[hn] = body
+                if len(best) > 1:
+                    items = sorted(
+                        best.items(),
+                        key=lambda kv: order.index(kv[0]) if kv[0] in order else 999,
+                    )
+                    header = f"[{doc.law_name}] {doc.article_no} {title}".rstrip()
+                    doc.content = header + "\n" + "\n".join(b for _, b in items)
+            except Exception:
+                pass
+            out.append(doc)
+        return out
 
     def _search_cases(
         self,

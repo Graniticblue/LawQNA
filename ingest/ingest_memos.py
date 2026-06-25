@@ -5,6 +5,7 @@ ingest_memos.py -- data/memos.jsonl → ChromaDB "memos" 컬렉션 인덱싱
 기존 컬렉션이 있으면 삭제 후 재생성 (전량 재인덱싱).
 """
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
 BASE_DIR   = Path(__file__).parent.parent
 DATA_DIR   = BASE_DIR / "data"
-CHROMA_DIR = DATA_DIR / "chroma_db"
+CHROMA_DIR = Path(os.environ.get("CHROMA_DB_PATH", str(DATA_DIR / "chroma_db")))
 MEMOS_PATH = DATA_DIR / "memos.jsonl"
 
 EMBED_MODEL_NAME = "jhgan/ko-sroberta-multitask"

@@ -160,5 +160,19 @@ if __name__ == "__main__":
             print("[startup] 경고: 인덱스 빌드 중 오류 발생 (앱은 계속 시작)")
         else:
             print("[startup] 인덱스 빌드 완료")
+
+        # 02_Indexer는 law_articles·qa_precedents만 만든다.
+        # 개정이력·메모·원칙은 별도 스크립트라, FORCE_REINDEX로 chroma를 비웠을 때
+        # 함께 재인덱싱하지 않으면 누락된다.
+        for label, script in [
+            ("개정이력(law_amendments)", BASE_DIR / "scripts" / "misc" / "index_amendments_chroma.py"),
+            ("메모(memos)",             BASE_DIR / "ingest" / "ingest_memos.py"),
+            ("원칙(principles)",        BASE_DIR / "ingest" / "ingest_principles.py"),
+        ]:
+            if not script.exists():
+                print(f"[startup] {label}: 스크립트 없음 — 건너뜀")
+                continue
+            r = subprocess.run([sys.executable, str(script)], check=False)
+            print(f"[startup] {label} 인덱싱 {'완료' if r.returncode == 0 else '실패(앱은 계속)'}")
     else:
         print(f"[startup] ChromaDB 존재 확인 ({CHROMA_DIR}) — 빌드 스킵")

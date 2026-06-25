@@ -143,6 +143,7 @@ def load_law_documents() -> list:
                     "article_no":       article_no,
                     "article_title":    truncate(article_title, 200),
                     "enforcement_date": rec.get("enforcement_date", ""),
+                    "promulgation_no":  rec.get("promulgation_no", ""),  # 공포번호(예: 법률 제21323호)
                     "source_url":       truncate(rec.get("source_url", ""), 300),
                     "is_byeolpyo":      "false",
                 }
