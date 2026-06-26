@@ -117,20 +117,36 @@ def _split_hangs(content: str):
 
 
 def chunk_law_pdf(text: str, law_name: str) -> list[dict]:
-    pattern = r'(?=제\d+조(?:의\d+)?[\s(（])'
-    parts = re.split(pattern, text)
-    chunks = []
-    for part in parts:
-        part = part.strip()
-        if not part or len(part) < 20:
-            continue
-        m = re.match(r'(제\d+조(?:의\d+)?)', part)
-        article_no = m.group(1) if m else f"chunk_{len(chunks)}"
+    # 국가법령정보센터 PDF 정제 (법령 DB 파서와 동일 룰):
+    #  ① 페이지 헤더/푸터 제거  ② 부칙 이전 본문만  ③ 조문번호 단조증가(인용 오인 방지)
+    text = re.sub(r"법제처\s+\d+\s+국가법령정보센터\s*\n?", "\n", text)
+    bu = re.search(r"\n부\s*칙\s*[<\[]", text)
+    body = text[:bu.start()] if bu else text
 
+    # 조문 시작은 항상 '제N조(제목)' 형태 — 제목 괄호 필수로 잡아야
+    # 본문 중 인용('제52조에 따라', '제52조제1항')을 조문 시작으로 오인하지 않는다.
+    cand = list(re.finditer(r"제(\d+)조(?:의(\d+))?\([^)\n]{1,40}\)", body))
+    matches, last = [], (0, 0)
+    for m in cand:
+        key = (int(m.group(1)), int(m.group(2) or 0))
+        if key > last:        # 번호가 역행하면 본문 중 인용(예: '제11조(허가)에 따라')
+            matches.append(m)
+            last = key
+
+    chunks = []
+    for i, m in enumerate(matches):
+        start = m.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+        article_no = f"제{m.group(1)}조" + (f"의{m.group(2)}" if m.group(2) else "")
+        part = body[start:end].strip()
+        if len(part) < 15:
+            continue
         # 다항 조문은 항 단위로 분할 (법령 DB와 동일 룰). 단항/짧은 조문은 통째로.
         hangs = _split_hangs(part)
         if hangs:
             for marker, htext in hangs:
+                if len(htext) <= 3:     # 마커만 있는 빈 항 제외
+                    continue
                 chunks.append({
                     "law_name": law_name,
                     "article_no": f"{article_no} {marker}",
@@ -142,6 +158,7 @@ def chunk_law_pdf(text: str, law_name: str) -> list[dict]:
                 "article_no": article_no,
                 "content": part[:2000],
             })
+    # 조문 패턴이 없는 비법령 PDF는 길이 기반 분할 (fallback)
     if not chunks:
         for i in range(0, len(text), 500):
             chunks.append({
@@ -390,11 +407,33 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
     case_docs      = result.get("case_docs",      [])
     amendment_docs = result.get("amendment_docs", [])
 
-    # 1) 잔존 내부 마커 제거 (LLM이 가끔 무시하고 출력해도 안전망)
-    answer = _strip_internal_markers(answer)
-
     elements: list = []
     seen_names: set[str] = set()
+
+    # 0) 입법요지N → "재개정이유 - 공포번호" 치환 + 클릭 element (개정이유 줌인)
+    #    (_strip_internal_markers가 [입법요지N]을 지우기 전에 먼저 처리)
+    for i, rec in enumerate(amendment_docs, 1):
+        pat = re.compile(rf"\[?\s*입법요지\s*{i}\s*(?:참조)?\s*\]?")
+        if not pat.search(answer):
+            continue
+        prom = rec.get("공포번호", "") or ""
+        enf  = rec.get("시행일", "") or ""
+        label = f"재개정이유 - {prom}" if prom else f"재개정이유 {i}"
+        answer = pat.sub(label, answer)
+        if label in seen_names:
+            continue
+        seen_names.add(label)
+        reason = rec.get("개정이유", "") or ""
+        kp = rec.get("목적론적_키포인트", "")
+        kp = "\n".join(kp) if isinstance(kp, list) else (str(kp) if kp else "")
+        header = f"**{label}**" + (f"  ·  시행 {enf}" if enf else "")
+        content = f"{header}\n\n**개정이유**\n{reason}"
+        if kp:
+            content += f"\n\n**핵심 취지**\n{kp}"
+        elements.append(cl.Text(name=label, content=content, display="side"))
+
+    # 1) 잔존 내부 마커 제거 (LLM이 가끔 무시하고 출력해도 안전망)
+    answer = _strip_internal_markers(answer)
 
     # 2) 자연 산문 인용 패턴 감지 → 사이드 패널 element 생성
     #    "법제처 22-0155" 같은 문구가 답변에 있으면, 그 이름의 cl.Text element를
