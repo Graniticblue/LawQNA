@@ -1,4 +1,9 @@
 chainlit==2.5.5
+# 빌드 타임아웃 방지: chainlit 의존성 체인(literalai→traceloop→opentelemetry
+# instrumentation 수백 버전)의 pip 백트래킹을 막기 위해 핀 고정.
+# (Docker 레이어 캐시가 식으면 resolver가 폭주해 빌드 실패)
+literalai==0.1.201
+traceloop-sdk==0.33.12
 pdfplumber==0.11.4
 google-genai>=1.16.0
 anthropic>=0.40.0
