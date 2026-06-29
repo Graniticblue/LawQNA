@@ -664,40 +664,60 @@ async def generate_streaming(gen, query: str, extra_context: str, session_id: st
 
 # ── 내장 법령 목록 ───────────────────────────────────────────
 
-LAW_DB_INFO = """\
-### 📋 내장 법령 데이터베이스
+def build_law_db_info() -> str:
+    """내장 법령 목록을 ChromaDB에서 실시간 집계해 생성.
+    각 법령의 현행 시행일·공포번호를 표로 (하드코딩 없음 → 교체/추가 시 자동 반영)."""
+    import os
+    import chromadb
+    from collections import defaultdict
+    try:
+        path = os.environ.get("CHROMA_DB_PATH", str(BASE_DIR / "data" / "chroma_db"))
+        col = chromadb.PersistentClient(path=path).get_collection("law_articles")
+        metas = col.get(include=["metadatas"], limit=40000)["metadatas"]
+    except Exception:
+        return "### 📋 내장 법령 데이터베이스\n\n(법령 DB를 불러오지 못했습니다.)"
 
-**건축법 계열**
+    # 법령별 현행 시행일(최신)·공포번호 — 별표 제외
+    laws: dict = {}
+    for m in metas:
+        if m.get("is_byeolpyo") == "true":
+            continue
+        nm = m.get("law_name", "")
+        if not nm:
+            continue
+        enf  = m.get("enforcement_date", "") or ""
+        prom = m.get("promulgation_no", "") or ""
+        cur = laws.get(nm)
+        if cur is None or enf > cur[0]:
+            laws[nm] = (enf, prom)
 
-| 법령 | 현행 시행일 | 개정이력 (시행일 기준) |
-|------|-----------|-------------------|
-| 건축법 | 2026.02.27 | 2019.01 ~ 2026.02 (18건) |
-| 건축법 시행령 | 2025.08.26 | 2018.06 ~ 2026.02 (26건) |
-| 건축법 시행규칙 | 2026.02.27 | 2018.06 ~ 2026.02 (17건) |
+    def _group(nm: str) -> str:
+        if nm.startswith("건축법"):
+            return "건축법 계열"
+        if "국토의 계획" in nm:
+            return "국토계획법 계열"
+        if nm.startswith("주택법"):
+            return "주택법 계열"
+        return "기타 내장 법령"
 
-**국토의 계획 및 이용에 관한 법률 계열**
+    grouped: dict = defaultdict(list)
+    for nm, (enf, prom) in sorted(laws.items()):
+        grouped[_group(nm)].append((nm, enf, prom))
 
-| 법령 | 현행 시행일 | 개정이력 (시행일 기준) |
-|------|-----------|-------------------|
-| 국토의 계획 및 이용에 관한 법률 | 2025.10.01 | 2024.08 ~ 2026.06 (2건) |
-| 국토의 계획 및 이용에 관한 법률 시행령 | 2025.07.01 | 2023.07 ~ 2025.07 (6건) |
-| 국토의 계획 및 이용에 관한 법률 시행규칙 | 2025.12.26 | 2024.05 (1건) |
-
-**주택법 계열**
-
-| 법령 | 현행 시행일 |
-|------|-----------|
-| 주택법 | 2026.08.04 |
-| 주택법 시행령 | 2025.12.30 |
-| 주택법 시행규칙 | 2024.08.02 |
-
-**기타 내장 법령**
-
-건설산업기본법 · 건축물관리법 · 건축물의 피난·방화구조 등의 기준에 관한 규칙 · 건축물의 설비기준 등에 관한 규칙 · 소방시설 설치 및 관리에 관한 법률 · 소방시설 설치 및 관리에 관한 법률 시행령 · 장애인·노인·임산부 등의 편의증진 보장에 관한 법률 · 주택건설기준 등에 관한 규정
-
----
-📌 내장 DB에 없는 법령은 PDF를 첨부하시면 실시간으로 분석에 활용됩니다.\
-"""
+    lines = ["### 📋 내장 법령 데이터베이스", ""]
+    for g in ["건축법 계열", "국토계획법 계열", "주택법 계열", "기타 내장 법령"]:
+        if g not in grouped:
+            continue
+        lines.append(f"**{g}**")
+        lines.append("")
+        lines.append("| 법령 | 현행 시행일 | 공포번호 |")
+        lines.append("|------|-----------|---------|")
+        for nm, enf, prom in grouped[g]:
+            lines.append(f"| {nm} | {fmt_date(enf) if enf else '-'} | {prom or '-'} |")
+        lines.append("")
+    lines.append("---")
+    lines.append(f"총 **{len(laws)}개** 법령 내장. 목록에 없는 법령은 PDF를 첨부하시면 실시간 분석에 활용됩니다.")
+    return "\n".join(lines)
 
 _LAW_LIST_TRIGGER = "📋 내장 법령 목록"
 
@@ -777,7 +797,7 @@ async def on_new_chat(action: cl.Action):
 async def on_message(message: cl.Message):
     # ── 법령 목록 트리거 ──────────────────────────────────────
     if message.content.strip() == _LAW_LIST_TRIGGER:
-        await cl.Message(content=LAW_DB_INFO).send()
+        await cl.Message(content=build_law_db_info()).send()
         return
 
     # ── PDF 첨부 처리 ─────────────────────────────────────────
