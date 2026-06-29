@@ -130,8 +130,34 @@ def ensure_chat_history_schema():
         print(f"[startup] chat history 스키마 생성 실패(앱은 계속): {e}")
 
 
+def cleanup_uploads(days: int = 30):
+    """업로드 PDF 컬렉션 정리: N일 이상 미사용 upload_* + 레거시 session_* 삭제.
+    영속화로 on_chat_end 삭제를 없앤 대신, 기동 시 1회 orphan/만료분을 정리한다."""
+    from datetime import datetime, timedelta
+    try:
+        import chromadb
+        client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+        cutoff = datetime.now() - timedelta(days=days)
+        n = 0
+        for c in client.list_collections():
+            nm = c.name
+            if nm.startswith("session_"):          # 영속화 이전 레거시
+                client.delete_collection(nm); n += 1
+            elif nm.startswith("upload_"):
+                lu = (c.metadata or {}).get("last_used", "")
+                try:
+                    if lu and datetime.fromisoformat(lu) < cutoff:
+                        client.delete_collection(nm); n += 1
+                except Exception:
+                    pass
+        print(f"[startup] 업로드 컬렉션 정리: {n}개 삭제 (미사용 {days}일 초과/레거시)")
+    except Exception as e:
+        print(f"[startup] 업로드 정리 생략(앱 계속): {e}")
+
+
 if __name__ == "__main__":
     ensure_chat_history_schema()
+    cleanup_uploads()
     # FORCE_REINDEX=1 이면 기존 DB가 있어도 삭제 후 재빌드한다.
     # (임베딩 방식 변경 등으로 영구 볼륨의 DB를 갱신해야 할 때 사용.
     #  재빌드 후에는 이 변수를 제거해야 재시작마다 재빌드되지 않는다.)

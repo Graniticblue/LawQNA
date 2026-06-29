@@ -150,13 +150,13 @@ def chunk_law_pdf(text: str, law_name: str) -> list[dict]:
                 chunks.append({
                     "law_name": law_name,
                     "article_no": f"{article_no} {marker}",
-                    "content": htext[:2000],
+                    "content": htext[:6000],
                 })
         else:
             chunks.append({
                 "law_name": law_name,
                 "article_no": article_no,
-                "content": part[:2000],
+                "content": part[:6000],
             })
     # 조문 패턴이 없는 비법령 PDF는 길이 기반 분할 (fallback)
     if not chunks:
@@ -752,10 +752,16 @@ def _init_session():
     cl.user_session.set("history", [])
 
     session_id = cl.context.session.id
+    # 업로드 영속 키: 사용자 anon_id 기준 → 재방문 시 이전 업로드 재사용.
+    # (인증 사용자 정보가 없으면 대화 세션id로 폴백)
+    user = getattr(cl.context.session, "user", None)
+    upload_key = getattr(user, "identifier", None) or session_id
+
     gen = get_generator()
     retriever = gen._get_retriever()
-    retriever.create_session_collection(session_id)
+    retriever.create_session_collection(upload_key)
     cl.user_session.set("session_id", session_id)
+    cl.user_session.set("upload_key", upload_key)
 
 
 @cl.on_chat_start
@@ -824,7 +830,7 @@ async def on_message(message: cl.Message):
             )
             await indexing_msg.send()
 
-            session_id = cl.user_session.get("session_id", "")
+            session_id = cl.user_session.get("upload_key", "")
 
             async def do_index(chunks=chunks, session_id=session_id, msg=indexing_msg, label=law_label):
                 gen = get_generator()
@@ -901,7 +907,7 @@ async def on_message(message: cl.Message):
             lines.append(f"A: {h['a'][:300]}...")
         extra_context = "\n".join(lines)
 
-    session_id = cl.user_session.get("session_id", "")
+    session_id = cl.user_session.get("upload_key", "")
     # provider별 라벨 — gemma_forced 케이스에서 이미 설정된 model_label은 보존
     model_label = {
         "gemma":  "🟢 Gemma (Local)",
@@ -1092,7 +1098,7 @@ async def on_regenerate_with_fetch(action: cl.Action):
     extra_context = "\n".join(extra_lines)
 
     gen = get_generator()
-    session_id = cl.user_session.get("session_id", "")
+    session_id = cl.user_session.get("upload_key", "")
     try:
         msg, result = await generate_streaming(
             gen, query, extra_context, session_id, provider, model_label
@@ -1120,10 +1126,6 @@ async def on_regenerate_with_fetch(action: cl.Action):
         await cl.Message(content=f"**출처 (재생성)**\n{sources_text}", author="출처").send()
 
 
-@cl.on_chat_end
-async def on_end():
-    session_id = cl.user_session.get("session_id", "")
-    if session_id:
-        gen = get_generator()
-        retriever = gen._get_retriever()
-        retriever.delete_session_collection(session_id)
+# on_chat_end에서 업로드 컬렉션을 삭제하지 않는다 (영속화):
+#   재방문(같은 anon_id) 시 이전 업로드를 재사용하고,
+#   30일 이상 미사용분은 startup의 cleanup이 자동 정리한다.

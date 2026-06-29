@@ -1037,17 +1037,24 @@ class HybridSearcher:
     # 세션 컬렉션 (업로드 PDF 임시 인덱싱)
     # ----------------------------------------------------------
 
-    def create_session_collection(self, session_id: str) -> None:
-        """세션 전용 임시 컬렉션 생성 (이미 있으면 재사용)."""
-        col_name = f"session_{session_id[:16]}"
+    def create_session_collection(self, key: str) -> None:
+        """업로드 전용 영속 컬렉션 (사용자 anon_id 기준, 없으면 세션id). 재사용.
+        마지막 사용시각(last_used)을 갱신 → N일 미사용 시 cleanup 대상."""
+        from datetime import datetime
+        col_name = f"upload_{key[:16]}"
+        now = datetime.now().isoformat()
         try:
             col = self._chroma.get_or_create_collection(
                 name=col_name,
-                metadata={"hnsw:space": "cosine"},
+                metadata={"hnsw:space": "cosine", "last_used": now},
             )
-            self._session_cols[session_id] = col
+            try:
+                col.modify(metadata={"hnsw:space": "cosine", "last_used": now})
+            except Exception:
+                pass
+            self._session_cols[key] = col
         except Exception as e:
-            print(f"[세션 컬렉션 생성 실패] {e}")
+            print(f"[업로드 컬렉션 생성 실패] {e}")
 
     def index_uploaded_chunks(self, session_id: str, chunks: list[dict]) -> int:
         """청크를 세션 컬렉션에 임베딩하여 저장. 반환: 저장된 청크 수."""
@@ -1055,10 +1062,12 @@ class HybridSearcher:
         if col is None:
             return 0
 
+        import uuid
+        batch_uid = uuid.uuid4().hex[:8]   # PDF(호출)마다 고유 → 여러 PDF 업로드 시 id 충돌 방지
         ids, texts, metas = [], [], []
         for i, chunk in enumerate(chunks):
-            ids.append(f"{session_id[:8]}_{i}")
-            texts.append(chunk["content"][:2000])
+            ids.append(f"{session_id[:8]}_{batch_uid}_{i}")
+            texts.append(chunk["content"][:6000])
             metas.append({
                 "law_name": chunk.get("law_name", "업로드 법령"),
                 "article_no": chunk.get("article_no", f"chunk_{i}"),
@@ -1111,14 +1120,40 @@ class HybridSearcher:
             ))
         return results
 
-    def delete_session_collection(self, session_id: str) -> None:
-        """세션 종료 시 임시 컬렉션 삭제."""
-        col_name = f"session_{session_id[:16]}"
+    def delete_session_collection(self, key: str) -> None:
+        """업로드 컬렉션 명시적 삭제 (예: '대화 초기화'에서 호출)."""
+        col_name = f"upload_{key[:16]}"
         try:
             self._chroma.delete_collection(col_name)
         except Exception:
             pass
-        self._session_cols.pop(session_id, None)
+        self._session_cols.pop(key, None)
+
+    def cleanup_expired_uploads(self, days: int = 30) -> int:
+        """N일 이상 미사용 upload_* 컬렉션 + 레거시 session_* 컬렉션을 정리.
+        앱 기동 시 1회 호출 → orphan 누적 방지."""
+        from datetime import datetime, timedelta
+        cutoff = datetime.now() - timedelta(days=days)
+        removed = 0
+        try:
+            for c in self._chroma.list_collections():
+                name = c.name
+                if name.startswith("session_"):   # 영속화 이전 레거시 — 전부 삭제
+                    self._chroma.delete_collection(name)
+                    removed += 1
+                    continue
+                if not name.startswith("upload_"):
+                    continue
+                lu = (c.metadata or {}).get("last_used", "")
+                try:
+                    if lu and datetime.fromisoformat(lu) < cutoff:
+                        self._chroma.delete_collection(name)
+                        removed += 1
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[업로드 정리 실패] {e}")
+        return removed
 
     # ----------------------------------------------------------
     # 판례 검색 (court_cases) -PLAN §4.2
