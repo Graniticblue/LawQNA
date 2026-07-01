@@ -6,6 +6,21 @@ chainlit==2.5.5
 #  - 0.38.5 는 하위 instrumentation이 전부 0.38.5로 일관 → 클린 해소(로컬 dry-run 검증).
 literalai==0.1.201
 traceloop-sdk==0.38.5
+# uptrace(chainlit)와 traceloop이 합의하는 opentelemetry 라인(1.41 / 0.62b0)으로 못박음.
+# 미고정 시 uptrace 1.41→1.29 × otel-instrumentation 0.64b0→0.50b0 조합 백트래킹으로 빌드 폭주.
+# (uptrace 1.41.0: opentelemetry-api~=1.41.0 · opentelemetry-instrumentation~=0.62b0)
+# 깨끗한 환경(--ignore-installed) dry-run으로 무충돌 해소 검증 완료.
+uptrace==1.41.0
+opentelemetry-api==1.41.0
+opentelemetry-sdk==1.41.0
+opentelemetry-semantic-conventions==0.62b0
+opentelemetry-instrumentation==0.62b0
+opentelemetry-instrumentation-requests==0.62b0
+opentelemetry-instrumentation-urllib3==0.62b0
+opentelemetry-instrumentation-threading==0.62b0
+opentelemetry-instrumentation-sqlalchemy==0.62b0
+opentelemetry-instrumentation-logging==0.62b0
+opentelemetry-util-http==0.62b0
 pdfplumber==0.11.4
 google-genai>=1.16.0
 anthropic>=0.40.0
