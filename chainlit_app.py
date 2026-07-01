@@ -724,8 +724,11 @@ _LAW_LIST_TRIGGER = "📋 내장 법령 목록"
 
 # ── Chainlit 핸들러 ─────────────────────────────────────────
 
+_LAW_LIST_STARTER = cl.Starter(
+    label="📋 내장 법령 목록", message=_LAW_LIST_TRIGGER, icon="/public/starter_list.svg"
+)
+
 _STARTER_POOL = [
-    cl.Starter(label="📋 내장 법령 목록", message=_LAW_LIST_TRIGGER, icon="/public/starter_list.svg"),
     cl.Starter(label="🏗️ 건축허가·신고", message="건축허가와 건축신고의 대상 기준과 차이를 알려주세요."),
     cl.Starter(label="🗺️ 용도지역 제한", message="용도지역별 건폐율·용적률 기준과 건축 제한을 알려주세요."),
     cl.Starter(label="🔥 피난·방화 기준", message="피난계단 및 방화구획 설치 기준을 알려주세요."),
@@ -742,8 +745,8 @@ _STARTER_POOL = [
 
 @cl.set_starters
 async def set_starters():
-    # 풀에서 매번 무작위 4개 — new chat·새 진입마다 추천질문이 바뀐다.
-    return random.sample(_STARTER_POOL, k=min(4, len(_STARTER_POOL)))
+    # 법령 목록은 항상 고정 노출 + 나머지 추천질문 3개를 무작위로 로테이션.
+    return [_LAW_LIST_STARTER] + random.sample(_STARTER_POOL, k=min(3, len(_STARTER_POOL)))
 
 
 def _init_session():
