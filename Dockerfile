@@ -14,4 +14,5 @@ COPY . .
 
 EXPOSE 8000
 
-CMD python startup.py && chainlit run chainlit_app.py --port=${PORT:-8000} --host=0.0.0.0
+# exec 형식(JSON) + chainlit 앞 exec: SIGTERM이 셸이 아닌 앱에 직접 전달돼 graceful shutdown 보장
+CMD ["sh", "-c", "python startup.py && exec chainlit run chainlit_app.py --port=${PORT:-8000} --host=0.0.0.0"]
