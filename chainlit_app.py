@@ -672,10 +672,35 @@ def build_law_db_info() -> str:
     from collections import defaultdict
     try:
         path = os.environ.get("CHROMA_DB_PATH", str(BASE_DIR / "data" / "chroma_db"))
-        col = chromadb.PersistentClient(path=path).get_collection("law_articles")
+        client = chromadb.PersistentClient(path=path)
+        col = client.get_collection("law_articles")
         metas = col.get(include=["metadatas"], limit=40000)["metadatas"]
     except Exception:
         return "### 📋 내장 법령 데이터베이스\n\n(법령 DB를 불러오지 못했습니다.)"
+
+    def _norm(s: str) -> str:
+        return re.sub(r"[\s·ㆍ]+", "", s or "")
+
+    # 개정이력(law_amendments) 실시간 집계: 법령별 건수 + 시행일 범위
+    amend: dict = defaultdict(list)
+    try:
+        acol = client.get_collection("law_amendments")
+        for am in acol.get(include=["metadatas"], limit=40000)["metadatas"]:
+            nm = am.get("law_name", "")
+            enf = (am.get("시행일", "") or "").replace(".", "-")
+            if nm:
+                amend[_norm(nm)].append(enf)
+    except Exception:
+        pass
+
+    def _amend_cell(nm: str) -> str:
+        dates = [d for d in amend.get(_norm(nm), []) if d]
+        if not dates:
+            return "-"
+        def yymm(d):
+            p = d.split("-")
+            return f"{p[0]}.{p[1]}" if len(p) >= 2 else d
+        return f"{yymm(min(dates))} ~ {yymm(max(dates))} ({len(dates)}건)"
 
     # 법령별 현행 시행일(최신)·공포번호 — 별표 제외
     laws: dict = {}
@@ -710,10 +735,10 @@ def build_law_db_info() -> str:
             continue
         lines.append(f"**{g}**")
         lines.append("")
-        lines.append("| 법령 | 현행 시행일 | 공포번호 |")
-        lines.append("|------|-----------|---------|")
+        lines.append("| 법령 | 현행 시행일 | 공포번호 | 개정이력 (시행일 기준) |")
+        lines.append("|------|-----------|---------|---------|")
         for nm, enf, prom in grouped[g]:
-            lines.append(f"| {nm} | {fmt_date(enf) if enf else '-'} | {prom or '-'} |")
+            lines.append(f"| {nm} | {fmt_date(enf) if enf else '-'} | {prom or '-'} | {_amend_cell(nm)} |")
         lines.append("")
     lines.append("---")
     lines.append(f"총 **{len(laws)}개** 법령 내장. 목록에 없는 법령은 PDF를 첨부하시면 실시간 분석에 활용됩니다.")
