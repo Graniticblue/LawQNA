@@ -162,6 +162,23 @@ if __name__ == "__main__":
     # (임베딩 방식 변경 등으로 영구 볼륨의 DB를 갱신해야 할 때 사용.
     #  재빌드 후에는 이 변수를 제거해야 재시작마다 재빌드되지 않는다.)
     force = os.environ.get("FORCE_REINDEX", "").strip().lower() in ("1", "true", "yes")
+    # REINDEX_AUX=1 이면 law_articles(수분 소요)는 그대로 두고 개정이력·메모·원칙만
+    # 재인덱싱한다. 개정이력(amendments)만 바뀐 경우 전체 재빌드(15분+, 헬스체크 타임아웃
+    # 위험) 대신 이걸 쓴다. 완료 후 변수 제거.
+    aux_only = os.environ.get("REINDEX_AUX", "").strip().lower() in ("1", "true", "yes")
+
+    def _index_aux():
+        # 02_Indexer는 law_articles·qa_precedents만 만든다. 개정이력·메모·원칙은 별도 스크립트.
+        for label, script in [
+            ("개정이력(law_amendments)", BASE_DIR / "scripts" / "misc" / "index_amendments_chroma.py"),
+            ("메모(memos)",             BASE_DIR / "ingest" / "ingest_memos.py"),
+            ("원칙(principles)",        BASE_DIR / "ingest" / "ingest_principles.py"),
+        ]:
+            if not script.exists():
+                print(f"[startup] {label}: 스크립트 없음 — 건너뜀")
+                continue
+            r = subprocess.run([sys.executable, str(script)], check=False)
+            print(f"[startup] {label} 인덱싱 {'완료' if r.returncode == 0 else '실패(앱은 계속)'}")
 
     if force or chroma_is_empty():
         if force:
@@ -187,18 +204,10 @@ if __name__ == "__main__":
         else:
             print("[startup] 인덱스 빌드 완료")
 
-        # 02_Indexer는 law_articles·qa_precedents만 만든다.
-        # 개정이력·메모·원칙은 별도 스크립트라, FORCE_REINDEX로 chroma를 비웠을 때
-        # 함께 재인덱싱하지 않으면 누락된다.
-        for label, script in [
-            ("개정이력(law_amendments)", BASE_DIR / "scripts" / "misc" / "index_amendments_chroma.py"),
-            ("메모(memos)",             BASE_DIR / "ingest" / "ingest_memos.py"),
-            ("원칙(principles)",        BASE_DIR / "ingest" / "ingest_principles.py"),
-        ]:
-            if not script.exists():
-                print(f"[startup] {label}: 스크립트 없음 — 건너뜀")
-                continue
-            r = subprocess.run([sys.executable, str(script)], check=False)
-            print(f"[startup] {label} 인덱싱 {'완료' if r.returncode == 0 else '실패(앱은 계속)'}")
+        # FORCE_REINDEX로 chroma를 비웠으면 개정이력·메모·원칙도 함께 재인덱싱(안 하면 누락).
+        _index_aux()
+    elif aux_only:
+        print("[startup] REINDEX_AUX 설정됨 — law_articles 유지, 개정이력·메모·원칙만 재인덱싱")
+        _index_aux()
     else:
         print(f"[startup] ChromaDB 존재 확인 ({CHROMA_DIR}) — 빌드 스킵")
