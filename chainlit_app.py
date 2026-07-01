@@ -97,6 +97,11 @@ try:
         if not str(p).startswith(str(base)) or not p.is_file():
             raise HTTPException(status_code=404)
         return FileResponse(str(p), media_type="text/plain; charset=utf-8")
+
+    # Chainlit SPA catch-all(/{full_path:path} → index.html)보다 먼저 매칭되도록
+    # 방금 등록한 라우트를 라우터 맨 앞으로 옮긴다.
+    _cl_server_app.router.routes.insert(0, _cl_server_app.router.routes.pop())
+    print("[element-storage] /element-files 서빙 라우트 등록(우선순위 최상단)")
 except Exception as _e:
     print(f"[element-storage] 서빙 라우트 등록 실패(팝업 영속화 비활성): {_e}")
 
