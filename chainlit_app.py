@@ -252,10 +252,13 @@ def get_law_header(law_name: str, enforcement_date: str) -> str:
 # ── content 중복 번호 제거 ────────────────────────────────────
 
 def clean_article_content(text: str) -> str:
-    """① ①, 1. 1., 가. 가. 형태 중복 제거"""
+    """① ①, 1. 1., 가. 가. 형태 중복 제거 + 항 마커 문단 분리"""
     text = re.sub(r'([①-⑳])\s+\1', r'\1', text)
     text = re.sub(r'(\d+\.)\s+\1\s*', r'\1 ', text)
     text = re.sub(r'([가-힣]\.)\s+\1\s*', r'\1 ', text)
+    # 항 마커(①②③) 앞의 단일 개행은 마크다운에서 공백으로 렌더돼 앞 항에 붙는다.
+    # 문단 분리(\n\n)로 바꿔 각 항이 새 줄에서 시작하게 한다. (문두 ①은 미해당)
+    text = re.sub(r'\n+[ \t]*(?=[①-⑳])', '\n\n', text)
     return text
 
 
