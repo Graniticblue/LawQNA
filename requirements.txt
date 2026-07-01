@@ -1,8 +1,11 @@
 chainlit==2.5.5
-# 빌드 타임아웃 방지: chainlit이 끌어오는 literalai를 핀 고정해 pip 백트래킹 차단.
-# traceloop-sdk는 미사용 + 0.33.12의 opentelemetry-instrumentation 하위 의존성이
-# 상호 충돌(0.49b0/b1/b2 정확버전 요구)해 resolver가 실패하므로 제거.
+# 빌드 타임아웃/충돌 방지 핀:
+#  - literalai==0.1.201 이 traceloop-sdk>=0.33.12 를 강제로 끌어옴(미사용이어도 제거 불가).
+#  - traceloop-sdk 를 명시 핀하지 않으면 pip이 0.38.5→0.36.0…을 백트래킹하며 폭주.
+#  - 0.33.12 는 opentelemetry-instrumentation 하위가 0.49b0/b1/b2로 상호 충돌해 실패.
+#  - 0.38.5 는 하위 instrumentation이 전부 0.38.5로 일관 → 클린 해소(로컬 dry-run 검증).
 literalai==0.1.201
+traceloop-sdk==0.38.5
 pdfplumber==0.11.4
 google-genai>=1.16.0
 anthropic>=0.40.0
