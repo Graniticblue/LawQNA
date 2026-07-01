@@ -53,13 +53,61 @@ def _asyncpg_conninfo() -> str | None:
     return url
 
 
+# ── 인용 팝업(element) 영속화 — 볼륨 기반 storage client ──────────
+# SQLAlchemyDataLayer는 storage_provider 없이는 element를 저장하지 못해
+# (create_element: "No blob_storage_client"), 재개된 대화에서 인용 팝업이 사라진다.
+# S3 대신 Railway 영구 볼륨(chroma_db와 같은 볼륨)에 저장하는 파일시스템 client.
+from chainlit.data.storage_clients.base import BaseStorageClient
+
+# chroma_db 볼륨 내부에 둬 재배포에도 영속(볼륨 마운트 경로와 무관하게 보존).
+# FORCE_REINDEX 시엔 함께 지워지지만(드묾) 오래된 대화 팝업만 잃는 정도로 수용.
+_chroma_path = os.environ.get("CHROMA_DB_PATH", str(BASE_DIR / "data" / "chroma_db"))
+ELEMENT_DIR = Path(os.environ.get(
+    "ELEMENT_STORAGE_DIR", str(Path(_chroma_path) / "_element_storage")))
+
+
+class VolumeStorageClient(BaseStorageClient):
+    async def upload_file(self, object_key, data, mime="application/octet-stream", overwrite=True):
+        p = ELEMENT_DIR / object_key
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data.encode("utf-8") if isinstance(data, str) else data)
+        return {"url": f"/element-files/{object_key}", "object_key": object_key}
+
+    async def get_read_url(self, object_key):
+        return f"/element-files/{object_key}"
+
+    async def delete_file(self, object_key):
+        try:
+            (ELEMENT_DIR / object_key).unlink()
+            return True
+        except Exception:
+            return False
+
+
+# element 파일을 서빙하는 라우트를 Chainlit FastAPI 앱에 등록 (프런트가 url로 fetch)
+try:
+    from chainlit.server import app as _cl_server_app
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+
+    @_cl_server_app.get("/element-files/{object_key:path}")
+    async def _serve_element_file(object_key: str):
+        base = ELEMENT_DIR.resolve()
+        p = (ELEMENT_DIR / object_key).resolve()
+        if not str(p).startswith(str(base)) or not p.is_file():
+            raise HTTPException(status_code=404)
+        return FileResponse(str(p), media_type="text/plain; charset=utf-8")
+except Exception as _e:
+    print(f"[element-storage] 서빙 라우트 등록 실패(팝업 영속화 비활성): {_e}")
+
+
 @cl.data_layer
 def get_data_layer():
     conninfo = _asyncpg_conninfo()
     if not conninfo:
         return None  # DATABASE_URL 미설정 시 영속성 없이 동작
     from chainlit.data.sql_alchemy import SQLAlchemyDataLayer
-    return SQLAlchemyDataLayer(conninfo=conninfo)
+    return SQLAlchemyDataLayer(conninfo=conninfo, storage_provider=VolumeStorageClient())
 
 
 # ── Generator 싱글턴 ────────────────────────────────────────
