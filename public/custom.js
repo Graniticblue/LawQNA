@@ -49,7 +49,7 @@
         const img = document.createElement('img');
         img.id = 'usun-logo';
         img.src = 'https://www.usun.co.kr/assets/images/logo.png';
-        img.alt = '유선건축사사무소';
+        img.alt = 'usun';
         img.style.cssText = 'max-height: 52px; max-width: 200px; object-fit: contain;';
 
         wrap.appendChild(img);
@@ -109,6 +109,24 @@
             btn.className = 'law-list-btn';
             btn.onclick = showLawListModal;
             readme.parentElement.insertBefore(btn, readme);
+            // 등간격화: Readme와 우측 인접 항목(아이콘) 사이 네이티브 간격을 측정해
+            // 내 버튼 간격을 동일하게 맞춘다. (측정 실패 시 CSS margin-right 폴백)
+            requestAnimationFrame(function () {
+                try {
+                    var r = readme.getBoundingClientRect();
+                    var right = Array.prototype.slice.call(readme.parentElement.children)
+                        .filter(function (el) {
+                            return el !== btn && el.getBoundingClientRect().left >= r.right - 1;
+                        })
+                        .sort(function (a, b) {
+                            return a.getBoundingClientRect().left - b.getBoundingClientRect().left;
+                        })[0];
+                    if (right) {
+                        var gap = right.getBoundingClientRect().left - r.right;
+                        if (gap > 0 && gap < 80) btn.style.marginRight = gap + 'px';
+                    }
+                } catch (e) { }
+            });
         } catch (e) { /* DOM 변동 중 실패는 무시(다음 mutation에 재시도) */ }
     }
 
