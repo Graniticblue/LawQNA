@@ -322,13 +322,13 @@ def clean_article_content(text: str) -> str:
     text = re.sub(r'(\d+\.)\s+\1\s*', r'\1 ', text)
     text = re.sub(r'([가-힣]\.)\s+\1\s*', r'\1 ', text)
     # PDF 하드랩 개행(단어 중간 '높이\n는', '채광\n(採光)') 제거.
-    # 개행 뒤가 구조 마커(항①/호1./목가./[/제N조/<개정)면 진짜 줄바꿈 → 보존.
-    _STRUCT = r'(?=[ \t]*(?:[①-⑳]|\d{1,2}\.|[가-힣]\.|\[|제\d+조|<))'
+    # 개행 뒤가 구조 마커(항①/호1./목가./[/제N조/<개정/마크다운헤더#)면 진짜 줄바꿈 → 보존.
+    _STRUCT = r'(?=[ \t]*(?:[①-⑳]|\d{1,2}\.|[가-힣]\.|\[|제\d+조|<|#))'
     text = re.sub(r'\n' + _STRUCT, '\x00', text)   # 구조 개행 보호
     text = text.replace('\n', '')                   # 하드랩 개행 이어붙임
     text = text.replace('\x00', '\n')               # 구조 개행 복원
-    # 항 마커·[전문개정] 앞은 문단 분리(\n\n) — 마크다운 단일 개행은 공백이 되므로
-    text = re.sub(r'\n+[ \t]*(?=[①-⑳]|\[)', '\n\n', text)
+    # 항①·[전문개정]·마크다운헤더(#) 앞은 문단 분리(\n\n) — 단일 개행은 마크다운서 공백
+    text = re.sub(r'\n+[ \t]*(?=[①-⑳]|\[|#)', '\n\n', text)
     return text
 
 
@@ -557,7 +557,7 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
         if doc is None:
             continue
         q   = doc.metadata.get("question", "")
-        ans = (doc.content or "")[:3000]
+        ans = clean_article_content((doc.content or "")[:3000])
         date = doc.metadata.get("doc_date", "")
         header = f"**법제처 {code}**" + (f"  ·  {date}" if date else "")
         content = f"{header}\n\n**질문**\n{q}\n\n**답변**\n{ans}"
@@ -581,7 +581,7 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
             continue
         court = doc.metadata.get("court", "")
         date  = doc.metadata.get("decision_date", "")
-        body  = (doc.content or "")[:3000]
+        body  = clean_article_content((doc.content or "")[:3000])
         header_parts = [x for x in [court, cid] if x]
         if date:
             header_parts.append(f"({date} 선고)")
