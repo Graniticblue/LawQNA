@@ -317,13 +317,18 @@ def get_law_header(law_name: str, enforcement_date: str) -> str:
 # ── content 중복 번호 제거 ────────────────────────────────────
 
 def clean_article_content(text: str) -> str:
-    """① ①, 1. 1., 가. 가. 형태 중복 제거 + 항 마커 문단 분리"""
+    """① ①, 1. 1., 가. 가. 중복 제거 + PDF 하드랩 개행 정리 + 항 마커 문단 분리"""
     text = re.sub(r'([①-⑳])\s+\1', r'\1', text)
     text = re.sub(r'(\d+\.)\s+\1\s*', r'\1 ', text)
     text = re.sub(r'([가-힣]\.)\s+\1\s*', r'\1 ', text)
-    # 항 마커(①②③) 앞의 단일 개행은 마크다운에서 공백으로 렌더돼 앞 항에 붙는다.
-    # 문단 분리(\n\n)로 바꿔 각 항이 새 줄에서 시작하게 한다. (문두 ①은 미해당)
-    text = re.sub(r'\n+[ \t]*(?=[①-⑳])', '\n\n', text)
+    # PDF 하드랩 개행(단어 중간 '높이\n는', '채광\n(採光)') 제거.
+    # 개행 뒤가 구조 마커(항①/호1./목가./[/제N조/<개정)면 진짜 줄바꿈 → 보존.
+    _STRUCT = r'(?=[ \t]*(?:[①-⑳]|\d{1,2}\.|[가-힣]\.|\[|제\d+조|<))'
+    text = re.sub(r'\n' + _STRUCT, '\x00', text)   # 구조 개행 보호
+    text = text.replace('\n', '')                   # 하드랩 개행 이어붙임
+    text = text.replace('\x00', '\n')               # 구조 개행 복원
+    # 항 마커·[전문개정] 앞은 문단 분리(\n\n) — 마크다운 단일 개행은 공백이 되므로
+    text = re.sub(r'\n+[ \t]*(?=[①-⑳]|\[)', '\n\n', text)
     return text
 
 
@@ -469,6 +474,34 @@ _CASE_PROSE_PAT = re.compile(
 )
 
 
+_article_index: dict = {}
+
+
+def _get_article_index() -> dict:
+    """all_articles.jsonl → {(공백·가운뎃점 제거 법령명, 조번호): rec}. 검색 안 된
+    인용 조문도 팝업 마킹하기 위한 조회용(전체 조문 보유). 1회 로드 후 캐시."""
+    global _article_index
+    if _article_index:
+        return _article_index
+    idx: dict = {}
+    p = BASE_DIR / "data" / "raw_laws" / "all_articles.jsonl"
+    if p.exists():
+        for line in p.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue
+            ln, art = r.get("law_name", ""), r.get("article_no", "")
+            if not ln or not art:
+                continue
+            key = (re.sub(r"[\s·ㆍ]+", "", ln), art)
+            idx.setdefault(key, r)
+    _article_index = idx
+    return idx
+
+
 def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
     law_docs       = result.get("law_docs",       [])
     qa_docs        = result.get("qa_docs",        [])
@@ -597,6 +630,25 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
                     # 사이드 패널 헤더에는 정식 법령명 노출
                     content = f"**{law}  {art}**{sep}{header_extra}\n\n{body}"
                     elements.append(cl.Text(name=ref_name, content=content, display="side"))
+
+    # 3b) 검색되지 않았지만 답변에 인용된 「법령명」 조문도 마킹 (보유 법령 한정).
+    #     all_articles 전체 조문에서 조회 — 미보유 법령(예: 경관법)은 자동 스킵.
+    idx = _get_article_index()
+    for m in re.finditer(r"「([^」]{2,40})」\s*(제\d+조(?:의\d+)?)" + ART_EXT, answer):
+        ref_name = m.group(0).strip()
+        if ref_name in seen_names:
+            continue
+        law_raw, art = m.group(1).strip(), m.group(2)
+        rec = idx.get((re.sub(r"[\s·ㆍ]+", "", law_raw), art))
+        if not rec:
+            continue  # 보유하지 않은 법령/조문
+        seen_names.add(ref_name)
+        ln = rec.get("law_name", law_raw)
+        header_extra = get_law_header(ln, rec.get("enforcement_date", ""))
+        sep = "  ·  " if header_extra else ""
+        body = clean_article_content(rec.get("content", ""))
+        content = f"**{ln}  {art}**{sep}{header_extra}\n\n{body}"
+        elements.append(cl.Text(name=ref_name, content=content, display="side"))
 
     return answer, elements
 
