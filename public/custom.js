@@ -72,6 +72,47 @@
         }
     }
 
+    // ── 내장 법령 목록: 상단 헤더 버튼(Readme 옆) + 모달 팝업 ──────
+    function showLawListModal() {
+        var ov = document.getElementById('law-list-modal');
+        if (ov) { ov.style.display = 'flex'; return; }
+        ov = document.createElement('div');
+        ov.id = 'law-list-modal';
+        ov.innerHTML =
+            '<div class="law-list-box">' +
+            '<button class="law-list-close" aria-label="닫기">✕</button>' +
+            '<div class="law-list-content">불러오는 중…</div>' +
+            '</div>';
+        ov.addEventListener('click', function (e) { if (e.target === ov) ov.style.display = 'none'; });
+        ov.querySelector('.law-list-close').onclick = function () { ov.style.display = 'none'; };
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') { var m = document.getElementById('law-list-modal'); if (m) m.style.display = 'none'; }
+        });
+        document.body.appendChild(ov);
+        fetch('/law-list')
+            .then(function (r) { return r.text(); })
+            .then(function (h) { ov.querySelector('.law-list-content').innerHTML = h; })
+            .catch(function () { ov.querySelector('.law-list-content').innerText = '목록을 불러오지 못했습니다.'; });
+    }
+
+    function insertLawListButton() {
+        if (document.getElementById('law-list-btn')) return;
+        var readme = Array.prototype.slice.call(document.querySelectorAll('button, a'))
+            .find(function (el) { return el.textContent.trim() === 'Readme'; });
+        var btn = document.createElement('button');
+        btn.id = 'law-list-btn';
+        btn.type = 'button';
+        btn.textContent = '📋 내장 법령 목록';
+        btn.className = 'law-list-btn';
+        btn.onclick = showLawListModal;
+        if (readme && readme.parentElement) {
+            readme.parentElement.insertBefore(btn, readme);
+        } else {
+            btn.classList.add('law-list-btn-float');  // Readme 못 찾으면 우상단 고정 폴백
+            document.body.appendChild(btn);
+        }
+    }
+
     function update() {
         if (hasMessages()) {
             removeLogo();
@@ -79,6 +120,7 @@
             insertLogo();
         }
         layoutStarters();
+        insertLawListButton();
     }
 
     const observer = new MutationObserver(update);

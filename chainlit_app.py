@@ -98,12 +98,24 @@ try:
             raise HTTPException(status_code=404)
         return FileResponse(str(p), media_type="text/plain; charset=utf-8")
 
+    # 내장 법령 목록 HTML (헤더 버튼 모달이 fetch)
+    from fastapi.responses import HTMLResponse
+
+    @_cl_server_app.get("/law-list")
+    async def _law_list_html():
+        return HTMLResponse(build_law_db_html())
+
     # Chainlit SPA catch-all(/{full_path:path} → index.html)보다 먼저 매칭되도록
-    # 방금 등록한 라우트를 라우터 맨 앞으로 옮긴다.
-    _cl_server_app.router.routes.insert(0, _cl_server_app.router.routes.pop())
-    print("[element-storage] /element-files 서빙 라우트 등록(우선순위 최상단)")
+    # 방금 등록한 라우트들을 라우터 맨 앞으로 옮긴다.
+    _cl_server_app.router.routes.insert(0, _cl_server_app.router.routes.pop())  # /law-list
+    # /element-files 라우트를 앞으로 (위 insert로 한 칸 밀렸으니 다시 find해 이동)
+    for _i, _r in enumerate(_cl_server_app.router.routes):
+        if getattr(_r, "path", "") == "/element-files/{object_key:path}":
+            _cl_server_app.router.routes.insert(0, _cl_server_app.router.routes.pop(_i))
+            break
+    print("[element-storage] /element-files·/law-list 서빙 라우트 등록(우선순위 최상단)")
 except Exception as _e:
-    print(f"[element-storage] 서빙 라우트 등록 실패(팝업 영속화 비활성): {_e}")
+    print(f"[element-storage] 서빙 라우트 등록 실패: {_e}")
 
 
 @cl.data_layer
@@ -720,24 +732,19 @@ async def generate_streaming(gen, query: str, extra_context: str, session_id: st
 
 # ── 내장 법령 목록 ───────────────────────────────────────────
 
-def build_law_db_info() -> str:
-    """내장 법령 목록을 ChromaDB에서 실시간 집계해 생성.
-    각 법령의 현행 시행일·공포번호를 표로 (하드코딩 없음 → 교체/추가 시 자동 반영)."""
+def _collect_law_groups():
+    """법령 목록 집계 (마크다운·HTML 공통). 하드코딩 없이 ChromaDB에서 실시간 집계.
+    반환: (groups, total). groups=[(그룹명, [(법령명, 시행일str, 공포번호, 개정이력str)…])…]"""
     import os
     import chromadb
     from collections import defaultdict
-    try:
-        path = os.environ.get("CHROMA_DB_PATH", str(BASE_DIR / "data" / "chroma_db"))
-        client = chromadb.PersistentClient(path=path)
-        col = client.get_collection("law_articles")
-        metas = col.get(include=["metadatas"], limit=40000)["metadatas"]
-    except Exception:
-        return "### 📋 내장 법령 데이터베이스\n\n(법령 DB를 불러오지 못했습니다.)"
+    path = os.environ.get("CHROMA_DB_PATH", str(BASE_DIR / "data" / "chroma_db"))
+    client = chromadb.PersistentClient(path=path)
+    metas = client.get_collection("law_articles").get(include=["metadatas"], limit=40000)["metadatas"]
 
     def _norm(s: str) -> str:
         return re.sub(r"[\s·ㆍ]+", "", s or "")
 
-    # 개정이력(law_amendments) 실시간 집계: 법령별 건수 + 시행일 범위
     amend: dict = defaultdict(list)
     try:
         acol = client.get_collection("law_amendments")
@@ -758,7 +765,6 @@ def build_law_db_info() -> str:
             return f"{p[0]}.{p[1]}" if len(p) >= 2 else d
         return f"{yymm(min(dates))} ~ {yymm(max(dates))} ({len(dates)}건)"
 
-    # 법령별 현행 시행일(최신)·공포번호 — 별표 제외
     laws: dict = {}
     for m in metas:
         if m.get("is_byeolpyo") == "true":
@@ -783,22 +789,52 @@ def build_law_db_info() -> str:
 
     grouped: dict = defaultdict(list)
     for nm, (enf, prom) in sorted(laws.items()):
-        grouped[_group(nm)].append((nm, enf, prom))
+        grouped[_group(nm)].append((nm, fmt_date(enf) if enf else "-", prom or "-", _amend_cell(nm)))
 
+    order = ["건축법 계열", "국토계획법 계열", "주택법 계열", "기타 내장 법령"]
+    return [(g, grouped[g]) for g in order if g in grouped], len(laws)
+
+
+def build_law_db_info() -> str:
+    """내장 법령 목록 마크다운 (채팅 트리거용 폴백)."""
+    try:
+        groups, total = _collect_law_groups()
+    except Exception:
+        return "### 📋 내장 법령 데이터베이스\n\n(법령 DB를 불러오지 못했습니다.)"
     lines = ["### 📋 내장 법령 데이터베이스", ""]
-    for g in ["건축법 계열", "국토계획법 계열", "주택법 계열", "기타 내장 법령"]:
-        if g not in grouped:
-            continue
+    for g, rows in groups:
         lines.append(f"**{g}**")
         lines.append("")
         lines.append("| 법령 | 현행 시행일 | 공포번호 | 개정이력 (시행일 기준) |")
         lines.append("|------|-----------|---------|---------|")
-        for nm, enf, prom in grouped[g]:
-            lines.append(f"| {nm} | {fmt_date(enf) if enf else '-'} | {prom or '-'} | {_amend_cell(nm)} |")
+        for nm, enf, prom, am in rows:
+            lines.append(f"| {nm} | {enf} | {prom} | {am} |")
         lines.append("")
     lines.append("---")
-    lines.append(f"총 **{len(laws)}개** 법령 내장. 목록에 없는 법령은 PDF를 첨부하시면 실시간 분석에 활용됩니다.")
+    lines.append(f"총 **{total}개** 법령 내장. 목록에 없는 법령은 PDF를 첨부하시면 실시간 분석에 활용됩니다.")
     return "\n".join(lines)
+
+
+def build_law_db_html() -> str:
+    """헤더 버튼 모달용 HTML."""
+    import html
+    try:
+        groups, total = _collect_law_groups()
+    except Exception:
+        return "<p>법령 DB를 불러오지 못했습니다.</p>"
+    parts = ['<div class="law-db">', "<h2>📋 내장 법령 데이터베이스</h2>"]
+    for g, rows in groups:
+        parts.append(f"<h3>{html.escape(g)}</h3>")
+        parts.append("<table><thead><tr><th>법령</th><th>현행 시행일</th>"
+                     "<th>공포번호</th><th>개정이력 (시행일 기준)</th></tr></thead><tbody>")
+        for nm, enf, prom, am in rows:
+            parts.append(f"<tr><td>{html.escape(nm)}</td><td>{html.escape(enf)}</td>"
+                         f"<td>{html.escape(prom)}</td><td>{html.escape(am)}</td></tr>")
+        parts.append("</tbody></table>")
+    parts.append(f'<p class="law-db-foot">총 <b>{total}개</b> 법령 내장. '
+                 "목록에 없는 법령은 PDF를 첨부하시면 실시간 분석에 활용됩니다.</p>")
+    parts.append("</div>")
+    return "\n".join(parts)
 
 _LAW_LIST_TRIGGER = "📋 내장 법령 목록"
 
@@ -826,8 +862,8 @@ _STARTER_POOL = [
 
 @cl.set_starters
 async def set_starters():
-    # 법령 목록은 항상 고정 노출 + 나머지 추천질문 3개를 무작위로 로테이션.
-    return [_LAW_LIST_STARTER] + random.sample(_STARTER_POOL, k=min(3, len(_STARTER_POOL)))
+    # 내장 법령 목록은 상단 헤더 버튼(custom.js)으로 옮김. 여기선 추천질문만 4개 로테이션.
+    return random.sample(_STARTER_POOL, k=min(4, len(_STARTER_POOL)))
 
 
 def _init_session():

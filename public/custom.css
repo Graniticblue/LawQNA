@@ -30,3 +30,58 @@ a[href*="github.com/Chainlit"],
 #stop-button:hover {
     background-color: #0D47A1 !important;
 }
+
+/* ── 내장 법령 목록: 헤더 버튼 + 모달 ────────────────────── */
+.law-list-btn {
+    background: #1565C0;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-right: 8px;
+    white-space: nowrap;
+}
+.law-list-btn:hover { background: #0D47A1; }
+.law-list-btn-float { position: fixed; top: 12px; right: 130px; z-index: 9998; }
+
+#law-list-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+}
+.law-list-box {
+    background: #fff;
+    border-radius: 12px;
+    max-width: 900px;
+    width: 92%;
+    max-height: 85vh;
+    overflow: auto;
+    padding: 24px 28px;
+    position: relative;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+}
+.law-list-close {
+    position: absolute;
+    top: 12px;
+    right: 14px;
+    border: none;
+    background: none;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    color: #666;
+}
+.law-list-close:hover { color: #111; }
+.law-db h2 { font-size: 18px; margin: 0 0 12px; }
+.law-db h3 { font-size: 15px; margin: 18px 0 6px; color: #1565C0; }
+.law-db table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 8px; }
+.law-db th, .law-db td { border: 1px solid #e2e8f0; padding: 6px 10px; text-align: left; }
+.law-db th { background: #F4F7FB; font-weight: 600; }
+.law-db-foot { font-size: 12px; color: #555; margin-top: 12px; }
