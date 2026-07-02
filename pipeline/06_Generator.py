@@ -960,6 +960,12 @@ _DATED_NONUM_CITE = re.compile(
     r'(?:선고\s*)?(질의회신|질의|회신|판결|결정|유권해석)'
     r'(?!\s*[\d가-힣]*\s*\d)'
 )
+# 부처 부서 민원회신·유권해석: "건축기획팀-2471", "도시정책과-1234"(부서명-번호[, 날짜]).
+# 우리가 원문을 보유하지 않는 형식 → allowed_codes에 없으면 환각으로 보고 일반 표현 치환.
+_AGENCY_DOC_CITE = re.compile(
+    r'(?<![가-힣])([가-힣]{2,12}(?:팀|과|국|실|담당관))-(\d{2,6})'
+    r'(?:\s*,?\s*\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.?)?(?:\s*참조)?'
+)
 
 
 def strip_unverified_citations(answer: str, allowed_codes: set) -> tuple[str, list[str]]:
@@ -989,9 +995,17 @@ def strip_unverified_citations(answer: str, allowed_codes: set) -> tuple[str, li
         is_court = ("판결" in kind or "결정" in kind or org in ("대법원", "헌법재판소"))
         return f"관련 {org} 판례" if is_court else f"관련 {org} 회신"
 
+    def _agency(m):
+        key = f"{m.group(1)}-{m.group(2)}"   # "건축기획팀-2471"
+        if key in allowed_codes:
+            return m.group(0)
+        removed.append(key)
+        return "관련 행정해석"
+
     out = _COURT_CITE_FULL.sub(_court, answer)   # 판례(YY+한글+숫자) 먼저
     out = _QA_CITE_FULL.sub(_qa, out)            # 해석례(NN-NNNN) 다음
     out = _DATED_NONUM_CITE.sub(_dated, out)     # 번호 없는 날짜형 인용
+    out = _AGENCY_DOC_CITE.sub(_agency, out)     # 부처 부서 민원회신(부서명-번호)
     return out, removed
 
 
