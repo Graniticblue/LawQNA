@@ -95,22 +95,32 @@
             .catch(function () { ov.querySelector('.law-list-content').innerText = '목록을 불러오지 못했습니다.'; });
     }
 
+    function findReadmeControl() {
+        // 'Readme' 텍스트를 가진 모든 요소 중 가장 바깥(클릭 컨트롤) 선택.
+        var els = Array.prototype.slice.call(
+            document.querySelectorAll('button, a, div, span, [role="button"]'));
+        var matches = els.filter(function (e) { return e.textContent && e.textContent.trim() === 'Readme'; });
+        if (!matches.length) return null;
+        return matches.reduce(function (a, b) { return a.contains(b) ? a : b; });
+    }
+
     function insertLawListButton() {
-        if (document.getElementById('law-list-btn')) return;
-        var readme = Array.prototype.slice.call(document.querySelectorAll('button, a'))
-            .find(function (el) { return el.textContent.trim() === 'Readme'; });
-        var btn = document.createElement('button');
-        btn.id = 'law-list-btn';
-        btn.type = 'button';
-        btn.textContent = '📋 내장 법령 목록';
-        btn.className = 'law-list-btn';
-        btn.onclick = showLawListModal;
-        if (readme && readme.parentElement) {
-            readme.parentElement.insertBefore(btn, readme);
-        } else {
-            btn.classList.add('law-list-btn-float');  // Readme 못 찾으면 우상단 고정 폴백
-            document.body.appendChild(btn);
-        }
+        try {
+            if (document.getElementById('law-list-btn')) return;
+            var btn = document.createElement('button');
+            btn.id = 'law-list-btn';
+            btn.type = 'button';
+            btn.textContent = '📋 내장 법령 목록';
+            btn.className = 'law-list-btn';
+            btn.onclick = showLawListModal;
+            var ctrl = findReadmeControl();
+            if (ctrl && ctrl.parentElement) {
+                ctrl.parentElement.insertBefore(btn, ctrl);
+            } else {
+                btn.classList.add('law-list-btn-float');  // Readme 못 찾으면 우상단 고정 폴백
+                document.body.appendChild(btn);
+            }
+        } catch (e) { /* DOM 변동 중 실패는 무시(다음 mutation에 재시도) */ }
     }
 
     function update() {
