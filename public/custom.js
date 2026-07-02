@@ -110,7 +110,7 @@
             var btn = document.createElement('button');
             btn.id = 'law-list-btn';
             btn.type = 'button';
-            btn.textContent = '📋 내장 법령 목록';
+            btn.textContent = '내장 법령 목록';
             btn.className = 'law-list-btn';
             btn.onclick = showLawListModal;
             var ctrl = findReadmeControl();
