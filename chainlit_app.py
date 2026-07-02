@@ -787,8 +787,19 @@ def _collect_law_groups():
             return "주택법 계열"
         return "기타 내장 법령"
 
+    def _order_key(nm: str):
+        # 같은 법령 가족(base)끼리 묶고, 법 → 시행령 → 시행규칙 순으로 정렬.
+        base = re.sub(r"\s*(시행령|시행규칙|시행규정|규칙|규정)$", "", nm)
+        if "시행규칙" in nm or nm.endswith("규칙"):
+            rank = 2
+        elif "시행령" in nm or nm.endswith("령") or nm.endswith("규정"):
+            rank = 1
+        else:
+            rank = 0
+        return (base, rank, nm)
+
     grouped: dict = defaultdict(list)
-    for nm, (enf, prom) in sorted(laws.items()):
+    for nm, (enf, prom) in sorted(laws.items(), key=lambda kv: _order_key(kv[0])):
         grouped[_group(nm)].append((nm, fmt_date(enf) if enf else "-", prom or "-", _amend_cell(nm)))
 
     order = ["건축법 계열", "국토계획법 계열", "주택법 계열", "기타 내장 법령"]
