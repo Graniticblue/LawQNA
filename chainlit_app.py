@@ -668,6 +668,55 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
         content = f"**{ln}  {art}**{sep}{header_extra}\n\n{body}"
         elements.append(cl.Text(name=ref_name, content=content, display="side"))
 
+    # 3c) '같은 법/영/규칙 제N조' 대명사 해소 → 앞서 언급된 법령으로 팝업 마킹.
+    #     예: "「주차장법 시행령」 …" 다음의 "같은 영 제6조제2항" → 주차장법 시행령 제6조.
+    _mentions = [(mm.start(), mm.group(1).strip())
+                 for mm in re.finditer(r"「([^」]{2,40})」", answer)]
+
+    def _antecedent(pos: int, kind: str):
+        best = None
+        for mp, nm in _mentions:
+            if mp >= pos:
+                break
+            is_rule   = nm.endswith("시행규칙") or nm.endswith("규칙")
+            is_decree = nm.endswith("시행령")
+            is_law    = (nm.endswith("법") or nm.endswith("법률")) and not is_decree and not is_rule
+            if kind == "영" and is_decree:
+                best = nm
+            elif kind == "규칙" and is_rule:
+                best = nm
+            elif kind == "법" and is_law:
+                best = nm
+            elif kind in ("법시행령", "법시행규칙") and is_law:
+                best = nm + (" 시행령" if kind == "법시행령" else " 시행규칙")
+        return best
+
+    _same = re.compile(r"같은\s*(법\s*시행규칙|법\s*시행령|시행규칙|시행령|규칙|영|법)\s*"
+                       r"(제\d+조(?:의\d+)?)" + ART_EXT)
+    _KIND = {"영": "영", "시행령": "영", "법시행령": "법시행령",
+             "규칙": "규칙", "시행규칙": "규칙", "법시행규칙": "법시행규칙", "법": "법"}
+    for m in _same.finditer(answer):
+        ref_name = m.group(0).strip()
+        if ref_name in seen_names:
+            continue
+        kind = _KIND.get(re.sub(r"\s+", "", m.group(1)))
+        if not kind:
+            continue
+        law = _antecedent(m.start(), kind)
+        if not law:
+            continue
+        art = m.group(2)
+        rec = idx.get((re.sub(r"[\s·ㆍ]+", "", law), art))
+        if not rec:
+            continue
+        seen_names.add(ref_name)
+        ln = rec.get("law_name", law)
+        header_extra = get_law_header(ln, rec.get("enforcement_date", ""))
+        sep = "  ·  " if header_extra else ""
+        body = clean_article_content(rec.get("content", ""))
+        content = f"**{ln}  {art}**{sep}{header_extra}\n\n{body}"
+        elements.append(cl.Text(name=ref_name, content=content, display="side"))
+
     return answer, elements
 
 
