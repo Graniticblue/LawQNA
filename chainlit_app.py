@@ -334,6 +334,13 @@ def _clean_precedent_body(raw: str) -> str:
 
 def clean_article_content(text: str) -> str:
     """① ①, 1. 1., 가. 가. 중복 제거 + PDF 하드랩 개행 정리 + 항 마커 문단 분리"""
+    # (join 전) 끝에 딸린 '제N장/절/관 제목' 줄 제거 — 개행으로 겹쳐진 것들 반복 제거.
+    _chap_raw = re.compile(r'\n[ \t]*제\d+[장절관][ \t]+[^\n]{0,80}(?:\n[ \t]*<[^>]*>)?[ \t]*$')
+    for _ in range(4):
+        s = _chap_raw.sub('', text)
+        if s == text:
+            break
+        text = s
     text = re.sub(r'([①-⑳])\s+\1', r'\1', text)
     text = re.sub(r'(\d+\.)\s+\1\s*', r'\1 ', text)
     text = re.sub(r'([가-힣]\.)\s+\1\s*', r'\1 ', text)
@@ -345,6 +352,15 @@ def clean_article_content(text: str) -> str:
     text = text.replace('\x00', '\n')               # 구조 개행 복원
     # 항①·[전문개정]·마크다운헤더(#) 앞은 문단 분리(\n\n) — 단일 개행은 마크다운서 공백
     text = re.sub(r'\n+[ \t]*(?=[①-⑳]|\[|#)', '\n\n', text)
+    # 파싱 시 다음 조 앞에 딸려온 '제N장/절/관 제목'을 끝에서 제거 (하드랩 join 후 한 줄이 된 상태).
+    # 제목은 개행/2칸+공백으로 앞 내용과 분리됨 → 인라인 '제7장 …'(단일 공백)은 제외.
+    # 개정태그(<개정 …>)가 같은 줄이나 다음 줄에 붙어도 함께 제거. 절 제목이 겹치면 반복 제거.
+    _chap = re.compile(r'(?:\n[ \t]*|[ \t]{2,})제\d+[장절관]\s+[^\n]{1,80}?(?:\s*<[^>]*>)?\s*$')
+    for _ in range(4):
+        stripped = _chap.sub('', text)
+        if stripped == text:
+            break
+        text = stripped
     return text
 
 
