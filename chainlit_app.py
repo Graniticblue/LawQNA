@@ -601,7 +601,9 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
             law_doc_map[(law, art)] = d
 
     # 조 번호 뒤에 따라붙을 수 있는 항·호·목 패턴 (모두 선택)
-    ART_EXT = r"(?:\s*제\d+항)?(?:\s*제\d+호)?(?:\s*[가-힣]목)?"
+    # + 뒤이은 열거("및/·/, 제N호") 까지 한 덩어리로 묶어 마킹 (예: 제3항제3호 및 제4호)
+    ART_EXT = (r"(?:\s*제\d+항)?(?:\s*제\d+호)?(?:\s*[가-힣]목)?"
+               r"(?:\s*(?:및|·|ㆍ|,)\s*제\d+[항호](?:\s*[가-힣]목)?)*")
 
     for (law, art), d in law_doc_map.items():
         is_byeolpyo = "별표" in art
