@@ -762,18 +762,50 @@ def split_answer(raw: str) -> tuple[str, str]:
 # ── 출처 텍스트 ─────────────────────────────────────────────
 
 def format_sources(source_info: dict) -> str:
-    badges = []
+    """출처 섹션 텍스트. 아이콘·'참조함' 없이, 조문은 법령명만, 해석례·입법요지는
+    항목별 한 줄씩(팝업 마킹은 build_citation_elements가 처리). 내장지식은 미표시."""
+    blocks = []
+
+    # 조문 — 법령명만 (제N조 목록 대신)
     if source_info.get("db_law"):
-        badges.append(f"📋 **조문** {source_info['db_law_detail']}")
+        names = []
+        for m in re.finditer(r'([가-힣][가-힣·\s]*?(?:법|법률|령|규칙|규정))\s*(?:제\d+조|별표)',
+                             source_info.get("db_law_detail", "")):
+            nm = re.sub(r'\s+', ' ', m.group(1)).strip()
+            if nm and nm not in names:
+                names.append(nm)
+        if names:
+            blocks.append("**조문** " + ", ".join(names))
+
+    # 해석례 — 항목별 한 줄 (클릭)
     if source_info.get("db_qa"):
-        badges.append(f"📌 **해석례** {source_info['db_qa_detail']}")
+        codes = []
+        for c in re.findall(r'\d{2}-\d{4}', source_info.get("db_qa_detail", "")):
+            if c not in codes:
+                codes.append(c)
+        if codes:
+            blocks.append("**해석례**\n" + "\n".join(f"- 법제처 {c}" for c in codes))
+
+    # 입법요지 — 항목별 한 줄 (클릭)
     if source_info.get("db_amendment"):
-        badges.append(f"📖 **입법요지** {source_info['db_amendment_detail']}")
+        items = []
+        for m in re.finditer(
+            r'([가-힣][가-힣·\s]*?(?:법|령|규칙|규정))\s+\d{4}[-.\s]+\d{1,2}[-.\s]+\d{1,2}'
+            r'\s*((?:대통령령|법률|[가-힣]+부령)\s*제\d+호)',
+            source_info.get("db_amendment_detail", "")):
+            law = re.sub(r'\s+', ' ', m.group(1)).strip()
+            prom = re.sub(r'\s+', ' ', m.group(2)).strip()
+            line = f"- {law} {prom} 개정이유"
+            if line not in items:
+                items.append(line)
+        if items:
+            blocks.append("**입법요지**\n" + "\n".join(items))
+
+    # 법률 서치 필요 — 유지 (아이콘 없이)
     if source_info.get("blind_spot"):
-        badges.append(f"⚠️ **법률 서치 필요** {source_info['blind_spot_detail']}")
-    if source_info.get("internal"):
-        badges.append(f"💡 **내장지식 (일반 법리)** {source_info['internal_detail']}")
-    return "\n".join(badges)
+        blocks.append("**법률 서치 필요** " + source_info.get("blind_spot_detail", ""))
+
+    return "\n\n".join(blocks)
 
 
 # ── 섹션 접기/펼치기 ─────────────────────────────────────────
@@ -1220,10 +1252,12 @@ async def on_message(message: cl.Message):
         msg.elements = cite_elements
     await msg.update()
 
-    # 출처 요약 별도 메시지
+    # 출처 요약 별도 메시지 (해석례·입법요지 팝업 연결)
     sources_text = format_sources(source_info)
     if sources_text:
-        await cl.Message(content=f"**출처**\n{sources_text}", author="출처").send()
+        sources_text, src_elements = build_citation_elements(sources_text, result)
+        await cl.Message(content=f"**출처**\n{sources_text}", author="출처",
+                         elements=src_elements or None).send()
 
     # 사각지대 알림 + 재생성 액션 (DB 미수록 법령이 있을 때만)
     await _render_blind_spot_notice(
@@ -1402,7 +1436,9 @@ async def on_regenerate_with_fetch(action: cl.Action):
 
     sources_text = format_sources(source_info)
     if sources_text:
-        await cl.Message(content=f"**출처 (재생성)**\n{sources_text}", author="출처").send()
+        sources_text, src_elements = build_citation_elements(sources_text, result)
+        await cl.Message(content=f"**출처 (재생성)**\n{sources_text}", author="출처",
+                         elements=src_elements or None).send()
 
 
 # on_chat_end에서 업로드 컬렉션을 삭제하지 않는다 (영속화):
