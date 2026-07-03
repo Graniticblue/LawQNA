@@ -428,6 +428,12 @@ def _strip_internal_markers(text: str) -> str:
         rf'\s*\[\s*{inner}\s*[\d\s,·、]*(?:참조|참고)?\s*\]'
     )
     text = pattern.sub('', text)
+    # 낫표(「」) 변종도 제거 — 단, 「건축법」 등 실제 법령명은 보존해야 하므로
+    # '법령원문N/법령N/해석례N/판례N/입법요지N'(숫자 필수)·memo_·P- 만 대상.
+    # 결합형(「해석례2, 해석례3 참조」)도 반복 허용으로 처리.
+    _tok = r'(?:(?:법령원문|법령|해석례|판례|입법요지)\s*\d+|memo_\d+|P-\d+)'
+    corner = re.compile(rf'\s*「\s*{_tok}(?:\s*[,·、]\s*{_tok})*\s*(?:참조|참고)?\s*」')
+    text = corner.sub('', text)
     # 빈 괄호류 제거
     text = re.sub(r'\(\s*\)', '', text)
     # 중복 공백 정리
