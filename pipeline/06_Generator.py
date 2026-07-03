@@ -1409,6 +1409,13 @@ class Generator:
         answer, removed_cites = strip_unverified_citations(answer, allowed_codes)
         # 인용 괄호 끝의 '참조' 제거: "(법제처 12-0596 참조)" → "(법제처 12-0596)"
         answer = re.sub(r"\s*참조(?=\s*\))", "", answer)
+        # 스트립 잔재("관련 국토교통부 회신" 등)가 출처 목록에 불릿으로만 남으면 제거
+        # (식별번호 없는 환각 잔재라 출처로서 무의미). 문장 중간 인용은 보존.
+        answer = re.sub(
+            r"(?m)^[ \t>*\-•·]*관련\s*"
+            r"(?:국토교통부|국토부|행정안전부|행정자치부|법제처|대법원|헌법재판소)?\s*"
+            r"(?:회신|해석례|판례|행정해석)\s*$\n?",
+            "", answer)
         if verbose and removed_cites:
             print(f"\n  [거짓인용 차단] {len(removed_cites)}건: {removed_cites}")
 

@@ -544,26 +544,33 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
     seen_names: set[str] = set()
 
     # 0) 입법요지N → "재개정이유 - 공포번호" 치환 + 클릭 element (개정이유 줌인)
-    #    (_strip_internal_markers가 [입법요지N]을 지우기 전에 먼저 처리)
+    #    부록의 "…대통령령 제NNNNN호 개정이유" 형식도 같은 팝업으로 마킹.
     for i, rec in enumerate(amendment_docs, 1):
-        pat = re.compile(rf"\[?\s*입법요지\s*{i}\s*(?:참조)?\s*\]?")
-        if not pat.search(answer):
-            continue
         prom = rec.get("공포번호", "") or ""
         enf  = rec.get("시행일", "") or ""
-        label = f"재개정이유 - {prom}" if prom else f"재개정이유 {i}"
-        answer = pat.sub(label, answer)
-        if label in seen_names:
-            continue
-        seen_names.add(label)
         reason = rec.get("개정이유", "") or ""
         kp = rec.get("목적론적_키포인트", "")
         kp = "\n".join(kp) if isinstance(kp, list) else (str(kp) if kp else "")
+        label = f"재개정이유 - {prom}" if prom else f"재개정이유 {i}"
         header = f"**{label}**" + (f"  ·  시행 {enf}" if enf else "")
         content = f"{header}\n\n**개정이유**\n{reason}"
         if kp:
             content += f"\n\n**핵심 취지**\n{kp}"
-        elements.append(cl.Text(name=label, content=content, display="side"))
+
+        pat = re.compile(rf"\[?\s*입법요지\s*{i}\s*(?:참조)?\s*\]?")
+        if pat.search(answer):
+            answer = pat.sub(label, answer)
+            if label not in seen_names:
+                seen_names.add(label)
+                elements.append(cl.Text(name=label, content=content, display="side"))
+        # 부록 형식 "공포번호 개정이유"도 동일 팝업으로 (본문 header의 공포번호와 안 헷갈리게 '개정이유' 필수)
+        if prom:
+            for m in re.finditer(re.escape(prom) + r"\s*개정이유", answer):
+                rn = m.group(0).strip()
+                if rn in seen_names:
+                    continue
+                seen_names.add(rn)
+                elements.append(cl.Text(name=rn, content=content, display="side"))
 
     # 1) 잔존 내부 마커 제거 (LLM이 가끔 무시하고 출력해도 안전망)
     answer = _strip_internal_markers(answer)
