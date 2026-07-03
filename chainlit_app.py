@@ -316,6 +316,22 @@ def get_law_header(law_name: str, enforcement_date: str) -> str:
 
 # ── content 중복 번호 제거 ────────────────────────────────────
 
+def _clean_precedent_body(raw: str) -> str:
+    """해석례/판례 팝업 본문 정리: 인제스트 때 붙인 내부 섹션과 moleg 프린트 잔재 제거.
+    - [답변] 이후만 남김(앞의 [태그]/[요약]/[질문]/[참조] 프리앰블 제거)
+    - 위치 무관 내부 마커([태그]/[요약]/[검색태그]/[참조]/[질문]) 제거
+    - moleg 프린트 URL·페이지번호·타임스탬프 제거
+    """
+    mk = re.search(r"\[\s*답변\s*\]", raw)
+    body = raw[mk.end():] if mk else raw
+    body = re.sub(r"\[\s*(?:검색태그|태그|요약|참조|질문|질의배경)\s*\][^\n]*", "", body)
+    body = re.sub(r"https?://[^\s]*moleg\.go\.kr[^\s]*", "", body)
+    # "1 / 4", "4 / 42026-05-28 오후 3:26" 류 페이지·인쇄시각 잔재
+    body = re.sub(r"\d+\s*/\s*\d+\s*(?:20\d{2}-\d{1,2}-\d{1,2}\s*오[전후]\s*\d{1,2}:\d{2})?", "", body)
+    body = re.sub(r"20\d{2}-\d{1,2}-\d{1,2}\s*오[전후]\s*\d{1,2}:\d{2}", "", body)
+    return body.strip()
+
+
 def clean_article_content(text: str) -> str:
     """① ①, 1. 1., 가. 가. 중복 제거 + PDF 하드랩 개행 정리 + 항 마커 문단 분리"""
     text = re.sub(r'([①-⑳])\s+\1', r'\1', text)
@@ -557,7 +573,7 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
         if doc is None:
             continue
         q   = doc.metadata.get("question", "")
-        ans = clean_article_content((doc.content or "")[:3000])
+        ans = clean_article_content(_clean_precedent_body(doc.content or "")[:15000])
         date = doc.metadata.get("doc_date", "")
         header = f"**법제처 {code}**" + (f"  ·  {date}" if date else "")
         content = f"{header}\n\n**질문**\n{q}\n\n**답변**\n{ans}"
@@ -581,7 +597,7 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
             continue
         court = doc.metadata.get("court", "")
         date  = doc.metadata.get("decision_date", "")
-        body  = clean_article_content((doc.content or "")[:3000])
+        body  = clean_article_content((doc.content or "")[:15000])
         header_parts = [x for x in [court, cid] if x]
         if date:
             header_parts.append(f"({date} 선고)")
