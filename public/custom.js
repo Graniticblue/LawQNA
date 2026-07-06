@@ -95,6 +95,46 @@
             .catch(function () { ov.querySelector('.law-list-content').innerText = '목록을 불러오지 못했습니다.'; });
     }
 
+    // ── 업로드 캐시: 헤더 버튼 + 모달 (목록·개별 삭제) ─────────────
+    function loadUploadCache(ov) {
+        fetch('/upload-cache')
+            .then(function (r) { return r.text(); })
+            .then(function (h) { ov.querySelector('.law-list-content').innerHTML = h; })
+            .catch(function () { ov.querySelector('.law-list-content').innerText = '목록을 불러오지 못했습니다.'; });
+    }
+
+    function showUploadModal() {
+        var ov = document.getElementById('upload-cache-modal');
+        if (ov) { ov.style.display = 'flex'; loadUploadCache(ov); return; }
+        ov = document.createElement('div');
+        ov.id = 'upload-cache-modal';
+        ov.innerHTML =
+            '<div class="law-list-box">' +
+            '<button class="law-list-close" aria-label="닫기">✕</button>' +
+            '<div class="law-list-content">불러오는 중…</div>' +
+            '</div>';
+        ov.addEventListener('click', function (e) {
+            if (e.target === ov) { ov.style.display = 'none'; return; }
+            var b = e.target.closest && e.target.closest('.law-list-del');
+            if (b) {   // 삭제 버튼 (이벤트 위임)
+                b.disabled = true; b.textContent = '삭제 중…';
+                fetch('/upload-cache/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ law_name: b.dataset.law }),
+                })
+                    .then(function () { loadUploadCache(ov); })
+                    .catch(function () { b.disabled = false; b.textContent = '삭제'; });
+            }
+        });
+        ov.querySelector('.law-list-close').onclick = function () { ov.style.display = 'none'; };
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') { var m = document.getElementById('upload-cache-modal'); if (m) m.style.display = 'none'; }
+        });
+        document.body.appendChild(ov);
+        loadUploadCache(ov);
+    }
+
     function insertLawListButton() {
         try {
             if (document.getElementById('law-list-btn')) return;
@@ -109,6 +149,14 @@
             btn.className = 'law-list-btn';
             btn.onclick = showLawListModal;
             readme.parentElement.insertBefore(btn, readme);
+            // 업로드 자료 버튼 (내장 법령 목록과 Readme 사이)
+            var ub = document.createElement('button');
+            ub.id = 'upload-cache-btn';
+            ub.type = 'button';
+            ub.textContent = '업로드 자료';
+            ub.className = 'law-list-btn';
+            ub.onclick = showUploadModal;
+            readme.parentElement.insertBefore(ub, readme);
             // 등간격화: Readme와 우측 인접 항목(아이콘) 사이 네이티브 간격을 측정해
             // 내 버튼 간격을 동일하게 맞춘다. (측정 실패 시 CSS margin-right 폴백)
             requestAnimationFrame(function () {

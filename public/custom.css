@@ -59,7 +59,8 @@ a[href*="github.com/Chainlit"],
     z-index: 99999;
 }
 
-#law-list-modal {
+#law-list-modal,
+#upload-cache-modal {
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.45);
@@ -68,6 +69,20 @@ a[href*="github.com/Chainlit"],
     justify-content: center;
     z-index: 10000;
 }
+
+/* 업로드 캐시 모달 — 삭제 버튼 */
+.law-list-del {
+    background: #fff;
+    color: #C62828;
+    border: 1px solid #E57373;
+    border-radius: 6px;
+    padding: 3px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.law-list-del:hover { background: #FFEBEE; }
+.law-list-del:disabled { opacity: 0.6; cursor: default; }
 
 .law-list-box {
     background: #fff;

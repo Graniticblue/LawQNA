@@ -99,21 +99,78 @@ try:
         return FileResponse(str(p), media_type="text/plain; charset=utf-8")
 
     # 내장 법령 목록 HTML (헤더 버튼 모달이 fetch)
-    from fastapi.responses import HTMLResponse
+    from fastapi import Request
+    from fastapi.responses import HTMLResponse, JSONResponse
 
     @_cl_server_app.get("/law-list")
     async def _law_list_html():
         return HTMLResponse(build_law_db_html())
 
+    # 업로드 캐시 조회/삭제 (헤더 버튼 모달 — anon_id 쿠키로 본인 것만)
+    def _upload_col(key: str):
+        import chromadb
+        path = os.environ.get("CHROMA_DB_PATH", str(BASE_DIR / "data" / "chroma_db"))
+        return chromadb.PersistentClient(path=path).get_collection(f"upload_{key[:16]}")
+
+    @_cl_server_app.get("/upload-cache")
+    async def _upload_cache_html(request: Request):
+        import html as _h
+        key = request.cookies.get("anon_id", "")
+        agg: dict = {}
+        if key:
+            try:
+                metas = _upload_col(key).get(include=["metadatas"], limit=10000)["metadatas"]
+                for m in metas:
+                    ln = m.get("law_name", "업로드 법령")
+                    e = agg.setdefault(ln, {"chunks": 0, "ord": False})
+                    e["chunks"] += 1
+                    if m.get("is_ordinance") == "true":
+                        e["ord"] = True
+            except Exception:
+                pass
+        parts = ['<div class="law-db">', "<h2>📂 업로드 캐시</h2>"]
+        if not agg:
+            parts.append("<p>업로드된 자료가 없습니다. PDF를 첨부하면 여기에 저장됩니다.</p>")
+        else:
+            parts.append("<table><thead><tr><th>자료</th><th>청크</th><th></th></tr></thead><tbody>")
+            for ln in sorted(agg):
+                e = agg[ln]
+                tag = " · 조례(업로드한 대화 한정)" if e["ord"] else ""
+                parts.append(
+                    f"<tr><td>{_h.escape(ln)}{_h.escape(tag)}</td><td>{e['chunks']}</td>"
+                    f'<td><button class="law-list-del" data-law="{_h.escape(ln, quote=True)}">삭제</button></td></tr>')
+            parts.append("</tbody></table>")
+            parts.append('<p class="law-db-foot">미사용 30일 후엔 자동 정리됩니다.</p>')
+        parts.append("</div>")
+        return HTMLResponse("\n".join(parts))
+
+    @_cl_server_app.post("/upload-cache/delete")
+    async def _upload_cache_delete(request: Request):
+        key = request.cookies.get("anon_id", "")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        law = (body or {}).get("law_name", "")
+        n = 0
+        if key and law:
+            try:
+                col = _upload_col(key)
+                ids = col.get(where={"law_name": {"$eq": law}}, include=[], limit=10000)["ids"]
+                if ids:
+                    col.delete(ids=ids)
+                n = len(ids)
+            except Exception:
+                pass
+        return JSONResponse({"deleted": n})
+
     # Chainlit SPA catch-all(/{full_path:path} → index.html)보다 먼저 매칭되도록
-    # 방금 등록한 라우트들을 라우터 맨 앞으로 옮긴다.
-    _cl_server_app.router.routes.insert(0, _cl_server_app.router.routes.pop())  # /law-list
-    # /element-files 라우트를 앞으로 (위 insert로 한 칸 밀렸으니 다시 find해 이동)
-    for _i, _r in enumerate(_cl_server_app.router.routes):
-        if getattr(_r, "path", "") == "/element-files/{object_key:path}":
-            _cl_server_app.router.routes.insert(0, _cl_server_app.router.routes.pop(_i))
-            break
-    print("[element-storage] /element-files·/law-list 서빙 라우트 등록(우선순위 최상단)")
+    # 커스텀 라우트들을 라우터 맨 앞으로 재배열.
+    _MY_PATHS = {"/element-files/{object_key:path}", "/law-list", "/upload-cache", "/upload-cache/delete"}
+    _front = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") in _MY_PATHS]
+    _rest  = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") not in _MY_PATHS]
+    _cl_server_app.router.routes[:] = _front + _rest
+    print("[element-storage] /element-files·/law-list·/upload-cache 라우트 등록(우선순위 최상단)")
 except Exception as _e:
     print(f"[element-storage] 서빙 라우트 등록 실패: {_e}")
 
