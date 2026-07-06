@@ -178,6 +178,81 @@
         } catch (e) { /* DOM 변동 중 실패는 무시(다음 mutation에 재시도) */ }
     }
 
+    // ── 왼쪽 대화 이력 사이드바: 드래그 리사이즈 ───────────────────
+    // shadcn Sidebar는 --sidebar-width를 .group/sidebar-wrapper에 인라인(비-important)
+    // 지정 → 우리가 만든 <style> 태그(문서 마지막에 삽입돼 동일 !important끼리는
+    // 나중 규칙이 이김)로 매 드래그마다 값을 덮어써 실시간 리사이즈를 구현한다.
+    var SB_MIN = 220, SB_MAX = 560, SB_KEY = 'sidebar_width_px';
+
+    function sidebarStyleEl() {
+        var el = document.getElementById('sidebar-resize-style');
+        if (!el) {
+            el = document.createElement('style');
+            el.id = 'sidebar-resize-style';
+            document.head.appendChild(el);
+        }
+        return el;
+    }
+
+    function setSidebarWidthPx(px) {
+        px = Math.max(SB_MIN, Math.min(SB_MAX, Math.round(px)));
+        sidebarStyleEl().textContent =
+            '.group\\/sidebar-wrapper{--sidebar-width:' + px + 'px !important}';
+        return px;
+    }
+
+    (function restoreSidebarWidth() {
+        try {
+            var saved = parseInt(localStorage.getItem(SB_KEY), 10);
+            if (saved) setSidebarWidthPx(saved);
+        } catch (e) { /* localStorage 불가(프라이빗 모드 등) — 기본값 유지 */ }
+    })();
+
+    function insertSidebarResizeHandle() {
+        try {
+            var inner = document.querySelector('[data-sidebar="sidebar"]');
+            var panel = inner && inner.parentElement;   // fixed, width: var(--sidebar-width)
+            if (!panel) return;
+            var handle = document.getElementById('sidebar-resize-handle');
+
+            // 접힘(icon rail, ~48px)·모바일 숨김 상태에선 핸들 숨김 — 그 상태는 리사이즈 대상 아님
+            if (panel.getBoundingClientRect().width < 100) {
+                if (handle) handle.style.display = 'none';
+                return;
+            }
+
+            if (!handle) {
+                handle = document.createElement('div');
+                handle.id = 'sidebar-resize-handle';
+                panel.style.position = panel.style.position || 'fixed';
+                panel.appendChild(handle);
+
+                var dragging = false, startX = 0, startW = 0, lastPx = 0;
+                handle.addEventListener('mousedown', function (e) {
+                    dragging = true;
+                    startX = e.clientX;
+                    startW = panel.getBoundingClientRect().width;
+                    lastPx = startW;
+                    document.body.style.cursor = 'col-resize';
+                    document.body.style.userSelect = 'none';
+                    e.preventDefault();
+                });
+                document.addEventListener('mousemove', function (e) {
+                    if (!dragging) return;
+                    lastPx = setSidebarWidthPx(startW + (e.clientX - startX));
+                });
+                document.addEventListener('mouseup', function () {
+                    if (!dragging) return;
+                    dragging = false;
+                    document.body.style.cursor = '';
+                    document.body.style.userSelect = '';
+                    try { localStorage.setItem(SB_KEY, String(lastPx)); } catch (e) { }
+                });
+            }
+            handle.style.display = 'block';
+        } catch (e) { /* 다음 mutation에 재시도 */ }
+    }
+
     function update() {
         if (hasMessages()) {
             removeLogo();
@@ -186,6 +261,7 @@
         }
         layoutStarters();
         insertLawListButton();
+        insertSidebarResizeHandle();
     }
 
     const observer = new MutationObserver(update);
