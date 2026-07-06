@@ -109,6 +109,59 @@ def _fetch_law_id(law_name: str) -> str | None:
         return None
 
 
+def _as_list(v):
+    """API가 단건일 때 dict, 복수일 때 list로 주는 필드를 항상 list로 통일."""
+    if v is None:
+        return []
+    return [v] if isinstance(v, dict) else v
+
+
+def _as_text(v) -> str:
+    """*내용 필드값을 안전하게 문자열로. 보통은 str이지만, 개정 이력이 겹친
+    항목은 (중첩)리스트로 오기도 해서(예: 조문참고자료처럼) 재귀적으로 펼쳐 합친다."""
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v.strip()
+    if isinstance(v, list):
+        return "\n".join(t for t in (_as_text(x) for x in v) if t)
+    return str(v).strip()
+
+
+def _build_article_text(unit: dict) -> str:
+    """조문단위 하나 → 완전한 조문 텍스트(제목+본문).
+
+    법제처 API는 항(①②③)이 여러 개인 조문일 경우 최상위 조문내용에는
+    "제34조(직통계단의 설치)"처럼 제목만 담고, 실제 본문은 항[].항내용
+    (중첩된 호[].호내용, 목[].목내용)에 따로 담아 내려준다. 조문내용만
+    읽으면 다항 조문 본문이 통째로 누락되므로 항/호/목을 재귀적으로 이어붙인다.
+    (단문 조문은 항 자체가 없고 조문내용에 전체가 들어있어 그대로 반환됨.)
+    """
+    lines = []
+    head = _as_text(unit.get("조문내용"))
+    if head:
+        lines.append(head)
+    for hang in _as_list(unit.get("항")):
+        if not isinstance(hang, dict):
+            continue
+        hang_text = _as_text(hang.get("항내용"))
+        if hang_text:
+            lines.append(hang_text)
+        for ho in _as_list(hang.get("호")):
+            if not isinstance(ho, dict):
+                continue
+            ho_text = _as_text(ho.get("호내용"))
+            if ho_text:
+                lines.append(ho_text)
+            for mok in _as_list(ho.get("목")):
+                if not isinstance(mok, dict):
+                    continue
+                mok_text = _as_text(mok.get("목내용"))
+                if mok_text:
+                    lines.append(mok_text)
+    return "\n".join(lines)
+
+
 def _fetch_full_law(law_id: str) -> dict[str, str]:
     """
     법령ID(법령일련번호/MST)로 전체 조문 조회.
@@ -116,7 +169,9 @@ def _fetch_full_law(law_id: str) -> dict[str, str]:
 
     API 응답 구조:
       조문단위[].조문여부 == "조문"  →  실제 조항 (chapter heading은 "전문")
-      조문단위[].조문내용  →  "제1조(목적) 내용..." 형태로 조문번호 포함
+      조문단위[].조문내용  →  단문 조문은 전체 내용, 다항 조문은 제목만
+      조문단위[].항[].항내용 / 항[].호[].호내용 / 호[].목[].목내용  →  다항 조문의 실제 본문
+      (_build_article_text가 위 구조를 전부 이어붙여 완전한 텍스트를 만든다)
     """
     key = _get_api_key()
     articles: dict[str, str] = {}
@@ -137,7 +192,7 @@ def _fetch_full_law(law_id: str) -> dict[str, str]:
         for unit in units:
             if unit.get("조문여부") != "조문":
                 continue
-            content = unit.get("조문내용", "").strip()
+            content = _build_article_text(unit)
             if not content:
                 continue
             # 조문내용 첫머리에서 "제N조" 또는 "제N조의N" 추출
