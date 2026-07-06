@@ -1133,6 +1133,37 @@ class HybridSearcher:
                 break
         return results
 
+    def list_uploaded_docs(self, session_id: str) -> list[dict]:
+        """업로드 캐시 내용 조회: 법령명별 청크 수·조례 여부 집계."""
+        col = self._session_cols.get(session_id)
+        if col is None or col.count() == 0:
+            return []
+        try:
+            metas = col.get(include=["metadatas"], limit=10000)["metadatas"]
+        except Exception:
+            return []
+        agg: dict = {}
+        for m in metas:
+            ln = m.get("law_name", "업로드 법령")
+            e = agg.setdefault(ln, {"law_name": ln, "chunks": 0, "is_ordinance": False})
+            e["chunks"] += 1
+            if m.get("is_ordinance") == "true":
+                e["is_ordinance"] = True
+        return sorted(agg.values(), key=lambda x: x["law_name"])
+
+    def delete_uploaded_doc(self, session_id: str, law_name: str) -> int:
+        """업로드 캐시에서 특정 법령(law_name)의 청크만 삭제. 반환: 삭제 청크 수."""
+        col = self._session_cols.get(session_id)
+        if col is None:
+            return 0
+        try:
+            ids = col.get(where={"law_name": {"$eq": law_name}}, include=[], limit=10000)["ids"]
+            if ids:
+                col.delete(ids=ids)
+            return len(ids)
+        except Exception:
+            return 0
+
     def delete_session_collection(self, key: str) -> None:
         """업로드 컬렉션 명시적 삭제 (예: '대화 초기화'에서 호출)."""
         col_name = f"upload_{key[:16]}"
@@ -1705,6 +1736,12 @@ class Retriever:
 
     def search_uploaded(self, session_id: str, query: str, top_k: int = 5, thread_id: str = "") -> list:
         return self._searcher.search_uploaded(session_id, query, top_k, thread_id)
+
+    def list_uploaded_docs(self, session_id: str) -> list[dict]:
+        return self._searcher.list_uploaded_docs(session_id)
+
+    def delete_uploaded_doc(self, session_id: str, law_name: str) -> int:
+        return self._searcher.delete_uploaded_doc(session_id, law_name)
 
     def delete_session_collection(self, session_id: str) -> None:
         self._searcher.delete_session_collection(session_id)

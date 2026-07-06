@@ -1122,11 +1122,59 @@ async def on_new_chat(action: cl.Action):
     await cl.Message(content="대화 이력이 초기화되었습니다. 새 질의를 입력해 주세요.").send()
 
 
+async def _show_upload_cache():
+    """업로드 캐시 목록 + 항목별 삭제 버튼."""
+    session_id = cl.user_session.get("upload_key", "")
+    gen = get_generator()
+    retriever = gen._get_retriever()
+    docs = await asyncio.to_thread(retriever.list_uploaded_docs, session_id)
+    if not docs:
+        await cl.Message(content="업로드 캐시가 비어 있습니다. PDF를 첨부하면 여기에 저장됩니다.").send()
+        return
+    lines = ["**📂 업로드 캐시**", ""]
+    actions = []
+    for d in docs:
+        tag = " · 조례(업로드한 대화 한정)" if d["is_ordinance"] else ""
+        lines.append(f"- **{d['law_name']}** ({d['chunks']}개 청크){tag}")
+        actions.append(cl.Action(
+            name="delete_upload",
+            label=f"🗑 {d['law_name'][:28]} 삭제",
+            payload={"law_name": d["law_name"]},
+        ))
+    lines.append("")
+    lines.append("아래 버튼으로 개별 삭제할 수 있습니다. (미사용 30일 후엔 자동 정리)")
+    await cl.Message(content="\n".join(lines), actions=actions).send()
+
+
+@cl.action_callback("delete_upload")
+async def on_delete_upload(action: cl.Action):
+    law_name = (action.payload or {}).get("law_name", "")
+    session_id = cl.user_session.get("upload_key", "")
+    gen = get_generator()
+    retriever = gen._get_retriever()
+    n = await asyncio.to_thread(retriever.delete_uploaded_doc, session_id, law_name)
+    await action.remove()
+    # 세션 pdf_list에서도 제거
+    pdf_list = [p for p in cl.user_session.get("pdf_list", []) if p != law_name]
+    cl.user_session.set("pdf_list", pdf_list)
+    if not pdf_list:
+        cl.user_session.set("pdf_ready", False)
+    await cl.Message(content=f"🗑 **{law_name}** 삭제 완료 ({n}개 청크).").send()
+
+
+_UPLOAD_CACHE_TRIGGERS = {"업로드 목록", "업로드 캐시", "업로드 관리", "/uploads"}
+
+
 @cl.on_message
 async def on_message(message: cl.Message):
     # ── 법령 목록 트리거 ──────────────────────────────────────
     if message.content.strip() == _LAW_LIST_TRIGGER:
         await cl.Message(content=build_law_db_info()).send()
+        return
+
+    # ── 업로드 캐시 조회/삭제 트리거 ──────────────────────────
+    if message.content.strip() in _UPLOAD_CACHE_TRIGGERS:
+        await _show_upload_cache()
         return
 
     # ── PDF 첨부 처리 ─────────────────────────────────────────
