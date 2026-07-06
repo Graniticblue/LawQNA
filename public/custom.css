@@ -1,3 +1,15 @@
+/* Pretendard 웹폰트 — 가변폰트(동적 서브셋)로 필요한 글리프만 로드 */
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@latest/dist/web/variable/pretendardvariable-dynamic-subset.css');
+
+/* Chainlit 번들이 :root에서 --font-sans: "Inter" 를 지정 (custom.css보다 뒤에 로드돼
+   동일 셀렉터로는 번들이 이김) → !important로 우선순위 확보. 전체 UI가 var(--font-sans)를
+   참조하므로 이 한 줄로 일괄 적용된다. Pretendard가 라틴 글리프도 포함해 Inter 없이도
+   영문·숫자가 자연스럽다. */
+:root {
+    --font-sans: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont,
+        system-ui, Roboto, 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif !important;
+}
+
 /* Chainlit 로고 숨김 */
 img[alt="logo"],
 img[alt="Chainlit"],
