@@ -1056,8 +1056,9 @@ class HybridSearcher:
         except Exception as e:
             print(f"[업로드 컬렉션 생성 실패] {e}")
 
-    def index_uploaded_chunks(self, session_id: str, chunks: list[dict]) -> int:
-        """청크를 세션 컬렉션에 임베딩하여 저장. 반환: 저장된 청크 수."""
+    def index_uploaded_chunks(self, session_id: str, chunks: list[dict], thread_id: str = "") -> int:
+        """청크를 세션 컬렉션에 임베딩하여 저장. 반환: 저장된 청크 수.
+        조례(법령명에 '조례' 포함)는 업로드한 대화(thread_id)에서만 검색되도록 태깅한다."""
         col = self._session_cols.get(session_id)
         if col is None:
             return 0
@@ -1066,12 +1067,15 @@ class HybridSearcher:
         batch_uid = uuid.uuid4().hex[:8]   # PDF(호출)마다 고유 → 여러 PDF 업로드 시 id 충돌 방지
         ids, texts, metas = [], [], []
         for i, chunk in enumerate(chunks):
+            ln = chunk.get("law_name", "업로드 법령")
             ids.append(f"{session_id[:8]}_{batch_uid}_{i}")
             texts.append(chunk["content"][:6000])
             metas.append({
-                "law_name": chunk.get("law_name", "업로드 법령"),
+                "law_name": ln,
                 "article_no": chunk.get("article_no", f"chunk_{i}"),
                 "source": "uploaded",
+                "is_ordinance": "true" if "조례" in ln else "false",
+                "thread_id": thread_id or "",
             })
 
         if not ids:
@@ -1085,14 +1089,16 @@ class HybridSearcher:
         col.add(ids=ids, embeddings=embeddings, documents=texts, metadatas=metas)
         return len(ids)
 
-    def search_uploaded(self, session_id: str, query: str, top_k: int = 5) -> list:
-        """세션 컬렉션에서 유사도 검색. RetrievedDoc 리스트 반환."""
+    def search_uploaded(self, session_id: str, query: str, top_k: int = 5, thread_id: str = "") -> list:
+        """세션 컬렉션에서 유사도 검색. RetrievedDoc 리스트 반환.
+        조례는 업로드한 대화(thread_id)에서만 노출 — 다른 채팅방으로 유출 방지."""
         col = self._session_cols.get(session_id)
         if col is None or col.count() == 0:
             return []
 
         query_emb = self._embed_text(query)
-        n = min(top_k, col.count())
+        # 조례 스레드 필터로 일부가 걸러질 수 있어 넉넉히 뽑은 뒤 top_k로 자른다.
+        n = min(max(top_k * 3, top_k), col.count())
         try:
             res = col.query(
                 query_embeddings=[query_emb],
@@ -1106,6 +1112,11 @@ class HybridSearcher:
         for doc, meta, dist in zip(
             res["documents"][0], res["metadatas"][0], res["distances"][0]
         ):
+            # 조례인데 다른 대화에서 업로드된 것이면 제외 (thread_id 불일치)
+            if meta.get("is_ordinance") == "true":
+                tid = meta.get("thread_id", "")
+                if tid and thread_id and tid != thread_id:
+                    continue
             score = max(0.0, 1.0 - dist)
             if score < 0.3:
                 continue
@@ -1118,6 +1129,8 @@ class HybridSearcher:
                 score_type="vector",
                 metadata={"source": "uploaded"},
             ))
+            if len(results) >= top_k:
+                break
         return results
 
     def delete_session_collection(self, key: str) -> None:
@@ -1687,11 +1700,11 @@ class Retriever:
     def create_session_collection(self, session_id: str) -> None:
         self._searcher.create_session_collection(session_id)
 
-    def index_uploaded_chunks(self, session_id: str, chunks: list[dict]) -> int:
-        return self._searcher.index_uploaded_chunks(session_id, chunks)
+    def index_uploaded_chunks(self, session_id: str, chunks: list[dict], thread_id: str = "") -> int:
+        return self._searcher.index_uploaded_chunks(session_id, chunks, thread_id)
 
-    def search_uploaded(self, session_id: str, query: str, top_k: int = 5) -> list:
-        return self._searcher.search_uploaded(session_id, query, top_k)
+    def search_uploaded(self, session_id: str, query: str, top_k: int = 5, thread_id: str = "") -> list:
+        return self._searcher.search_uploaded(session_id, query, top_k, thread_id)
 
     def delete_session_collection(self, session_id: str) -> None:
         self._searcher.delete_session_collection(session_id)

@@ -1035,7 +1035,7 @@ class Generator:
             self._retriever = mod.Retriever()
         return self._retriever
 
-    def generate(self, query: str, verbose: bool = True, extra_context: str = "", session_id: str = "", stream_callback=None, provider: str = "gemini", as_of_date: str = "", exclude_doc_codes: set = None, as_of_code: str = "") -> dict:
+    def generate(self, query: str, verbose: bool = True, extra_context: str = "", session_id: str = "", stream_callback=None, provider: str = "gemini", as_of_date: str = "", exclude_doc_codes: set = None, as_of_code: str = "", thread_id: str = "") -> dict:
         """
         2-pass 생성 실행.
         반환: {"query", "pass1", "context", "answer"}
@@ -1139,7 +1139,7 @@ class Generator:
         # 업로드 법령 검색 (세션 컬렉션)
         uploaded_docs = []
         if session_id:
-            uploaded_docs = retriever.search_uploaded(session_id, search_query, top_k=5)
+            uploaded_docs = retriever.search_uploaded(session_id, search_query, top_k=5, thread_id=thread_id)
             if verbose and uploaded_docs:
                 print(f"→ 업로드 법령 {len(uploaded_docs)}건 검색됨")
 

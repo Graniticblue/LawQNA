@@ -852,7 +852,8 @@ def make_collapsible_html(body: str) -> str:
 # ── 스트리밍 생성 ─────────────────────────────────────────────
 
 async def generate_streaming(gen, query: str, extra_context: str, session_id: str,
-                             provider: str = "gemini", model_label: str = "⚡ Gemini"):
+                             provider: str = "gemini", model_label: str = "⚡ Gemini",
+                             thread_id: str = ""):
     token_q: _queue.Queue = _queue.Queue()
     result_holder: list = [None]
     error_holder:  list = [None]
@@ -866,6 +867,7 @@ async def generate_streaming(gen, query: str, extra_context: str, session_id: st
                 query, False, extra_context, session_id,
                 stream_callback=stream_cb,
                 provider=provider,
+                thread_id=thread_id,
             )
         except Exception as e:
             error_holder[0] = e
@@ -1057,6 +1059,16 @@ async def set_starters():
     return random.sample(_STARTER_POOL, k=min(4, len(_STARTER_POOL)))
 
 
+def _thread_scope() -> str:
+    """조례 등 대화 한정 업로드의 스코프 키. 대화(thread) 단위로 고정 —
+    thread_id가 아직 없으면 세션 id로 폴백. 같은 대화 내에선 일관된 값."""
+    try:
+        tid = getattr(cl.context.session, "thread_id", None)
+        return tid or cl.context.session.id
+    except Exception:
+        return ""
+
+
 def _init_session():
     cl.user_session.set("pdf_list", [])
     cl.user_session.set("pdf_ready", False)
@@ -1142,11 +1154,13 @@ async def on_message(message: cl.Message):
             await indexing_msg.send()
 
             session_id = cl.user_session.get("upload_key", "")
+            thread_scope = _thread_scope()
 
-            async def do_index(chunks=chunks, session_id=session_id, msg=indexing_msg, label=law_label):
+            async def do_index(chunks=chunks, session_id=session_id, thread_scope=thread_scope,
+                               msg=indexing_msg, label=law_label):
                 gen = get_generator()
                 retriever = gen._get_retriever()
-                n = await asyncio.to_thread(retriever.index_uploaded_chunks, session_id, chunks)
+                n = await asyncio.to_thread(retriever.index_uploaded_chunks, session_id, chunks, thread_scope)
 
                 pdf_list = cl.user_session.get("pdf_list", [])
                 if label not in pdf_list:
@@ -1228,7 +1242,8 @@ async def on_message(message: cl.Message):
 
     try:
         msg, result = await generate_streaming(
-            gen, query, extra_context, session_id, provider, model_label
+            gen, query, extra_context, session_id, provider, model_label,
+            thread_id=_thread_scope()
         )
     except Exception as e:
         await cl.Message(content=f"오류가 발생했습니다: {e}").send()
@@ -1414,7 +1429,8 @@ async def on_regenerate_with_fetch(action: cl.Action):
     session_id = cl.user_session.get("upload_key", "")
     try:
         msg, result = await generate_streaming(
-            gen, query, extra_context, session_id, provider, model_label
+            gen, query, extra_context, session_id, provider, model_label,
+            thread_id=_thread_scope()
         )
     except Exception as e:
         await cl.Message(content=f"재생성 오류: {e}").send()
