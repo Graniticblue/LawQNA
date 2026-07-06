@@ -10,6 +10,15 @@
         system-ui, Roboto, 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif !important;
 }
 
+/* 왼쪽 대화 이력 사이드바 너비 — 기본 16rem(256px)을 20rem(320px)으로.
+   shadcn Sidebar가 --sidebar-width를 .group/sidebar-wrapper 요소에 인라인
+   스타일(style={{"--sidebar-width": "16rem"}})로 지정하므로, 같은 요소를
+   직접 겨냥해야 !important가 인라인을 이긴다(:root 오버라이드는 안 먹음 —
+   상속은 각 요소의 고유 지정값이 있으면 무시되기 때문). 값만 바꾸면 너비 조절됨. */
+.group\/sidebar-wrapper {
+    --sidebar-width: 20rem !important;
+}
+
 /* Chainlit 로고 숨김 */
 img[alt="logo"],
 img[alt="Chainlit"],
