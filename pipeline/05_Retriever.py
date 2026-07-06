@@ -231,6 +231,18 @@ def _normalize_middot(s: str) -> str:
     return s.replace("ㆍ", "·").replace("・", "·").replace("‧", "·")
 
 
+_REGION_PAT = re.compile(
+    r'^([가-힣]+(?:특별자치시|특별자치도|광역시|특별시|시|군|구|도))(?=\s|$)'
+)
+
+
+def _extract_region(law_name: str) -> str:
+    """조례 법령명 앞부분에서 지역명 추출 (예: '남양주시 건축 조례' → '남양주시').
+    다른 대화의 질문에 이 지역명이 언급되면 조례 스레드 스코프 예외를 허용하는 데 쓰인다."""
+    m = _REGION_PAT.match(law_name.strip())
+    return m.group(1) if m else ""
+
+
 def _parse_law_hint(hint: str) -> tuple[str, str, bool]:
     """
     "건축법 시행령 별표1" → ("건축법 시행령", "별표1", True)
@@ -1091,7 +1103,8 @@ class HybridSearcher:
 
     def search_uploaded(self, session_id: str, query: str, top_k: int = 5, thread_id: str = "") -> list:
         """세션 컬렉션에서 유사도 검색. RetrievedDoc 리스트 반환.
-        조례는 업로드한 대화(thread_id)에서만 노출 — 다른 채팅방으로 유출 방지."""
+        조례는 원칙적으로 업로드한 대화(thread_id)에서만 노출하되, 다른 대화라도
+        질문에 그 조례의 지역명(예: '남양주시')이 언급되면 예외적으로 허용한다."""
         col = self._session_cols.get(session_id)
         if col is None or col.count() == 0:
             return []
@@ -1112,11 +1125,14 @@ class HybridSearcher:
         for doc, meta, dist in zip(
             res["documents"][0], res["metadatas"][0], res["distances"][0]
         ):
-            # 조례인데 다른 대화에서 업로드된 것이면 제외 (thread_id 불일치)
+            # 조례인데 다른 대화에서 업로드된 것이면 원칙적으로 제외 (thread_id 불일치).
+            # 단, 현재 질문에 그 조례의 지역명이 언급되면("남양주시 ...") 허용.
             if meta.get("is_ordinance") == "true":
                 tid = meta.get("thread_id", "")
                 if tid and thread_id and tid != thread_id:
-                    continue
+                    region = _extract_region(meta.get("law_name", ""))
+                    if not (region and region in query):
+                        continue
             score = max(0.0, 1.0 - dist)
             if score < 0.3:
                 continue
