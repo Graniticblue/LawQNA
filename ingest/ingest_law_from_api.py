@@ -258,13 +258,21 @@ def fetch_history(law_name: str) -> list[dict]:
     return sorted(by_num.values(), key=lambda x: str(x.get("공포일자", "")), reverse=True)
 
 
-def fetch_revision_docs(mst: str, ef_yd: str) -> tuple[str, str, str]:
-    """과거 버전의 (제개정이유, 개정문, 법종구분명) 조회."""
+def fetch_revision_docs(mst: str, ef_yd: str, prom_num: str) -> tuple[str, str, str, str]:
+    """과거 버전의 (제개정이유, 개정문, 법종구분명, 해당 개정분 부칙) 조회.
+    부칙단위는 역대 부칙이 누적돼 있으므로 부칙공포번호로 해당 개정분만 필터."""
     law = _get({"target": "eflaw", "MST": mst, "efYd": ef_yd}).get("법령", {})
     reason = _flat(law.get("제개정이유")).strip()
     moon   = _flat(law.get("개정문")).strip()
     kind   = _basic_info(law).get("law_type", "")
-    return reason, moon, kind
+    buchik = ""
+    units = law.get("부칙", {})
+    units = laf._as_list(units.get("부칙단위", units) if isinstance(units, dict) else units)
+    for u in units:
+        if isinstance(u, dict) and str(u.get("부칙공포번호", "")).lstrip("0") == prom_num.lstrip("0"):
+            buchik = _flat(u.get("부칙내용")).strip()
+            break
+    return reason, moon, kind, buchik
 
 
 def _amend_prefix(law_name: str) -> str:
@@ -278,21 +286,28 @@ def _amend_prefix(law_name: str) -> str:
     return re.sub(r"[\s·ㆍ]+", "", law_name)
 
 
-ENRICH_PROMPT = """{law} 개정의 [개정이유]와 [개정문]이다. 아래 JSON으로만 구조화하라.
+ENRICH_PROMPT = """{law} 개정의 [개정이유]·[개정문]·[부칙]이다. 아래 JSON으로만 구조화하라.
 {{"개정이유":"핵심 2~3문장","주요내용":[{{"항목":"...","조문":["제N조"],"내용":"..."}}],
 "개정조문":["제N조","제N조의M"],
 "조문_변경":[{{"조문":"제N조","변경":"신설/개정 — 한 줄"}}],
-"목적론적_키포인트":"입법목적·해석핵심 1~2문장"}}
+"목적론적_키포인트":"입법목적·해석핵심 1~2문장",
+"부칙_시행일_특이사항":{{"원칙":"...","예외":"조문별 다른 시행일 (없으면 빈문자열)"}},
+"부칙_적용례_요약":"적용례·경과조치 핵심 (없으면 빈문자열)",
+"부칙_상세":{{"제N조_제목":"내용 요약"}}}}
 JSON만. 개정조문/조문_변경은 개정문에서 실제 바뀐 조문번호를 정확히.
+부칙_* 필드는 [부칙]에서만 추출하고, 부칙이 비어있으면 빈 값으로.
 
 [개정이유]
 {reason}
 
 [개정문]
-{moon}"""
+{moon}
+
+[부칙]
+{buchik}"""
 
 
-def _gemini_enrich(law_name: str, reason: str, moon: str) -> dict:
+def _gemini_enrich(law_name: str, reason: str, moon: str, buchik: str) -> dict:
     from google import genai
     from google.genai import types
     client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
@@ -300,7 +315,8 @@ def _gemini_enrich(law_name: str, reason: str, moon: str) -> dict:
     try:
         resp = client.models.generate_content(
             model=model,
-            contents=ENRICH_PROMPT.format(law=law_name, reason=reason[:5000], moon=moon[:7000]),
+            contents=ENRICH_PROMPT.format(law=law_name, reason=reason[:5000],
+                                          moon=moon[:7000], buchik=buchik[:4000]),
             config=types.GenerateContentConfig(
                 max_output_tokens=8000, temperature=0.2,
                 thinking_config=types.ThinkingConfig(thinking_budget=0)),
@@ -335,12 +351,12 @@ def build_amendment_records(law_name: str, history: list[dict], limit: int = 0) 
             if aid in done:
                 records.append(done[aid])
                 continue
-            reason, moon, kind = fetch_revision_docs(
-                str(h.get("법령일련번호", "")), enf)
+            reason, moon, kind, buchik = fetch_revision_docs(
+                str(h.get("법령일련번호", "")), enf, num)
             if not reason and not moon:
                 print(f"  [{i}/{len(history)}] {aid} — 제개정이유·개정문 없음(스킵)", flush=True)
                 continue
-            en = _gemini_enrich(law_name, reason, moon)
+            en = _gemini_enrich(law_name, reason, moon, buchik)
             rec = {
                 "amendment_id": aid,
                 "law_name":     law_name,
@@ -353,14 +369,18 @@ def build_amendment_records(law_name: str, history: list[dict], limit: int = 0) 
                 "개정조문":     en.get("개정조문", []),
                 "조문_변경":    en.get("조문_변경", []),
                 "목적론적_키포인트": en.get("목적론적_키포인트", ""),
+                "부칙_시행일_특이사항": en.get("부칙_시행일_특이사항", {}),
+                "부칙_적용례_요약":     en.get("부칙_적용례_요약", ""),
+                "부칙_상세":            en.get("부칙_상세", {}),
                 "연관_개정":    [],
                 "개정문있음":   bool(moon),
+                "부칙있음":     bool(buchik),
             }
             records.append(rec)
             fout.write(json.dumps(rec, ensure_ascii=False) + "\n")
             fout.flush()
             print(f"  [{i}/{len(history)}] {aid} / 개정문{'O' if moon else 'X'} "
-                  f"/ 조문{en.get('개정조문', [])[:4]}", flush=True)
+                  f"/ 부칙{'O' if buchik else 'X'} / 조문{en.get('개정조문', [])[:4]}", flush=True)
     return records
 
 
