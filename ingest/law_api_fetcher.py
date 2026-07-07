@@ -211,13 +211,20 @@ def _fetch_full_law(law_id: str) -> dict[str, str]:
 # Public API
 # ============================================================
 
-def _ensure_cached(law_name: str) -> dict[str, str] | None:
-    """캐시 있으면 그대로, 없으면 API로 법령 전체를 조회해 캐시 후 반환.
-    반환: {"제1조": "...", "제2조": "...", ...} 법령 전체 조문 딕셔너리. 실패 시 None."""
+def fetch_article(law_name: str, article_no: str) -> str | None:
+    """
+    특정 법령의 특정 조문 내용 반환.
+    - 캐시 있으면 즉시 반환
+    - 캐시 없으면 API로 법령 전체 조회 후 캐시, 해당 조문 추출
+
+    law_name  : "건축기본법"
+    article_no: "제2조"
+    """
     cached = _load_cache(law_name)
     if cached:
-        return cached.get("articles", {})
+        return cached.get("articles", {}).get(article_no)
 
+    # API 조회
     law_id = _fetch_law_id(law_name)
     if not law_id:
         return None
@@ -227,29 +234,7 @@ def _ensure_cached(law_name: str) -> dict[str, str] | None:
         return None
 
     _save_cache(law_name, articles)
-    return articles
-
-
-def fetch_article(law_name: str, article_no: str) -> str | None:
-    """
-    특정 법령의 특정 조문 내용 반환 (캐시는 항상 법령 전체 단위로 채워짐).
-
-    law_name  : "건축기본법"
-    article_no: "제2조"
-    """
-    articles = _ensure_cached(law_name)
-    return articles.get(article_no) if articles else None
-
-
-def fetch_whole_law(law_name: str) -> dict[str, str] | None:
-    """
-    사각지대 법령 전체를 조문 단위 대신 통째로 확보한다.
-    (조문 하나만 컨텍스트에 넣으면 같은 법령의 정의·관련 조문이 빠져
-    분석이 얕아지므로, 캐시된 법령 전체를 반환해 그대로 컨텍스트에 주입한다.)
-
-    반환: {"제1조": "...", ...} 전체 조문 딕셔너리. 실패 시 None.
-    """
-    return _ensure_cached(law_name)
+    return articles.get(article_no)
 
 
 def fetch_hints(

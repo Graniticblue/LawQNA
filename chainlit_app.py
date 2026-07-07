@@ -1442,40 +1442,50 @@ async def on_regenerate_with_fetch(action: cl.Action):
     )
     await fetch_msg.send()
 
-    # API 페치 (백그라운드 스레드) — 조문 하나가 아니라 법령 전체를 확보한다.
-    # (조문 하나만 넣으면 같은 법령의 정의·관련 조문이 빠져 분석이 얕아짐.
-    #  같은 법령을 가리키는 힌트가 여러 개여도 법령당 API 호출은 1회.)
+    # API 페치 (백그라운드 스레드)
     from ingest import law_api_fetcher
-
-    law_names: list[str] = []
-    for f in fetchable:
-        if f["law_name"] not in law_names:
-            law_names.append(f["law_name"])
-
-    fetched_laws: dict[str, dict[str, str]] = {}
-    for law_name in law_names:
-        articles = await asyncio.to_thread(law_api_fetcher.fetch_whole_law, law_name)
-        if articles:
-            fetched_laws[law_name] = articles
 
     success: list[dict] = []
     failed:  list[dict] = []
-    for f in fetchable:
-        (success if f["law_name"] in fetched_laws else failed).append(f)
 
-    # 결과 알림 (법령 단위로 집계 — 같은 법령의 여러 힌트는 한 줄로)
+    def do_fetch_one(law_name: str, article_no: str):
+        # 조문 단위. 같은 법령의 다른 조문은 캐시에서 즉시.
+        if article_no:
+            content = law_api_fetcher.fetch_article(law_name, article_no)
+            return content
+        # article_no 없으면 법령 전체 — 일단 캐시만 채우고 본문은 None 처리
+        law_id = law_api_fetcher._fetch_law_id(law_name)
+        if not law_id:
+            return None
+        articles = law_api_fetcher._fetch_full_law(law_id)
+        if articles:
+            law_api_fetcher._save_cache(law_name, articles)
+            # 대표로 첫 조문 반환
+            return next(iter(articles.values()), None)
+        return None
+
+    for f in fetchable:
+        content = await asyncio.to_thread(
+            do_fetch_one, f["law_name"], f.get("article_no", "")
+        )
+        entry = {**f, "content": content or ""}
+        if content:
+            success.append(entry)
+        else:
+            failed.append(entry)
+
+    # 결과 알림
     result_lines = ["📡 **페치 결과**"]
     if success:
-        result_lines.append("\n**✓ 캐싱 성공 (법령 전체 확보):**")
-        for law_name in law_names:
-            if law_name in fetched_laws:
-                n = len(fetched_laws[law_name])
-                result_lines.append(f"  · 「{law_name}」 — 조문 {n}개")
+        result_lines.append("\n**✓ 캐싱 성공:**")
+        for s in success:
+            art = s.get("article_no", "") or "(전체)"
+            result_lines.append(f"  · 「{s['law_name']}」 {art}")
     if failed:
         result_lines.append("\n**✗ 페치 실패 (API에서 못 찾음):**")
-        for law_name in law_names:
-            if law_name not in fetched_laws:
-                result_lines.append(f"  · 「{law_name}」")
+        for fa in failed:
+            art = fa.get("article_no", "") or "(전체)"
+            result_lines.append(f"  · 「{fa['law_name']}」 {art}")
 
     await fetch_msg.remove()
     await cl.Message(content="\n".join(result_lines), author="사각지대 알림").send()
@@ -1487,25 +1497,13 @@ async def on_regenerate_with_fetch(action: cl.Action):
         ).send()
         return
 
-    # extra_context로 법령 전체를 주입 + 재생성 (법령당 문자수 캡으로 프롬프트 폭주 방지)
-    LAW_CONTEXT_CAP = 12000
-
-    def _art_sort_key(art_no: str):
-        m = re.match(r"제(\d+)조(?:의(\d+))?", art_no)
-        return (int(m.group(1)), int(m.group(2) or 0)) if m else (9999, 0)
-
+    # extra_context로 페치된 raw 텍스트 주입 + 재생성
     extra_lines = ["=== [API 페치 자료 — 캐싱 완료] ==="]
-    extra_lines.append("※ 아래는 사각지대 법령을 법제처 API로 실시간 페치한 법령 전체 조문입니다. "
+    extra_lines.append("※ 아래는 사각지대 법령을 법제처 API로 실시간 페치한 자료입니다. "
                        "검색 컨텍스트의 일부로 활용하세요.")
-    for law_name, articles in fetched_laws.items():
-        extra_lines.append(f"\n[법령원문] 「{law_name}」 전체 {len(articles)}개 조문")
-        used = 0
-        for art_no in sorted(articles, key=_art_sort_key):
-            text = f"{art_no} {articles[art_no]}"
-            if used + len(text) > LAW_CONTEXT_CAP:
-                break
-            extra_lines.append(text)
-            used += len(text)
+    for s in success:
+        extra_lines.append(f"\n[법령원문] 「{s['law_name']}」 {s.get('article_no', '')}")
+        extra_lines.append(s["content"])
     extra_context = "\n".join(extra_lines)
 
     gen = get_generator()
