@@ -33,15 +33,17 @@ LAW_ARTICLE_URL = "https://www.law.go.kr/DRF/lawService.do"
 
 def parse_hint(hint: str) -> tuple[str, str]:
     """
-    "건축기본법 제2조"        → ("건축기본법", "제2조")
-    "도시정비법 제81조제1항"  → ("도시정비법", "제81조")
-    힌트에 조문번호 없으면    → (hint, "")
+    "건축기본법 제2조"          → ("건축기본법", "제2조")
+    "도시정비법 제81조제1항"    → ("도시정비법", "제81조")
+    "택지개발촉진법 제3조의2"   → ("택지개발촉진법", "제3조의2")
+    "주택건설기준규정 별표 1"   → ("주택건설기준규정", "별표1")
+    힌트에 조문번호 없으면      → (hint, "")
     """
-    m = re.search(r'(제\d+조)', hint)
+    m = re.search(r'(제\d+조(?:의\d+)?|별표\s*\d+(?:의\d+)?)', hint)
     if m:
         article = m.group(1)
         law_name = hint[:hint.index(article)].strip()
-        return law_name, article
+        return law_name, article.replace(" ", "")
     return hint.strip(), ""
 
 
@@ -164,14 +166,15 @@ def _build_article_text(unit: dict) -> str:
 
 def _fetch_full_law(law_id: str) -> dict[str, str]:
     """
-    법령ID(법령일련번호/MST)로 전체 조문 조회.
-    반환: {"제1조": "제1조(목적) 이 법은...", "제2조": "...", ...}
+    법령ID(법령일련번호/MST)로 전체 조문 + 별표 조회.
+    반환: {"제1조": "제1조(목적) 이 법은...", ..., "별표1": "■ ...법 [별표 1] ...", ...}
 
     API 응답 구조:
       조문단위[].조문여부 == "조문"  →  실제 조항 (chapter heading은 "전문")
       조문단위[].조문내용  →  단문 조문은 전체 내용, 다항 조문은 제목만
       조문단위[].항[].항내용 / 항[].호[].호내용 / 호[].목[].목내용  →  다항 조문의 실제 본문
       (_build_article_text가 위 구조를 전부 이어붙여 완전한 텍스트를 만든다)
+      별표[].별표단위[].별표내용  →  별표 전문 (별표구분=="별표"만, 서식 제외)
     """
     key = _get_api_key()
     articles: dict[str, str] = {}
@@ -182,11 +185,8 @@ def _fetch_full_law(law_id: str) -> dict[str, str]:
             timeout=15,
         )
         data = r.json()
-        units = (
-            data.get("법령", {})
-                .get("조문", {})
-                .get("조문단위", [])
-        )
+        law = data.get("법령", {})
+        units = law.get("조문", {}).get("조문단위", [])
         if isinstance(units, dict):
             units = [units]
         for unit in units:
@@ -202,6 +202,24 @@ def _fetch_full_law(law_id: str) -> dict[str, str]:
                 # 중복 조문(개정 전/후)은 첫 번째 우선
                 if art_key not in articles:
                     articles[art_key] = content
+
+        # 별표 — "별표N"/"별표N의M" 키로 함께 캐시 (텍스트 있는 별표만)
+        byeolpyo = law.get("별표", {})
+        b_units = _as_list(byeolpyo.get("별표단위", byeolpyo) if isinstance(byeolpyo, dict) else byeolpyo)
+        for u in b_units:
+            if not isinstance(u, dict) or u.get("별표구분") != "별표":
+                continue
+            no = str(u.get("별표번호", "")).lstrip("0")
+            gaji = str(u.get("별표가지번호", "")).lstrip("0")
+            if not no:
+                continue
+            b_key = f"별표{no}의{gaji}" if gaji else f"별표{no}"
+            text = _as_text(u.get("별표내용"))
+            # 고정폭 패딩 축약
+            text = re.sub(r"[ \t]{2,}", " ", text)
+            text = re.sub(r"\n{3,}", "\n\n", text).strip()
+            if len(text) >= 30 and b_key not in articles:   # 이미지 전용 별표는 스킵
+                articles[b_key] = text
     except Exception:
         pass
     return articles

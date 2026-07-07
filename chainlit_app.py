@@ -1503,7 +1503,8 @@ async def on_regenerate_with_fetch(action: cl.Action):
                        "검색 컨텍스트의 일부로 활용하세요.")
     for s in success:
         extra_lines.append(f"\n[법령원문] 「{s['law_name']}」 {s.get('article_no', '')}")
-        extra_lines.append(s["content"])
+        # 별표는 전문이 2만자를 넘을 수 있어 프롬프트 보호를 위해 캡
+        extra_lines.append(s["content"][:8000])
     extra_context = "\n".join(extra_lines)
 
     gen = get_generator()

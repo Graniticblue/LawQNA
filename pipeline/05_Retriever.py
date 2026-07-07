@@ -247,13 +247,14 @@ def _parse_law_hint(hint: str) -> tuple[str, str, bool]:
     """
     "건축법 시행령 별표1" → ("건축법 시행령", "별표1", True)
     "건축법 시행령 제86조제2항" → ("건축법 시행령", "제86조", False)
+    "택지개발촉진법 제3조의2" → ("택지개발촉진법", "제3조의2", False)
     Returns: (law_name, article_prefix, is_byeolpyo)
     """
     hint = _normalize_middot(hint.strip().strip("「」"))
-    m = re.match(r"^(.+?)\s+(별표\s*\d+)", hint)
+    m = re.match(r"^(.+?)\s+(별표\s*\d+(?:의\d+)?)", hint)
     if m:
         return m.group(1).strip(), m.group(2).replace(" ", ""), True
-    m = re.match(r"^(.+?)\s+(제\d+조)", hint)
+    m = re.match(r"^(.+?)\s+(제\d+조(?:의\d+)?)", hint)
     if m:
         return m.group(1).strip(), m.group(2), False
     return hint, "", False
@@ -858,11 +859,15 @@ class HybridSearcher:
             if not law_name:
                 continue
 
-            # 분기 1: 별표 → DB에 실제 인덱싱돼 있으면 정상(수동확인 생략),
-            #         없을 때만 수동 확인 안내
+            # 분기 1: 별표 → DB에 인덱싱돼 있으면 정상. 없으면 API 페치 가능
+            #         (법제처 API가 별표 전문을 제공 — law_api_fetcher가 별표N 키로 캐시)
             if is_byeolpyo or "별표" in hint:
                 if not self._byeolpyo_in_db(law_name, art_prefix):
-                    result["manual_check"].append({"hint": hint, "reason": "별표"})
+                    result["fetchable"].append({
+                        "hint": hint,
+                        "law_name": law_name,
+                        "article_no": art_prefix,
+                    })
                 continue
 
             # 분기 2: 과거 시점·폐지 → 수동 확인
