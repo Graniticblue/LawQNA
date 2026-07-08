@@ -135,6 +135,36 @@
         loadUploadCache(ov);
     }
 
+    // ── 대화 저장: 현재 화면의 질문·답변을 마크다운 파일로 다운로드 ──────
+    function downloadChat() {
+        var steps = Array.prototype.slice.call(document.querySelectorAll(
+            '[data-step-type="user_message"], [data-step-type="assistant_message"]'));
+        if (!steps.length) {   // 셀렉터 변동 대비 폴백
+            steps = Array.prototype.slice.call(document.querySelectorAll('[data-testid="step"]'));
+        }
+        var lines = [];
+        steps.forEach(function (el) {
+            var t = (el.innerText || '').trim();
+            if (!t) return;
+            var isUser = el.getAttribute('data-step-type') === 'user_message';
+            lines.push((isUser ? '## 질문' : '## 답변') + '\n\n' + t);
+        });
+        if (!lines.length) { alert('저장할 대화가 없습니다.'); return; }
+        var now = new Date();
+        function p(n) { return (n < 10 ? '0' : '') + n; }
+        var stamp = now.getFullYear() + p(now.getMonth() + 1) + p(now.getDate())
+            + '_' + p(now.getHours()) + p(now.getMinutes());
+        var head = '# 법령 Q&A 대화 (' + now.toLocaleString('ko-KR') + ')\n\n';
+        var blob = new Blob([head + lines.join('\n\n---\n\n') + '\n'],
+            { type: 'text/markdown;charset=utf-8' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'LawQNA_대화_' + stamp + '.md';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    }
+
     function insertLawListButton() {
         try {
             if (document.getElementById('law-list-btn')) return;
@@ -157,6 +187,14 @@
             ub.className = 'law-list-btn';
             ub.onclick = showUploadModal;
             readme.parentElement.insertBefore(ub, readme);
+            // 대화 저장 버튼 (업로드 캐시와 Readme 사이)
+            var sb = document.createElement('button');
+            sb.id = 'chat-save-btn';
+            sb.type = 'button';
+            sb.textContent = '대화 저장';
+            sb.className = 'law-list-btn';
+            sb.onclick = downloadChat;
+            readme.parentElement.insertBefore(sb, readme);
             // 등간격화: Readme와 우측 인접 항목(아이콘) 사이 네이티브 간격을 측정해
             // 내 버튼 간격을 동일하게 맞춘다. (측정 실패 시 CSS margin-right 폴백)
             requestAnimationFrame(function () {
@@ -274,92 +312,3 @@
     }
 })();
 
-// ── 드래그-질문: 답변 텍스트를 선택하면 '질문' 버튼 → 인용으로 입력창 삽입 ──
-(function () {
-    var MAX_QUOTE = 1200;
-
-    var btn = null;
-    function getBtn() {
-        if (btn) return btn;
-        btn = document.createElement('button');
-        btn.id = 'quote-ask-btn';
-        btn.type = 'button';
-        btn.textContent = '💬 질문';
-        btn.style.display = 'none';
-        // mousedown 시 기본동작을 막아 사용자의 텍스트 선택이 풀리지 않게 함
-        btn.addEventListener('mousedown', function (e) { e.preventDefault(); e.stopPropagation(); });
-        btn.addEventListener('click', onQuoteClick);
-        document.body.appendChild(btn);
-        return btn;
-    }
-
-    function hideBtn() { if (btn) btn.style.display = 'none'; }
-
-    function selectedTextInMessage() {
-        var sel = window.getSelection();
-        if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
-        var text = sel.toString().trim();
-        if (text.length < 4) return null;
-        // 메시지(답변/질문) 영역 안의 선택만 대상 — 입력창·사이드바·모달 선택은 제외
-        var node = sel.anchorNode;
-        var el = node && (node.nodeType === 1 ? node : node.parentElement);
-        if (!el) return null;
-        if (el.closest('#chat-input, #law-list-modal, #upload-cache-modal')) return null;
-        if (!el.closest('[data-testid="step"], [class*="MessageContent"], [class*="message-content"]')) return null;
-        return { text: text, range: sel.getRangeAt(0) };
-    }
-
-    function onMouseUp() {
-        // click 직후 selection 갱신이 끝난 뒤 판정
-        setTimeout(function () {
-            var found = selectedTextInMessage();
-            if (!found) { hideBtn(); return; }
-            var rect = found.range.getBoundingClientRect();
-            var b = getBtn();
-            b.style.display = 'block';
-            // 선택 영역 아래 중앙에 배치 (position: fixed — 뷰포트 기준)
-            var left = Math.min(Math.max(rect.left + rect.width / 2 - 36, 8),
-                                window.innerWidth - 90);
-            var top = Math.min(rect.bottom + 8, window.innerHeight - 44);
-            b.style.left = left + 'px';
-            b.style.top = top + 'px';
-        }, 0);
-    }
-
-    function onQuoteClick() {
-        var found = selectedTextInMessage();
-        hideBtn();
-        if (!found) return;
-        var text = found.text;
-        if (text.length > MAX_QUOTE) text = text.slice(0, MAX_QUOTE) + '…';
-        // 마크다운 인용 형식으로 정리 (여러 줄이면 각 줄에 > 접두)
-        var quoted = text.split('\n')
-            .map(function (l) { return '> ' + l.trim(); })
-            .filter(function (l) { return l !== '>'; })
-            .join('\n') + '\n\n';
-
-        var input = document.getElementById('chat-input');
-        if (!input) return;
-        input.focus();
-        // 캐럿을 입력창 끝으로 이동 후 삽입 — execCommand('insertText')는
-        // input 이벤트를 발생시켜 React(contenteditable) 상태에도 반영된다.
-        var range = document.createRange();
-        range.selectNodeContents(input);
-        range.collapse(false);
-        var sel = window.getSelection();
-        sel.removeAllRanges();
-        sel.addRange(range);
-        document.execCommand('insertText', false, quoted);
-        window.getSelection().removeAllRanges();
-    }
-
-    document.addEventListener('mouseup', onMouseUp);
-    document.addEventListener('mousedown', function (e) {
-        if (!btn || e.target === btn) return;
-        hideBtn();
-    });
-    document.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape') hideBtn();
-    });
-    window.addEventListener('scroll', hideBtn, true);
-})();
