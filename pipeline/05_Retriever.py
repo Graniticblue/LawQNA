@@ -260,6 +260,83 @@ def _parse_law_hint(hint: str) -> tuple[str, str, bool]:
 
 
 # ============================================================
+# 상호참조 확장 (경량 1-hop): 조문 본문이 명시적으로 가리키는 조문 자동 포함
+# ============================================================
+
+def _related_laws(law_name: str) -> dict[str, str]:
+    """조문이 속한 법령을 기준으로 상대참조('법'/'영'/'규칙')가 가리키는 법령명을 만든다.
+
+    '건축법 시행령'의 본문 속 '법 제N조' → '건축법 제N조'(모법),
+    '건축법'의 본문 속 '영 제N조' → '건축법 시행령 제N조'(시행령).
+    시행령·시행규칙 접미사가 없으면 base를 법령명 자체로 본다(법 조문의 '이 법 제N조'
+    자기참조 등). 접미사 없는 규칙명 등에서 잘못 유도한 이름이 실제 DB에 없으면
+    fetch_exact_articles가 조용히 빈 결과를 돌려주므로 오류로 이어지지 않는다."""
+    name = law_name.strip()
+    for suf in ("시행규칙", "시행령"):
+        if name.endswith(suf):
+            base = name[: -len(suf)].strip()
+            break
+    else:
+        base = name
+    return {"법": base, "영": f"{base} 시행령", "규칙": f"{base} 시행규칙"}
+
+
+# 조문 본문 상호참조 추출 패턴.
+#   (1) 「법령명」 제N조[의M]   — 다른 법령 명시 참조(명확)
+#   (2) [이|같은] {법|영|규칙}[시행령|시행규칙] 제N조[의M] — 모법·시행령 상대참조
+# '같은 법/영/규칙'(선행 인용 법령을 가리켜 대상이 모호)은 의도적으로 제외한다.
+_CROSSREF_PAT = re.compile(
+    r'「([^」]{2,40})」\s*(제\d+조(?:의\d+)?)'
+    r'|(?<![가-힣])(같은\s*법\s*시행규칙|같은\s*법\s*시행령'
+    r'|이\s*법|이\s*영|이\s*규칙|법|영|규칙)\s*(제\d+조(?:의\d+)?)'
+)
+
+
+def _extract_crossref_hints(law_docs, max_hints: int = 10) -> list[str]:
+    """검색된 조문 본문이 명시적으로 가리키는 '다른 조문'을 (법령명 제N조) 힌트로 추출.
+
+    1-hop만(추출은 원본 law_docs 본문에서만) 수행하고, 여러 조문이 공통으로 가리키는
+    조문일수록(참조 빈도↑) 우선한다. 이미 law_docs에 있는 조문은 제외. 상대참조
+    ('법'/'영'/'이 영' 등)는 그 조문이 속한 법령을 기준으로 해소한다."""
+    have = {(d.law_name.strip(), d.article_no.replace(" ", "")) for d in law_docs}
+    freq: dict[tuple[str, str], int] = {}
+    order: dict[tuple[str, str], int] = {}
+    seq = 0
+    for doc in law_docs:
+        rel = _related_laws(doc.law_name)
+        for m in _CROSSREF_PAT.finditer(doc.content or ""):
+            if m.group(1):                        # 「법령명」 제N조
+                # 원문이 긴 법령명을 줄바꿈으로 끊어 넣는 경우가 있어 내부 공백을 한 칸으로 정규화
+                target_law = re.sub(r"\s+", " ", _normalize_middot(m.group(1))).strip()
+                art = m.group(2)
+            else:                                 # 상대참조
+                token = re.sub(r"\s+", "", m.group(3))
+                art = m.group(4)
+                if token == "같은법시행규칙":
+                    target_law = rel["규칙"]
+                elif token == "같은법시행령":
+                    target_law = rel["영"]
+                elif token in ("법", "이법"):
+                    target_law = rel["법"]
+                elif token in ("영", "이영"):
+                    target_law = rel["영"]
+                elif token in ("규칙", "이규칙"):
+                    target_law = rel["규칙"]
+                else:
+                    continue
+            key = (target_law.strip(), art.replace(" ", ""))
+            if not key[0] or key in have:
+                continue
+            if key not in order:
+                order[key] = seq
+                seq += 1
+            freq[key] = freq.get(key, 0) + 1
+    # 참조 빈도 내림차순 → 동률이면 최초 등장 순
+    ranked = sorted(freq, key=lambda k: (-freq[k], order[k]))
+    return [f"{law} {art}" for law, art in ranked[:max_hints]]
+
+
+# ============================================================
 # 조문 해석 프레임 로더
 # ============================================================
 
@@ -1591,6 +1668,22 @@ class Retriever:
                     if f"{d.law_name}::{d.article_no}::{d.content[:40]}" not in existing
                 ]
                 law_docs = new_exact + law_docs   # exact match를 컨텍스트 앞에 배치
+
+        # ── 상호참조 확장 (경량 1-hop) ────────────────────
+        # 검색된 조문 본문이 '시행령 제11조'·'「주택법」 제2조'처럼 다른 조문을 명시적으로
+        # 가리키면, 그 조문을 로컬 DB에서 직접 끌어와 컨텍스트에 함께 넣는다(모델 왕복 없음).
+        cross_hints = _extract_crossref_hints(law_docs, max_hints=10)
+        if cross_hints:
+            cross_docs = self._searcher.fetch_exact_articles(cross_hints, top_n=1)
+            existing = {f"{d.law_name}::{d.article_no}" for d in law_docs}
+            for d in cross_docs:
+                dk = f"{d.law_name}::{d.article_no}"
+                if dk in existing:
+                    continue
+                d.score = 1.5            # exact(2.0) 아래, 일반 검색 위 — 뒤쪽 배치
+                d.score_type = "crossref"
+                law_docs.append(d)
+                existing.add(dk)
 
         # ── 질의회신 선례 검색 (qa_precedents) ────────────
         qa_docs = self._searcher.search_qa(
