@@ -1435,6 +1435,43 @@ class Generator:
             c = d.metadata.get("case_id", "")
             if c:
                 allowed_codes.add(c)
+
+        # ── 인용 구조(rescue): 검색엔 없지만 DB 전체엔 실재하는 번호 살리기 ──
+        # 소독기는 '이번 검색 결과'만 대조하므로, 판례 검색(법규×유형 쌍)이 놓친
+        # DB 보유 판례·해석례를 모델이 번호로 인용하면 억울하게 '(출처 미확인)'
+        # 처리됐었음(2026-07 실사례: 접도의무 취지 판시 — DB에 3건 실재).
+        # 지우기 전에 컬렉션을 직접 조회해 실재하면 인용을 유지하고, 해당 문서를
+        # qa_docs/case_docs에 추가해 팝업까지 걸리게 한다.
+        # eval 경로(시점 컷오프·제외 목록·블라인드 테스트)에서는 정답 누수 방지를
+        # 위해 구조하지 않는다.
+        rescued_cites: list[str] = []
+        _eval_mode = bool(as_of_date or as_of_code or exclude_doc_codes or test_exclusions)
+        searcher = getattr(self._retriever, "_searcher", None)
+        if not _eval_mode and searcher is not None:
+            unk_qa = {m.group(1) for m in _QA_CITE_FULL.finditer(answer)} - allowed_codes
+            unk_case = {m.group(1) for m in _COURT_CITE_FULL.finditer(answer)} - allowed_codes
+            if unk_qa:
+                for d in searcher.fetch_qa_by_codes(sorted(unk_qa)):
+                    code = d.metadata.get("doc_code", "")
+                    if not code or code in allowed_codes:
+                        continue
+                    allowed_codes.add(code)
+                    rescued_cites.append(code)
+                    qa_docs.append(d)
+                    lab = d.metadata.get("cite_label", "")
+                    if lab:
+                        allowed_labels.add(lab)
+            if unk_case:
+                for d in searcher.fetch_cases_by_ids(sorted(unk_case)):
+                    cid = d.metadata.get("case_id", "")
+                    if not cid or cid in allowed_codes:
+                        continue
+                    allowed_codes.add(cid)
+                    rescued_cites.append(cid)
+                    case_docs.append(d)
+        if verbose and rescued_cites:
+            print(f"\n  [인용 구조] 검색 누락이나 DB 실재 — 인용 유지: {rescued_cites}")
+
         answer, removed_cites = strip_unverified_citations(
             answer, allowed_codes, allowed_labels)
         # 인용 괄호 끝의 '참조' 제거: "(법제처 12-0596 참조)" → "(법제처 12-0596)"
