@@ -195,24 +195,10 @@
             sb.className = 'law-list-btn';
             sb.onclick = downloadChat;
             readme.parentElement.insertBefore(sb, readme);
-            // 등간격화: Readme와 우측 인접 항목(아이콘) 사이 네이티브 간격을 측정해
-            // 내 버튼 간격을 동일하게 맞춘다. (측정 실패 시 CSS margin-right 폴백)
-            requestAnimationFrame(function () {
-                try {
-                    var r = readme.getBoundingClientRect();
-                    var right = Array.prototype.slice.call(readme.parentElement.children)
-                        .filter(function (el) {
-                            return el !== btn && el.getBoundingClientRect().left >= r.right - 1;
-                        })
-                        .sort(function (a, b) {
-                            return a.getBoundingClientRect().left - b.getBoundingClientRect().left;
-                        })[0];
-                    if (right) {
-                        var gap = right.getBoundingClientRect().left - r.right;
-                        if (gap > 0 && gap < 80) btn.style.marginRight = gap + 'px';
-                    }
-                } catch (e) { }
-            });
+            // Readme 버튼 숨김 — 우리 버튼들의 삽입 기준점으로만 쓰고 표시하지 않는다
+            // (DOM에서 제거하면 재렌더 때 기준점 탐색이 깨지므로 display만 끔.
+            //  Readme 기준 등간격 측정 코드는 숨김과 함께 제거됨)
+            readme.style.display = 'none';
         } catch (e) { /* DOM 변동 중 실패는 무시(다음 mutation에 재시도) */ }
     }
 
