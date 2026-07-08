@@ -272,8 +272,10 @@ def _fetch_delegations(law_id: str) -> dict[str, list[dict]]:
                     tbr = _as_text(j.get("위임법령조문가지번호"))
                     if tbr and tbr != "0":
                         art += f"의{tbr}"
-                    tgt = {"law": law, "art": art}
-                    if tgt not in out.setdefault(src, []):
+                    tgt = {"law": law, "art": art,
+                           "title": _as_text(j.get("위임법령조문제목"))}
+                    if all(t["law"] != law or t["art"] != art
+                           for t in out.setdefault(src, [])):
                         out[src].append(tgt)
     except Exception:
         pass

@@ -1468,13 +1468,31 @@ async def on_regenerate_with_fetch(action: cl.Action):
     def follow_delegations(law_name: str, article_no: str, cap: int = 3):
         # 캐시에 동봉된 위임 링크('대통령령으로 정하는' → 시행령 제N조)를 따라
         # 대상 조문을 동반 로드. 대상 법령도 fetch_article이 통째 캐싱한다.
-        out = []
-        for tgt in law_api_fetcher.fetch_delegations(law_name, article_no)[:cap]:
-            content = law_api_fetcher.fetch_article(tgt["law"], tgt["art"])
-            if content:
-                out.append({"law_name": tgt["law"], "article_no": tgt["art"],
-                            "content": content, "via": f"「{law_name}」 {article_no}"})
-        return out
+        # 위임이 상한을 넘으면(예: 건축기본법 제13조 → 시행령 제5~14조 10건)
+        # 질문과 관련도 높은 순으로 본문 주입을 고르고, 나머지는 제목 목록으로
+        # 남겨 모델이 위임 지도의 존재를 알 수 있게 한다(조용히 버리지 않음).
+        # 관련도는 문자 바이그램 겹침 — 단어 완전일치는 조사('분과위원회는' vs
+        # '분과위원회')에 빗나가므로 2글자 조각 단위로 비교한다.
+        def _bigrams(s: str) -> set[str]:
+            s = re.sub(r"[^가-힣]", "", s)
+            return {s[i:i + 2] for i in range(len(s) - 1)}
+        q_bi = _bigrams(query)
+        scored = []
+        for tgt in law_api_fetcher.fetch_delegations(law_name, article_no):
+            content = law_api_fetcher.fetch_article(tgt["law"], tgt["art"]) or ""
+            sc = len(q_bi & _bigrams(f"{tgt.get('title', '')} {content[:400]}"))
+            scored.append((sc, tgt, content))
+        scored.sort(key=lambda x: -x[0])
+        loaded, rest = [], []
+        for _, tgt, content in scored:
+            label = f"{tgt['art']}({tgt['title']})" if tgt.get("title") else tgt["art"]
+            if content and len(loaded) < cap:
+                loaded.append({"law_name": tgt["law"], "article_no": tgt["art"],
+                               "content": content,
+                               "via": f"「{law_name}」 {article_no}"})
+            else:
+                rest.append(f"{tgt['law']} {label}")
+        return loaded, rest
 
     for f in fetchable:
         content = await asyncio.to_thread(
@@ -1486,20 +1504,29 @@ async def on_regenerate_with_fetch(action: cl.Action):
         else:
             failed.append(entry)
 
-    # 위임 조문 동반 로드 (성공 조문의 하위법령 링크 1-hop, 전체 상한 6건)
-    delegated: list[dict] = []
+    # 위임 조문 동반 로드 (성공 조문의 하위법령 링크 1-hop, 본문 주입 전체 상한 6건)
+    delegated: list[dict] = []          # 본문까지 주입
+    delegated_rest: list[str] = []      # 상한 초과분 — 제목 목록만 주입
     seen_arts = {(s["law_name"], s.get("article_no", "")) for s in success}
     for s in success:
-        if not s.get("article_no") or len(delegated) >= 6:
+        if not s.get("article_no"):
             continue
-        for d in await asyncio.to_thread(
+        loaded, rest = await asyncio.to_thread(
             follow_delegations, s["law_name"], s["article_no"]
-        ):
+        )
+        for d in loaded:
             dk = (d["law_name"], d["article_no"])
-            if dk in seen_arts or len(delegated) >= 6:
+            if dk in seen_arts:
+                continue
+            if len(delegated) >= 6:
+                rest.append(f"{d['law_name']} {d['article_no']}")
                 continue
             seen_arts.add(dk)
             delegated.append(d)
+        if rest:
+            delegated_rest.append(
+                f"「{s['law_name']}」 {s['article_no']}의 그 밖의 위임 조문: "
+                + ", ".join(rest))
 
     # 결과 알림
     result_lines = ["📡 **페치 결과**"]
@@ -1513,6 +1540,8 @@ async def on_regenerate_with_fetch(action: cl.Action):
         for d in delegated:
             result_lines.append(
                 f"  · 「{d['law_name']}」 {d['article_no']} ← {d['via']}의 위임")
+        if delegated_rest:
+            result_lines.append("  · (그 밖의 위임 조문은 목록으로만 제공)")
     if failed:
         result_lines.append("\n**✗ 페치 실패 (API에서 못 찾음):**")
         for fa in failed:
@@ -1540,6 +1569,11 @@ async def on_regenerate_with_fetch(action: cl.Action):
         extra_lines.append(
             f"\n[위임법령] 「{d['law_name']}」 {d['article_no']} — {d['via']}의 위임 조문")
         extra_lines.append(d["content"])
+    if delegated_rest:
+        extra_lines.append(
+            "\n[위임법령 목록] 아래 조문들도 위임 관계이나 본문은 미주입 — "
+            "답변에 필요하면 해당 조문의 존재를 안내하세요.")
+        extra_lines.extend(delegated_rest)
     extra_context = "\n".join(extra_lines)
 
     gen = get_generator()
