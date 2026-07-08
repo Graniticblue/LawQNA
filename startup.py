@@ -166,6 +166,11 @@ if __name__ == "__main__":
     # 재인덱싱한다. 개정이력(amendments)만 바뀐 경우 전체 재빌드(15분+, 헬스체크 타임아웃
     # 위험) 대신 이걸 쓴다. 완료 후 변수 제거.
     aux_only = os.environ.get("REINDEX_AUX", "").strip().lower() in ("1", "true", "yes")
+    # REINDEX_QA=1 이면 qa_precedents(해석례·질의회신)만 전량 재빌드한다.
+    # law_articles(13분+)는 그대로 둬 헬스체크 타임아웃을 피하고, 증분 add 대신
+    # --reset 전량 재빌드라 HNSW search_ef 누락 함정도 없다.
+    # updates/ 폴더에 새 질의회신 jsonl을 추가했을 때 사용. 완료 후 변수 제거.
+    qa_only = os.environ.get("REINDEX_QA", "").strip().lower() in ("1", "true", "yes")
 
     def _index_aux():
         # 02_Indexer는 law_articles·qa_precedents만 만든다. 개정이력·메모·원칙은 별도 스크립트.
@@ -209,5 +214,13 @@ if __name__ == "__main__":
     elif aux_only:
         print("[startup] REINDEX_AUX 설정됨 — law_articles 유지, 개정이력·메모·원칙만 재인덱싱")
         _index_aux()
+    elif qa_only:
+        print("[startup] REINDEX_QA 설정됨 — law_articles 유지, qa_precedents만 전량 재빌드")
+        r = subprocess.run(
+            [sys.executable, str(BASE_DIR / "pipeline" / "02_Indexer_BASE.py"),
+             "--collection", "qa", "--reset"],
+            check=False,
+        )
+        print(f"[startup] qa_precedents 재빌드 {'완료' if r.returncode == 0 else '실패(앱은 계속)'}")
     else:
         print(f"[startup] ChromaDB 존재 확인 ({CHROMA_DIR}) — 빌드 스킵")

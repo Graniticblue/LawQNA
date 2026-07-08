@@ -219,6 +219,12 @@
       "file": "법제처_26-0202.jsonl",
       "count": 1,
       "date": "2026-06-15"
+    },
+    {
+      "file": "seoul_qa_recovered_202607.jsonl",
+      "count": 0,
+      "date": "2026-07-08",
+      "note": "서울시 질의회신 복원분 — qa_precedents 전용(법제처 컬렉션 제외용 선등록)"
     }
   ]
 }
