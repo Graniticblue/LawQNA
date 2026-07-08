@@ -665,6 +665,25 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
         content = f"{header}\n\n**질문**\n{q}\n\n**답변**\n{ans}"
         elements.append(cl.Text(name=ref_name, content=content, display="side"))
 
+    # 법제처 번호가 없는 부처·지자체 회신형 선례: 검색 때 부착된 공식 인용 표기
+    # (cite_label — 예 "국토교통부 2012.07.30. 회신")가 답변에 그대로 나타나면
+    # 그 문자열 자체를 element 이름으로 팝업을 건다(리터럴 매칭 — 정규식 불필요).
+    # 이전에는 이 유형에 팝업 경로가 아예 없어 '(관련 국토교통부 회신)'처럼
+    # 태그 없는 인용으로 뭉개졌다.
+    for d in qa_docs:
+        label = d.metadata.get("cite_label", "")
+        if not label or label.startswith("법제처 ") or label in seen_names:
+            continue   # 법제처형은 위 _QA_PROSE_PAT 경로가 처리
+        if label not in answer:
+            continue
+        seen_names.add(label)
+        q   = d.metadata.get("question", "")
+        ans = clean_article_content(_clean_precedent_body(d.content or "")[:15000])
+        ref = d.metadata.get("doc_ref", "")
+        header = f"**{label}**" + (f"  ·  {ref}" if ref else "")
+        content = f"{header}\n\n**질문**\n{q}\n\n**답변**\n{ans}"
+        elements.append(cl.Text(name=label, content=content, display="side"))
+
     # case_id → case_doc lookup
     case_lookup = {}
     for d in case_docs:

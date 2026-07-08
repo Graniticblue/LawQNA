@@ -92,6 +92,45 @@ def _doc_is_after_cutoff(meta: dict, as_of_date: Optional[str],
         return r_key > a_key
     return False
 
+def _attach_cite_label(meta: dict) -> None:
+    """해석례 메타에 답변 인용 표기(cite_label)를 부착한다 — 시스템 전체의 단일 생성점.
+
+    법제처 해석례(doc_code 'NN-NNNN')는 기존 '법제처 NN-NNNN' 관례를 그대로 쓰고,
+    번호 없는 부처·지자체 회신(서울시질의회신 등, doc_ref '[국토교통부 / '12.07.30.]'
+    '[건축기획팀-7544 / '06.12.15.]')은 '국토교통부 2012.07.30. 회신' 형식을 만든다.
+    이 라벨은 (1) 컨텍스트 헤더에 표기돼 모델이 그대로 인용하고, (2) 소독기
+    (strip_unverified_citations)가 보호하며, (3) chainlit이 팝업을 거는 데 쓰인다.
+    이전에는 이 유형의 선례를 인용할 공식 형식이 없어 '(관련 국토교통부 회신)' 같은
+    무번호 표현으로 뭉개지고 팝업도 안 걸렸다."""
+    if meta.get("cite_label"):
+        return
+    code = str(meta.get("doc_code", "") or "")
+    if re.fullmatch(r"\d{2}-\d{4}", code):
+        meta["cite_label"] = f"법제처 {code}"
+        return
+    ref = str(meta.get("doc_ref", "") or "").strip().strip("[]")
+    org, date = "", ""
+    if "/" in ref:
+        org, date = (p.strip() for p in ref.split("/", 1))
+    else:
+        org = ref or str(meta.get("doc_agency", "") or "").strip()
+        date = str(meta.get("doc_date", "") or "").strip()
+    # 'YY.MM.DD. → YYYY.MM.DD.
+    # 실데이터 아포스트로피는 U+2018(')이 2,325건으로 지배적이나 오타로
+    # ''(이중)·'`(백틱 혼입)도 존재 → 반복 허용. '97 같은 90년대 건도 있어
+    # 50 기준으로 세기 판정.
+    m = re.match(r"[‘’'`]*(\d{2})\.\s*(\d{1,2})\.\s*(\d{1,2})\.?", date)
+    if m:
+        yy, mm, dd = m.groups()
+        century = "19" if int(yy) >= 50 else "20"
+        date = f"{century}{yy}.{int(mm):02d}.{int(dd):02d}."
+    elif re.match(r"\d{4}-\d{2}-\d{2}", date):
+        date = date[:10].replace("-", ".") + "."
+    if org:
+        meta["cite_label"] = f"{org} {date} 회신".replace("  ", " ").strip()
+    # org조차 없으면 라벨 없음 — 일반 표현으로만 서술됨
+
+
 # 법령명 축약어 → 정식명칭 매핑 (메모 태그 매칭용)
 LAW_ABBREV_MAP: dict[str, str] = {
     "건축법시행령":      "건축법 시행령",
@@ -717,6 +756,8 @@ class HybridSearcher:
                     continue
                 if _doc_is_after_cutoff(meta, as_of_date, as_of_code):
                     continue
+                meta = dict(meta)
+                _attach_cite_label(meta)
                 docs.append(RetrievedDoc(
                     source=label,
                     law_name=meta.get("doc_agency", ""),
@@ -724,7 +765,7 @@ class HybridSearcher:
                     content=doc_text,
                     score=round(score, 4),
                     score_type="vector",
-                    metadata=dict(meta),
+                    metadata=meta,
                 ))
 
         docs.sort(key=lambda d: -d.score)
@@ -774,6 +815,8 @@ class HybridSearcher:
             except Exception:
                 continue
             for doc_text, meta in zip(res.get("documents", []), res.get("metadatas", [])):
+                meta = dict(meta)
+                _attach_cite_label(meta)
                 result.append(RetrievedDoc(
                     source=label,
                     law_name=meta.get("doc_agency", ""),
@@ -781,7 +824,7 @@ class HybridSearcher:
                     content=doc_text,
                     score=2.0,           # 강제 포함, 최우선
                     score_type="paired",
-                    metadata=dict(meta),
+                    metadata=meta,
                 ))
         return result
 
@@ -2293,6 +2336,10 @@ class Retriever:
                     if doc_date:
                         label += f" ({doc_date})"
                     header += f" {label}"
+                # 인용 표기: 모델이 본문에서 이 선례를 인용할 때 그대로 써야 하는
+                # 문자열(팝업 연결·소독기 보호가 이 표기에 걸려 있음)
+                if meta.get("cite_label"):
+                    header += f'\n(인용 표기: "{meta["cite_label"]}" — 이 선례 인용 시 반드시 이 표기를 그대로 사용)'
                 lines.append(header)
                 if meta.get("question"):
                     lines.append(f"질문: {meta['question']}")
