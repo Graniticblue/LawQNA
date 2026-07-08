@@ -35,9 +35,13 @@ def parse_hint(hint: str) -> tuple[str, str]:
     """
     "건축기본법 제2조"        → ("건축기본법", "제2조")
     "도시정비법 제81조제1항"  → ("도시정비법", "제81조")
+    "건축기본법 제5조의2"     → ("건축기본법", "제5조의2")
     힌트에 조문번호 없으면    → (hint, "")
+
+    의M(가지조문)을 보존해야 캐시 키(제N조의M)와 정확히 매칭된다 —
+    잘라먹으면 제5조의2 요청에 제5조(다른 조문)를 반환하는 버그가 됨.
     """
-    m = re.search(r'(제\d+조)', hint)
+    m = re.search(r'(제\d+조(?:의\d+)?)', hint)
     if m:
         article = m.group(1)
         law_name = hint[:hint.index(article)].strip()
