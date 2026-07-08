@@ -66,11 +66,20 @@ def _load_cache(law_name: str) -> dict | None:
     return data
 
 
-def _save_cache(law_name: str, articles: dict[str, str]) -> None:
-    """법령 전체 조문 캐시 저장. articles = {"제2조": "...", "제3조": "..."}"""
+def _save_cache(
+    law_name: str,
+    articles: dict[str, str],
+    delegations: dict[str, list] | None = None,
+    cached_at: str | None = None,
+) -> None:
+    """법령 전체 조문 캐시 저장. articles = {"제2조": "...", "제3조": "..."}
+    delegations = {"제2조": [{"law": "건축법 시행령", "art": "제3조"}, ...]}
+    (조문 속 '대통령령/부령으로 정하는'이 가리키는 하위법령 조문 — lsDelegated)"""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     _cache_path(law_name).write_text(
-        json.dumps({"cached_at": datetime.now().isoformat(), "articles": articles},
+        json.dumps({"cached_at": cached_at or datetime.now().isoformat(),
+                    "articles": articles,
+                    "delegations": delegations or {}},
                    ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
@@ -207,6 +216,70 @@ def _fetch_full_law(law_id: str) -> dict[str, str]:
     return articles
 
 
+def _fetch_delegations(law_id: str) -> dict[str, list[dict]]:
+    """
+    위임법령 조회(target=lsDelegated) — 법제처 웹 조문의 '대통령령으로 정하는'
+    하이퍼링크 원천 데이터. 조번호 없는 위임을 하위법령 조문으로 해소한다.
+
+    반환: {"제2조": [{"law": "건축법 시행령", "art": "제3조"}, ...], ...}
+
+    응답 구조:
+      위임조문정보[].조정보.조문번호/조문가지번호        → 출발 조문 (제N조[의M])
+      위임조문정보[].위임정보[].위임구분                → 시행령/시행규칙만 채택
+        (인용법령·위임행정규칙·위임자치법규는 제외 — 인용은 crossref 확장이 커버)
+      위임정보[].위임법령제목 + 위임법령조문정보[].위임법령조문번호/가지번호 → 대상 조문
+    """
+    key = _get_api_key()
+    out: dict[str, list[dict]] = {}
+    if not key:
+        return out
+    try:
+        r = requests.get(
+            LAW_ARTICLE_URL,
+            params={"OC": key, "target": "lsDelegated", "type": "JSON", "MST": law_id},
+            timeout=15,
+        )
+        infos = _as_list(
+            r.json().get("lsDelegated", {}).get("법령", {}).get("위임조문정보")
+        )
+        for info in infos:
+            if not isinstance(info, dict):
+                continue
+            jo = info.get("조정보") or {}
+            no = _as_text(jo.get("조문번호"))
+            if not no:
+                continue
+            src = f"제{no.lstrip('0') or no}조"
+            branch = _as_text(jo.get("조문가지번호"))
+            if branch and branch != "0":
+                src += f"의{branch}"
+            for w in _as_list(info.get("위임정보")):
+                if not isinstance(w, dict):
+                    continue
+                gubun = _as_text(w.get("위임구분"))
+                if "시행령" not in gubun and "시행규칙" not in gubun:
+                    continue
+                law = _as_text(w.get("위임법령제목"))
+                if not law:
+                    continue
+                for j in _as_list(w.get("위임법령조문정보")):
+                    if not isinstance(j, dict):
+                        continue
+                    tno = _as_text(j.get("위임법령조문번호"))
+                    if not tno:
+                        continue
+                    art = f"제{tno.lstrip('0') or tno}조"
+                    tbr = _as_text(j.get("위임법령조문가지번호"))
+                    if tbr and tbr != "0":
+                        art += f"의{tbr}"
+                    tgt = {"law": law, "art": art}
+                    if tgt not in out.setdefault(src, []):
+                        out[src].append(tgt)
+    except Exception:
+        pass
+    return out
+
+
 # ============================================================
 # Public API
 # ============================================================
@@ -224,7 +297,7 @@ def fetch_article(law_name: str, article_no: str) -> str | None:
     if cached:
         return cached.get("articles", {}).get(article_no)
 
-    # API 조회
+    # API 조회 — 조문과 함께 위임 링크(lsDelegated)도 같은 캐시에 동봉
     law_id = _fetch_law_id(law_name)
     if not law_id:
         return None
@@ -233,8 +306,28 @@ def fetch_article(law_name: str, article_no: str) -> str | None:
     if not articles:
         return None
 
-    _save_cache(law_name, articles)
+    _save_cache(law_name, articles, _fetch_delegations(law_id))
     return articles.get(article_no)
+
+
+def fetch_delegations(law_name: str, article_no: str) -> list[dict]:
+    """
+    캐시된 법령에서 특정 조문의 위임 대상 조문 목록 반환.
+    반환: [{"law": "건축법 시행령", "art": "제3조"}, ...] (없으면 [])
+
+    구형 캐시(articles만 있고 delegations 키 자체가 없음)는 위임 정보만
+    한 번 보강해 파일을 갱신한다(cached_at 유지 — 조문은 그대로이므로).
+    """
+    cached = _load_cache(law_name)
+    if cached is None:
+        return []
+    if "delegations" not in cached:
+        law_id = _fetch_law_id(law_name)
+        deleg = _fetch_delegations(law_id) if law_id else {}
+        _save_cache(law_name, cached.get("articles", {}), deleg,
+                    cached_at=cached.get("cached_at"))
+        cached["delegations"] = deleg
+    return cached.get("delegations", {}).get(article_no, [])
 
 
 def fetch_hints(

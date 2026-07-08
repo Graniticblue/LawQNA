@@ -1459,10 +1459,22 @@ async def on_regenerate_with_fetch(action: cl.Action):
             return None
         articles = law_api_fetcher._fetch_full_law(law_id)
         if articles:
-            law_api_fetcher._save_cache(law_name, articles)
+            law_api_fetcher._save_cache(
+                law_name, articles, law_api_fetcher._fetch_delegations(law_id))
             # 대표로 첫 조문 반환
             return next(iter(articles.values()), None)
         return None
+
+    def follow_delegations(law_name: str, article_no: str, cap: int = 3):
+        # 캐시에 동봉된 위임 링크('대통령령으로 정하는' → 시행령 제N조)를 따라
+        # 대상 조문을 동반 로드. 대상 법령도 fetch_article이 통째 캐싱한다.
+        out = []
+        for tgt in law_api_fetcher.fetch_delegations(law_name, article_no)[:cap]:
+            content = law_api_fetcher.fetch_article(tgt["law"], tgt["art"])
+            if content:
+                out.append({"law_name": tgt["law"], "article_no": tgt["art"],
+                            "content": content, "via": f"「{law_name}」 {article_no}"})
+        return out
 
     for f in fetchable:
         content = await asyncio.to_thread(
@@ -1474,6 +1486,21 @@ async def on_regenerate_with_fetch(action: cl.Action):
         else:
             failed.append(entry)
 
+    # 위임 조문 동반 로드 (성공 조문의 하위법령 링크 1-hop, 전체 상한 6건)
+    delegated: list[dict] = []
+    seen_arts = {(s["law_name"], s.get("article_no", "")) for s in success}
+    for s in success:
+        if not s.get("article_no") or len(delegated) >= 6:
+            continue
+        for d in await asyncio.to_thread(
+            follow_delegations, s["law_name"], s["article_no"]
+        ):
+            dk = (d["law_name"], d["article_no"])
+            if dk in seen_arts or len(delegated) >= 6:
+                continue
+            seen_arts.add(dk)
+            delegated.append(d)
+
     # 결과 알림
     result_lines = ["📡 **페치 결과**"]
     if success:
@@ -1481,6 +1508,11 @@ async def on_regenerate_with_fetch(action: cl.Action):
         for s in success:
             art = s.get("article_no", "") or "(전체)"
             result_lines.append(f"  · 「{s['law_name']}」 {art}")
+    if delegated:
+        result_lines.append("\n**↳ 위임 조문 동반 로드:**")
+        for d in delegated:
+            result_lines.append(
+                f"  · 「{d['law_name']}」 {d['article_no']} ← {d['via']}의 위임")
     if failed:
         result_lines.append("\n**✗ 페치 실패 (API에서 못 찾음):**")
         for fa in failed:
@@ -1504,6 +1536,10 @@ async def on_regenerate_with_fetch(action: cl.Action):
     for s in success:
         extra_lines.append(f"\n[법령원문] 「{s['law_name']}」 {s.get('article_no', '')}")
         extra_lines.append(s["content"])
+    for d in delegated:
+        extra_lines.append(
+            f"\n[위임법령] 「{d['law_name']}」 {d['article_no']} — {d['via']}의 위임 조문")
+        extra_lines.append(d["content"])
     extra_context = "\n".join(extra_lines)
 
     gen = get_generator()
