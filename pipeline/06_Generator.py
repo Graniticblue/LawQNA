@@ -997,25 +997,30 @@ def strip_unverified_citations(
             masks[tok] = lab
             answer = answer.replace(lab, tok)
 
+    # 치환 문구: 구조(rescue)가 먼저 DB 전체를 대조하므로, 여기서 지워지는 번호는
+    # "우리 DB에 없음"이 확정. 웹서치는 하지 않으므로 사용자에게 필요한 다음 행동
+    # (외부 리서치)을 문구로 명기한다.
+    _NEED_RESEARCH = "(존재여부 리서치 필요)"
+
     def _qa(m):
         code = m.group(1)
         if code in allowed_codes:
             return m.group(0)
         removed.append(code)
-        return "관련 법제처 해석례(출처 미확인)"
+        return "관련 법제처 해석례" + _NEED_RESEARCH
 
     def _court(m):
         code = m.group(1)
         if code in allowed_codes:
             return m.group(0)
         removed.append(code)
-        return "관련 대법원 판례(출처 미확인)"
+        return "관련 대법원 판례" + _NEED_RESEARCH
 
     def _dated(m):
         org, kind = m.group(1), m.group(2)
         removed.append(m.group(0).strip()[:30])
         is_court = ("판결" in kind or "결정" in kind or org in ("대법원", "헌법재판소"))
-        return (f"관련 {org} 판례" if is_court else f"관련 {org} 회신") + "(출처 미확인)"
+        return (f"관련 {org} 판례" if is_court else f"관련 {org} 회신") + _NEED_RESEARCH
 
     def _agency(m):
         key = f"{m.group(1)}-{m.group(2)}"   # "건축기획팀-2471"
@@ -1023,7 +1028,7 @@ def strip_unverified_citations(
         if key in allowed_codes or m.group(2) in allowed_codes:
             return m.group(0)
         removed.append(key)
-        return "관련 행정해석(출처 미확인)"
+        return "관련 행정해석" + _NEED_RESEARCH
 
     out = _COURT_CITE_FULL.sub(_court, answer)   # 판례(YY+한글+숫자) 먼저
     out = _QA_CITE_FULL.sub(_qa, out)            # 해석례(NN-NNNN) 다음
@@ -1438,8 +1443,10 @@ class Generator:
 
         # ── 인용 구조(rescue): 검색엔 없지만 DB 전체엔 실재하는 번호 살리기 ──
         # 소독기는 '이번 검색 결과'만 대조하므로, 판례 검색(법규×유형 쌍)이 놓친
-        # DB 보유 판례·해석례를 모델이 번호로 인용하면 억울하게 '(출처 미확인)'
-        # 처리됐었음(2026-07 실사례: 접도의무 취지 판시 — DB에 3건 실재).
+        # DB 보유 판례·해석례를 모델이 번호로 인용하면 억울하게 익명화됐었음
+        # (2026-07 실사례: 접도의무 취지 판시 — DB에 3건 실재). 구조가 먼저 돌므로
+        # 이후 소독기가 지우는 번호는 'DB에 없음' 확정 → 치환문은
+        # '(존재여부 리서치 필요)'로 외부 리서치 필요성을 명기한다.
         # 지우기 전에 컬렉션을 직접 조회해 실재하면 인용을 유지하고, 해당 문서를
         # qa_docs/case_docs에 추가해 팝업까지 걸리게 한다.
         # eval 경로(시점 컷오프·제외 목록·블라인드 테스트)에서는 정답 누수 방지를
@@ -1481,7 +1488,8 @@ class Generator:
         answer = re.sub(
             r"(?m)^[ \t>*\-•·]*관련\s*"
             r"(?:국토교통부|국토부|행정안전부|행정자치부|법제처|대법원|헌법재판소)?\s*"
-            r"(?:회신|해석례|판례|행정해석)\s*$\n?",
+            r"(?:회신|해석례|판례|행정해석)\s*"
+            r"(?:\((?:존재여부 리서치 필요|출처 미확인)\))?\s*$\n?",
             "", answer)
         if verbose and removed_cites:
             print(f"\n  [거짓인용 차단] {len(removed_cites)}건: {removed_cites}")
