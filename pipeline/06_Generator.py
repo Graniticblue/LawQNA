@@ -1096,9 +1096,21 @@ class Generator:
             _stream     = lambda s, u, cb: call_gemini_stream(self._gemini_client, s, u, cb, temperature=0.2)
 
         # ── Pass 1: 쟁점 + 관계 유형 분류 ─────────────
+        # 연속 질의: extra_context에 [이전 대화 맥락] 블록(chainlit이 생성)이 있으면
+        # pass1에도 제공한다. 후속 질문("각 시설의 필요 면적은?")은 질문 단독으로는
+        # 분류·law_hints·검색어가 무맥락으로 나와 검색이 무너지므로, 지시어·생략된
+        # 주어를 직전 대화로 해소해 도출하게 한다.
+        pass1_query = query
+        if extra_context and "[이전 대화 맥락]" in extra_context:
+            pass1_query = (
+                f"{extra_context}\n\n## 현재 질문\n{query}\n\n"
+                "※ 분류·law_hints·definition_terms·검색어는 '현재 질문'을 기준으로 하되, "
+                "지시어나 생략된 대상은 위 이전 대화 맥락으로 해소해 도출하라. "
+                "이전 답변이 이미 특정한 법령·조례·조문은 law_hints에 그대로 포함하라."
+            )
         if verbose:
             print("\n[Pass 1] 쟁점 식별 + 관계 유형 분류 중...")
-        pass1_text = _call_pass1(PASS1_SYSTEM, query)
+        pass1_text = _call_pass1(PASS1_SYSTEM, pass1_query)
         if verbose:
             print(pass1_text)
 

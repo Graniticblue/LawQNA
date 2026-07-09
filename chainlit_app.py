@@ -1159,6 +1159,45 @@ def _init_session():
     cl.user_session.set("upload_key", upload_key)
 
 
+# ── 연속 질의 맥락 (대화 히스토리 → 생성 컨텍스트) ──────────────────
+# 예전에는 직전 3턴을 답변 300자로 잘라 무설명 'Q:/A:' 로만 주입해,
+# 후속 질문("각 시설의 필요 면적은?")에서 지시어가 해소되지 않고 직전 답변을
+# 되풀이하거나 이전 답변과 모순되는 문제가 있었다(2026-07-09 실사례).
+
+_HISTORY_TURNS = 3        # 주입할 직전 턴 수
+_HISTORY_A_CAP = 1200     # 턴당 답변 보존 길이
+
+
+def _history_answer(body: str) -> str:
+    """히스토리에 저장할 답변 요약: 참조 목록·출처 섹션 앞까지의 본문(결론+이유)만.
+    결론 수치·적용 조례 같은 확정 사실이 잘리지 않게 300→1200자로 확대."""
+    for marker in ("[관련 조문", "[근거 법령", "[출처 요약", "[담당부서", "[검색 태그"):
+        i = body.find(marker)
+        if i > 0:
+            body = body[:i]
+    return body.strip()[:_HISTORY_A_CAP]
+
+
+def _history_context(history: list) -> str:
+    """직전 턴들을 생성 파이프라인용 맥락 블록으로 조립.
+    이 헤더 문자열('[이전 대화 맥락]')은 06_Generator가 pass1 입력 보강의
+    게이트로도 사용하므로 바꾸면 함께 바꿔야 한다."""
+    if not history:
+        return ""
+    lines = [
+        "=== [이전 대화 맥락] ===",
+        "아래는 이 세션의 직전 질의응답이다. 현재 질문이 지시어('각 시설', '그럼', "
+        "'그 경우')나 생략된 주어를 쓰면 이 맥락의 대상을 가리키는 후속 질문이다. "
+        "이전 답변에서 확정된 사실·수치·적용 조례는 그대로 전제로 삼아 이어서 답하고, "
+        "같은 내용을 처음부터 반복 설명하지 마라. 단, 이전 답변이 이번 검색 자료와 "
+        "모순되면 정정하고 그 사실을 명시하라.",
+    ]
+    for h in history[-_HISTORY_TURNS:]:
+        lines.append(f"\n[이전 질문] {h['q']}")
+        lines.append(f"[이전 답변] {h['a']}")
+    return "\n".join(lines)
+
+
 @cl.on_chat_start
 async def on_start():
     _init_session()
@@ -1167,10 +1206,34 @@ async def on_start():
 @cl.on_chat_resume
 async def on_resume(thread):
     # 과거 대화를 사이드바에서 클릭해 재개할 때 호출.
-    # 화면의 메시지는 Chainlit이 thread에서 자동 복원하고,
-    # 여기선 검색용 세션 컬렉션·업로드 상태만 새로 초기화한다.
-    # (내부 대화맥락 history는 비운 채 시작 — 이어지는 질문부터 새 맥락)
+    # 화면의 메시지는 Chainlit이 thread에서 자동 복원하고, 여기선 검색용 세션
+    # 컬렉션·업로드 상태를 새로 초기화한 뒤 대화맥락(history)을 스텝에서 복원한다.
+    # (예전엔 비운 채 시작해 재개 후 첫 후속 질문이 무맥락으로 처리됐음)
     _init_session()
+    try:
+        aux_authors = {"사각지대 알림", "입법요지"}
+        history, pending_q, last_a = [], None, None
+        for step in (thread or {}).get("steps", []) or []:
+            stype = step.get("type", "")
+            out = (step.get("output") or "").strip()
+            name = step.get("name", "")
+            if stype == "user_message":
+                if pending_q and last_a:
+                    history.append({"q": pending_q, "a": _history_answer(last_a)})
+                pending_q, last_a = out, None
+            elif stype == "assistant_message":
+                # 보조 메시지(알림·입법요지·피드백 인사 등)는 본답변이 아님 —
+                # author 제외 + 짧은 출력 제외. 같은 질문에 답변이 여러 개면
+                # (재생성 등) 마지막 것을 채택.
+                if name in aux_authors or len(out) < 120:
+                    continue
+                last_a = out
+        if pending_q and last_a:
+            history.append({"q": pending_q, "a": _history_answer(last_a)})
+        if history:
+            cl.user_session.set("history", history[-_HISTORY_TURNS:])
+    except Exception:
+        pass   # 복원 실패 시 빈 맥락으로 시작(종전 동작)
 
 
 @cl.action_callback("helpful")
@@ -1342,15 +1405,9 @@ async def on_message(message: cl.Message):
                 provider = "gemini"
             cl.user_session.set("provider", provider)   # 첫 선택을 세션에 저장
 
-    # 히스토리에서 extra_context 구성
+    # 히스토리에서 연속 질의 맥락 구성
     history = cl.user_session.get("history", [])
-    extra_context = ""
-    if history:
-        lines = []
-        for h in history[-3:]:
-            lines.append(f"Q: {h['q']}")
-            lines.append(f"A: {h['a'][:300]}...")
-        extra_context = "\n".join(lines)
+    extra_context = _history_context(history)
 
     session_id = cl.user_session.get("upload_key", "")
     # provider별 라벨 — gemma_forced 케이스에서 이미 설정된 model_label은 보존
@@ -1402,8 +1459,8 @@ async def on_message(message: cl.Message):
         model_label=model_label,
     )
 
-    # 히스토리 업데이트
-    history.append({"q": query, "a": body[:500]})
+    # 히스토리 업데이트 — 결론·수치가 잘리지 않게 본문 요약으로 저장
+    history.append({"q": query, "a": _history_answer(body)})
     cl.user_session.set("history", history)
 
 
@@ -1613,7 +1670,9 @@ async def on_regenerate_with_fetch(action: cl.Action):
             "\n[위임법령 목록] 아래 조문들도 위임 관계이나 본문은 미주입 — "
             "답변에 필요하면 해당 조문의 존재를 안내하세요.")
         extra_lines.extend(delegated_rest)
-    extra_context = "\n".join(extra_lines)
+    # 재생성도 연속 질의 맥락 유지 (페치 자료만 넣으면 대화 흐름이 유실됨)
+    hist_block = _history_context(cl.user_session.get("history", []))
+    extra_context = ((hist_block + "\n\n") if hist_block else "") + "\n".join(extra_lines)
 
     gen = get_generator()
     session_id = cl.user_session.get("upload_key", "")
