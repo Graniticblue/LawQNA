@@ -1207,9 +1207,13 @@ class Generator:
         amendment_semantic_docs = retriever.search_amendments_semantic(search_query, top_k=3)
 
         # 업로드 법령 검색 (세션 컬렉션)
+        # context에 이전 대화 맥락(extra_context)을 넘겨, 후속 질문에 지역명이 빠져도
+        # 조례 스코프 필터가 직전 대화의 지역으로 조례를 유지하게 한다.
         uploaded_docs = []
         if session_id:
-            uploaded_docs = retriever.search_uploaded(session_id, search_query, top_k=5, thread_id=thread_id)
+            uploaded_docs = retriever.search_uploaded(
+                session_id, search_query, top_k=5, thread_id=thread_id,
+                context=extra_context)
             if verbose and uploaded_docs:
                 print(f"→ 업로드 법령 {len(uploaded_docs)}건 검색됨")
 

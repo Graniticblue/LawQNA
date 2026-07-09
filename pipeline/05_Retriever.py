@@ -1225,13 +1225,35 @@ class HybridSearcher:
         col.add(ids=ids, embeddings=embeddings, documents=texts, metadatas=metas)
         return len(ids)
 
-    def search_uploaded(self, session_id: str, query: str, top_k: int = 5, thread_id: str = "") -> list:
+    def search_uploaded(self, session_id: str, query: str, top_k: int = 5,
+                        thread_id: str = "", context: str = "") -> list:
         """세션 컬렉션에서 유사도 검색. RetrievedDoc 리스트 반환.
-        조례는 원칙적으로 업로드한 대화(thread_id)에서만 노출하되, 다른 대화라도
-        질문에 그 조례의 지역명(예: '남양주시')이 언급되면 예외적으로 허용한다."""
+
+        조례는 원칙적으로 업로드한 대화(thread_id)에서만 노출하되, 다음 중 하나면
+        다른 대화에서도 허용한다:
+          (a) 그 컬렉션에 조례가 1종류뿐 — 구분할 다른 지역 조례가 없어 격리가 무의미
+          (b) 질문 또는 직전 대화 맥락(context)에 그 조례의 지역명이 언급됨
+        연속 질의에서 후속 질문("각 상세시설 면적은?")에 지역명이 빠져도 직전 맥락으로
+        해소된다(과거에는 지역명 없는 후속 질문에서 조례가 통째로 누락됐음)."""
         col = self._session_cols.get(session_id)
         if col is None or col.count() == 0:
             return []
+
+        # 컬렉션 내 '다른 대화에서 올린' 조례가 몇 종류인지 — 1종이면 스코프 필터 스킵
+        distinct_foreign_ord = 0
+        if thread_id:
+            try:
+                all_meta = col.get(include=["metadatas"], limit=10000)["metadatas"]
+                names = {
+                    m.get("law_name", "") for m in all_meta
+                    if m.get("is_ordinance") == "true"
+                    and m.get("thread_id", "") and m.get("thread_id") != thread_id
+                }
+                distinct_foreign_ord = len(names)
+            except Exception:
+                distinct_foreign_ord = 99   # 조회 실패 시 보수적으로 필터 유지
+
+        match_text = f"{query}\n{context}"
 
         query_emb = self._embed_text(query)
         # 조례 스레드 필터로 일부가 걸러질 수 있어 넉넉히 뽑은 뒤 top_k로 자른다.
@@ -1250,12 +1272,12 @@ class HybridSearcher:
             res["documents"][0], res["metadatas"][0], res["distances"][0]
         ):
             # 조례인데 다른 대화에서 업로드된 것이면 원칙적으로 제외 (thread_id 불일치).
-            # 단, 현재 질문에 그 조례의 지역명이 언급되면("남양주시 ...") 허용.
+            # 단, 조례가 1종뿐이거나(구분 불필요) 질문·맥락에 지역명이 있으면 허용.
             if meta.get("is_ordinance") == "true":
                 tid = meta.get("thread_id", "")
-                if tid and thread_id and tid != thread_id:
+                if tid and thread_id and tid != thread_id and distinct_foreign_ord > 1:
                     region = _extract_region(meta.get("law_name", ""))
-                    if not (region and region in query):
+                    if not (region and region in match_text):
                         continue
             score = max(0.0, 1.0 - dist)
             if score < 0.3:
@@ -1890,8 +1912,9 @@ class Retriever:
     def index_uploaded_chunks(self, session_id: str, chunks: list[dict], thread_id: str = "") -> int:
         return self._searcher.index_uploaded_chunks(session_id, chunks, thread_id)
 
-    def search_uploaded(self, session_id: str, query: str, top_k: int = 5, thread_id: str = "") -> list:
-        return self._searcher.search_uploaded(session_id, query, top_k, thread_id)
+    def search_uploaded(self, session_id: str, query: str, top_k: int = 5,
+                        thread_id: str = "", context: str = "") -> list:
+        return self._searcher.search_uploaded(session_id, query, top_k, thread_id, context)
 
     def list_uploaded_docs(self, session_id: str) -> list[dict]:
         return self._searcher.list_uploaded_docs(session_id)
