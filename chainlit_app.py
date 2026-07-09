@@ -164,9 +164,61 @@ try:
                 pass
         return JSONResponse({"deleted": n})
 
+    @_cl_server_app.post("/upload-cache/add")
+    async def _upload_cache_add(request: Request):
+        # 채팅과 무관하게 PDF를 업로드 캐시에 등록 (질문 입력 불필요).
+        # anon_id로 채팅과 동일한 컬렉션(upload_{key[:16]})에 저장하고, thread_id=""
+        # 로 두어 조례라도 특정 대화에 묶이지 않고 모든 대화에서 검색되게 한다.
+        import asyncio as _asyncio
+        import tempfile
+        key = request.cookies.get("anon_id", "")
+        if not key:
+            return JSONResponse({"error": "세션이 없습니다 — 페이지를 새로고침하세요"}, status_code=400)
+        try:
+            form = await request.form()
+        except Exception:
+            return JSONResponse({"error": "폼 파싱 실패"}, status_code=400)
+        upload = form.get("file")
+        filename = getattr(upload, "filename", "") or ""
+        if not filename:
+            return JSONResponse({"error": "파일이 없습니다"}, status_code=400)
+        if not filename.lower().endswith(".pdf"):
+            return JSONResponse({"error": "PDF 파일만 등록할 수 있습니다"}, status_code=400)
+        data = await upload.read()
+        if not data:
+            return JSONResponse({"error": "빈 파일입니다"}, status_code=400)
+
+        def _do_upload():
+            fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    f.write(data)
+                law_label = filename.rsplit(".", 1)[0]
+                text = parse_pdf(tmp_path)
+                chunks = chunk_law_pdf(text, law_label)
+                gen = get_generator()
+                retriever = gen._get_retriever()
+                retriever.create_session_collection(key)   # _session_cols에 등록(채팅과 공유)
+                n = retriever.index_uploaded_chunks(key, chunks, "")  # thread_id="" → 전역
+                return law_label, n
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+
+        try:
+            law_label, n = await _asyncio.to_thread(_do_upload)
+        except Exception as e:
+            return JSONResponse({"error": f"처리 실패: {e}"}, status_code=500)
+        if n == 0:
+            return JSONResponse({"error": "인덱싱된 내용이 없습니다 (텍스트 추출 실패 PDF?)"}, status_code=400)
+        return JSONResponse({"law_name": law_label, "chunks": n})
+
     # Chainlit SPA catch-all(/{full_path:path} → index.html)보다 먼저 매칭되도록
     # 커스텀 라우트들을 라우터 맨 앞으로 재배열.
-    _MY_PATHS = {"/element-files/{object_key:path}", "/law-list", "/upload-cache", "/upload-cache/delete"}
+    _MY_PATHS = {"/element-files/{object_key:path}", "/law-list", "/upload-cache",
+                 "/upload-cache/delete", "/upload-cache/add"}
     _front = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") in _MY_PATHS]
     _rest  = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") not in _MY_PATHS]
     _cl_server_app.router.routes[:] = _front + _rest

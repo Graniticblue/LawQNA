@@ -103,6 +103,27 @@
             .catch(function () { ov.querySelector('.law-list-content').innerText = '목록을 불러오지 못했습니다.'; });
     }
 
+    // 파일을 채팅 없이 업로드 캐시에 등록 (질문 입력 불필요)
+    function uploadCacheFile(ov, file) {
+        var status = ov.querySelector('#upload-add-status');
+        if (!file) return;
+        if (!/\.pdf$/i.test(file.name)) { status.textContent = 'PDF 파일만 등록할 수 있습니다.'; return; }
+        status.textContent = '⏳ 업로드·인덱싱 중… (' + file.name + ')';
+        var fd = new FormData();
+        fd.append('file', file);
+        fetch('/upload-cache/add', { method: 'POST', body: fd })
+            .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+            .then(function (res) {
+                if (!res.ok || res.d.error) {
+                    status.textContent = '✗ ' + (res.d.error || '등록 실패');
+                    return;
+                }
+                status.textContent = '✓ 「' + res.d.law_name + '」 등록됨 (' + res.d.chunks + '개 청크)';
+                loadUploadCache(ov);   // 목록 새로고침
+            })
+            .catch(function () { status.textContent = '✗ 업로드 실패 (네트워크)'; });
+    }
+
     function showUploadModal() {
         var ov = document.getElementById('upload-cache-modal');
         if (ov) { ov.style.display = 'flex'; loadUploadCache(ov); return; }
@@ -111,6 +132,11 @@
         ov.innerHTML =
             '<div class="law-list-box">' +
             '<button class="law-list-close" aria-label="닫기">✕</button>' +
+            '<div class="upload-add-bar">' +
+            '<label class="upload-add-btn" for="upload-add-input">＋ PDF 파일 추가</label>' +
+            '<input type="file" id="upload-add-input" accept="application/pdf,.pdf" hidden />' +
+            '<span id="upload-add-status" class="upload-add-status">질문 없이 자료만 등록해 둘 수 있습니다.</span>' +
+            '</div>' +
             '<div class="law-list-content">불러오는 중…</div>' +
             '</div>';
         ov.addEventListener('click', function (e) {
@@ -126,6 +152,12 @@
                     .then(function () { loadUploadCache(ov); })
                     .catch(function () { b.disabled = false; b.textContent = '삭제'; });
             }
+        });
+        // 파일 선택 즉시 업로드 (같은 파일 재선택도 트리거되게 value 초기화)
+        ov.querySelector('#upload-add-input').addEventListener('change', function (e) {
+            var file = e.target.files && e.target.files[0];
+            uploadCacheFile(ov, file);
+            e.target.value = '';
         });
         ov.querySelector('.law-list-close').onclick = function () { ov.style.display = 'none'; };
         document.addEventListener('keydown', function (e) {
