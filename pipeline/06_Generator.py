@@ -392,11 +392,26 @@ PASS1_SYSTEM = """당신은 대한민국 건축법규 전문 AI입니다.
 
 weight 규칙: 주 쟁점 1.0 / 연관 쟁점 0.7~0.9 / 부 쟁점 0.5~0.6 (0.5 미만은 생략)
 
+### [답변 모드 판별 — answer_mode]
+질문의 성격에 따라 두 모드 중 하나를 판별한다:
+- **"해석"** (기본값): 법령의 모호지점·적용 여부·요건 의미를 논증하는 질문. **조금이라도 애매하면 무조건 "해석"**.
+- **"산출"**: 파라미터(지역·세대수·면적·층수 등)가 주어져 있고, 법령·조례의 **산식으로 수치가 결정적으로 계산되는** 질문일 때만.
+  - 예: "1230세대 아파트의 경로당 필요 면적은?" / "전용 84㎡ 500세대의 법정 주차대수는?"
+  - 반례(해석 유지): "경로당 면적 산정 시 발코니도 포함되나요?" — 수치 언급이 있어도 쟁점이 포함 여부 해석이면 "해석"
+
+### [세션 사실표 — session_facts]
+[이전 대화 맥락]이 제공된 연속 질의라면, 현재 질문에 유효한 확정 파라미터를
+key-value로 정리한다 (예: 지역, 세대수, 용도, 적용 조례, 이전 답변의 확정 수치).
+- **현재 질문과 무관해진 항목은 버린다** (주제가 바뀌면 빈 객체 {}).
+- 맥락이 없으면(첫 질문) 현재 질문에서 추출 가능한 파라미터만 담는다.
+
 ### [구조화 데이터]
 아래 JSON을 반드시 출력하세요 (파싱에 사용됩니다):
 ```json
 {
   "question_type": "단일조문형 | 복수조문탐색형 | 조건분기형",
+  "answer_mode": "해석 | 산출",
+  "session_facts": {"지역": "남양주시", "규모": "1230세대", "적용 조례": "남양주시 주택 조례"},
   "law_hints": ["건축법 제19조", "건축법 시행령 별표1"],
   "definition_terms": ["대수선", "저당권등"],
   "relation_types": [
@@ -816,6 +831,10 @@ def parse_pass1(pass1_text: str) -> dict:
         "relation_types":   [],
         "law_hints":        [],
         "definition_terms": [],
+        # 답변 모드 — 비대칭 기본값: 파싱 실패·미출력·오값 전부 "해석"(기존 경로).
+        # "산출"은 명시적으로 그 값이 나왔을 때만 발동한다.
+        "answer_mode":      "해석",
+        "session_facts":    {},
     }
 
     # ── JSON 추출: ```json ... ``` → ``` ... ``` → 코드블록 없이 날것 JSON 순으로 시도
@@ -830,6 +849,13 @@ def parse_pass1(pass1_text: str) -> dict:
         try:
             data = json.loads(raw_json)
             result["question_type"]    = data.get("question_type", result["question_type"])
+            if str(data.get("answer_mode", "")).strip() == "산출":
+                result["answer_mode"] = "산출"
+            facts = data.get("session_facts", {})
+            if isinstance(facts, dict):
+                result["session_facts"] = {
+                    str(k)[:40]: str(v)[:120] for k, v in list(facts.items())[:12]
+                }
             # dict 항목 방어 — LLM이 {"term":..., "law":...} 형태로 반환할 경우 str 추출
             raw_hints = data.get("law_hints", [])
             result["law_hints"] = [
@@ -1121,6 +1147,8 @@ class Generator:
         relation_types   = parsed["relation_types"]
         law_hints        = parsed["law_hints"]
         definition_terms = parsed["definition_terms"]
+        answer_mode      = parsed["answer_mode"]
+        session_facts    = parsed["session_facts"]
 
         if verbose:
             print(f"\n→ 질문 유형: {question_type}")
@@ -1372,6 +1400,23 @@ class Generator:
             )
         ref_list = "\n".join(ref_lines)
 
+        # ── 산출 모드 안내 (pass1이 "산출"로 판별한 경우에만 — 기본은 해석형 그대로) ──
+        mode_note = ""
+        if answer_mode == "산출":
+            facts_line = " | ".join(f"{k}={v}" for k, v in session_facts.items())
+            mode_note = (
+                "\n## 🔢 산출 모드 (수치 산출형 질문)\n"
+                "이 질문은 법령·조례의 산식으로 수치가 결정되는 산출형이다. 답변 형식을 다음으로 전환한다:\n"
+                "- **결론을 산출 결과로 먼저 제시**: 항목별로 `시설/항목 — 근거 조항 — 산식 — 계산 — 결과` 구조. 여러 항목이면 목록화.\n"
+                "- **적용 파라미터를 답변 첫머리에 명시**"
+                + (f" (확정 파라미터: {facts_line})" if facts_line else "")
+                + ": 지역·세대수·용도 등과 적용 법령·조례(명칭·조항)를 확정하고 시작한다.\n"
+                "- **산식·계수는 반드시 검색 컨텍스트의 조문·조례 문언에서 인용**한다. 컨텍스트에 산식이 없으면 내장지식으로 만들어내지 말고 "
+                "'해당 산식은 제공된 자료에서 확인되지 않음 — ○○ 조례/규칙 확인 필요'라고 명기한다.\n"
+                "- 법리 서사(입법 취지·해석 원칙)는 산출에 필요한 최소한으로 줄인다.\n"
+                "- 이전 대화에서 확정된 파라미터·산출값과 모순되지 않게 하라. 근거 조항이 달라졌다면 그 이유를 명시한다.\n"
+            )
+
         # ── 테스트 모드 안내 (질의에 판례·해석례 번호가 명시된 경우) ──
         test_mode_note = ""
         if test_exclusions:
@@ -1388,7 +1433,7 @@ class Generator:
 
         pass2_input = f"""## 질문
 {query}
-
+{mode_note}
 {ref_list}
 
 ## Pass 1 분석 결과
@@ -1520,6 +1565,8 @@ class Generator:
             "relation_types":   relation_types,
             "law_hints":        law_hints,
             "definition_terms": definition_terms,
+            "answer_mode":      answer_mode,
+            "session_facts":    session_facts,
             "test_exclusions":  test_exclusions,
             "blind_spots":      blind_spots,
             "context":          context,

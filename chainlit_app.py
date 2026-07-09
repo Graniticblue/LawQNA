@@ -1145,6 +1145,7 @@ def _init_session():
     cl.user_session.set("pdf_list", [])
     cl.user_session.set("pdf_ready", False)
     cl.user_session.set("history", [])
+    cl.user_session.set("session_facts", {})
 
     session_id = cl.context.session.id
     # 업로드 영속 키: 사용자 anon_id 기준 → 재방문 시 이전 업로드 재사용.
@@ -1178,14 +1179,20 @@ def _history_answer(body: str) -> str:
     return body.strip()[:_HISTORY_A_CAP]
 
 
-def _history_context(history: list) -> str:
-    """직전 턴들을 생성 파이프라인용 맥락 블록으로 조립.
+def _history_context(history: list, facts: dict | None = None) -> str:
+    """직전 턴들 + 세션 사실표를 생성 파이프라인용 맥락 블록으로 조립.
     이 헤더 문자열('[이전 대화 맥락]')은 06_Generator가 pass1 입력 보강의
     게이트로도 사용하므로 바꾸면 함께 바꿔야 한다."""
     if not history:
         return ""
     lines = [
         "=== [이전 대화 맥락] ===",
+    ]
+    if facts:
+        lines.append(
+            "[확정 사실표] " + " | ".join(f"{k}={v}" for k, v in facts.items())
+            + "  (이 대화에서 확정된 파라미터 — 현재 질문과 무관하면 무시)")
+    lines += [
         "아래는 이 세션의 직전 질의응답이다. 현재 질문이 지시어('각 시설', '그럼', "
         "'그 경우')나 생략된 주어를 쓰면 이 맥락의 대상을 가리키는 후속 질문이다. "
         "이전 답변에서 확정된 사실·수치·적용 조례는 그대로 전제로 삼아 이어서 답하고, "
@@ -1251,6 +1258,7 @@ async def on_not_helpful(action: cl.Action):
 @cl.action_callback("new_chat")
 async def on_new_chat(action: cl.Action):
     cl.user_session.set("history", [])
+    cl.user_session.set("session_facts", {})
     cl.user_session.set("pdf_list", [])
     cl.user_session.set("pdf_ready", False)
     cl.user_session.set("provider", None)   # 모델 선택 초기화 → 새 채팅 첫 질문에 다시 선택
@@ -1405,9 +1413,9 @@ async def on_message(message: cl.Message):
                 provider = "gemini"
             cl.user_session.set("provider", provider)   # 첫 선택을 세션에 저장
 
-    # 히스토리에서 연속 질의 맥락 구성
+    # 히스토리 + 세션 사실표에서 연속 질의 맥락 구성
     history = cl.user_session.get("history", [])
-    extra_context = _history_context(history)
+    extra_context = _history_context(history, cl.user_session.get("session_facts") or {})
 
     session_id = cl.user_session.get("upload_key", "")
     # provider별 라벨 — gemma_forced 케이스에서 이미 설정된 model_label은 보존
@@ -1462,6 +1470,9 @@ async def on_message(message: cl.Message):
     # 히스토리 업데이트 — 결론·수치가 잘리지 않게 본문 요약으로 저장
     history.append({"q": query, "a": _history_answer(body)})
     cl.user_session.set("history", history)
+    # 세션 사실표 갱신 — pass1이 매 턴 '현재 유효한 파라미터 전체'를 다시 내놓으므로
+    # 병합 없이 최신본으로 교체(주제가 바뀌면 자연히 비워짐)
+    cl.user_session.set("session_facts", result.get("session_facts") or {})
 
 
 # ── 사각지대 알림 + 재생성 ──────────────────────────────────────
@@ -1671,7 +1682,8 @@ async def on_regenerate_with_fetch(action: cl.Action):
             "답변에 필요하면 해당 조문의 존재를 안내하세요.")
         extra_lines.extend(delegated_rest)
     # 재생성도 연속 질의 맥락 유지 (페치 자료만 넣으면 대화 흐름이 유실됨)
-    hist_block = _history_context(cl.user_session.get("history", []))
+    hist_block = _history_context(cl.user_session.get("history", []),
+                                  cl.user_session.get("session_facts") or {})
     extra_context = ((hist_block + "\n\n") if hist_block else "") + "\n".join(extra_lines)
 
     gen = get_generator()
