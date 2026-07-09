@@ -896,6 +896,35 @@ def parse_pass1(pass1_text: str) -> dict:
 
 
 # ============================================================
+# 답변 인용 법령 추출 (사후 사각지대 감지용)
+# ============================================================
+
+# 「법령명」[ 제N조] 에서 법령류만 — 고시·기준·지침·계획 등은 API 페치 대상이 아니라 제외.
+_ANSWER_LAW_PAT = re.compile(r'「([^」]{2,40})」\s*(제\d+조(?:의\d+)?)?')
+_LAW_SUFFIX = re.compile(r'(?:법|법률|법 시행령|법 시행규칙|령|규칙|규정|조례)$')
+
+
+def _extract_answer_law_hints(answer: str) -> list[str]:
+    """답변 본문에 「」로 인용된 법령을 '법령명 [제N조]' 힌트로 추출(중복 제거).
+
+    pass2가 답변에서 새로 언급한 법령(pass1 예측에 없던 것)을 사각지대 감지에
+    태우기 위한 것. 고시·기준·지침 등 비법령 인용은 제외한다."""
+    seen, hints = set(), []
+    body = answer.split("[출처", 1)[0]   # 출처 요약 블록 제외
+    for m in _ANSWER_LAW_PAT.finditer(body):
+        # 가운뎃점 변종 통일 (DB law_name 정확매칭용) — 05_Retriever._normalize_middot와 동일
+        name = m.group(1).strip().replace("ㆍ", "·").replace("・", "·").replace("‧", "·")
+        if not _LAW_SUFFIX.search(name):
+            continue
+        hint = f"{name} {m.group(2)}" if m.group(2) else name
+        key = re.sub(r"\s+", "", hint)
+        if key not in seen:
+            seen.add(key)
+            hints.append(hint)
+    return hints
+
+
+# ============================================================
 # 출처 파서
 # ============================================================
 
@@ -1560,6 +1589,29 @@ class Generator:
             print("[최종 답변]")
             print(f"{'='*60}")
             print(answer)
+
+        # ── 답변(pass2) 인용 법령 사후 사각지대 감지 ──
+        # 사각지대 감지는 pass1 law_hints(검색 전 예측) 기준이라, pass2가 답변에서
+        # 새로 끌어온 법령(예: '영유아보육법·도서관법 등 관련 법령')은 놓쳤음.
+        # 답변 본문에 「」로 인용된 법령류를 추출해 DB 미수록분을 사각지대에 추가한다.
+        answer_hints = _extract_answer_law_hints(answer)
+        if answer_hints:
+            extra_bs = retriever.detect_blind_spots(answer_hints)
+            seen_f = {(f.get("law_name"), f.get("article_no"))
+                      for f in blind_spots.get("fetchable", [])}
+            for f in extra_bs.get("fetchable", []):
+                k = (f.get("law_name"), f.get("article_no"))
+                if k not in seen_f:
+                    blind_spots.setdefault("fetchable", []).append(f)
+                    seen_f.add(k)
+            seen_m = {m.get("hint") for m in blind_spots.get("manual_check", [])}
+            for m in extra_bs.get("manual_check", []):
+                if m.get("hint") not in seen_m:
+                    blind_spots.setdefault("manual_check", []).append(m)
+                    seen_m.add(m.get("hint"))
+            if verbose and extra_bs.get("fetchable"):
+                print(f"  [답변 인용 사각지대] +{len(extra_bs['fetchable'])}건: "
+                      f"{[f['law_name'] for f in extra_bs['fetchable']]}")
 
         source_info = parse_source_info(answer)
 
