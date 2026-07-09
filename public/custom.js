@@ -135,14 +135,16 @@
             '<div class="upload-add-bar">' +
             '<label class="upload-add-btn" for="upload-add-input">＋ PDF 파일 추가</label>' +
             '<input type="file" id="upload-add-input" accept="application/pdf,.pdf" hidden />' +
+            '<input type="file" id="upload-replace-input" accept="application/pdf,.pdf" hidden />' +
             '<span id="upload-add-status" class="upload-add-status">질문 없이 자료만 등록해 둘 수 있습니다.</span>' +
             '</div>' +
             '<div class="law-list-content">불러오는 중…</div>' +
             '</div>';
         ov.addEventListener('click', function (e) {
             if (e.target === ov) { ov.style.display = 'none'; return; }
+            // 삭제
             var b = e.target.closest && e.target.closest('.law-list-del');
-            if (b) {   // 삭제 버튼 (이벤트 위임)
+            if (b) {
                 b.disabled = true; b.textContent = '삭제 중…';
                 fetch('/upload-cache/delete', {
                     method: 'POST',
@@ -151,13 +153,61 @@
                 })
                     .then(function () { loadUploadCache(ov); })
                     .catch(function () { b.disabled = false; b.textContent = '삭제'; });
+                return;
+            }
+            // 전역 재캐싱 (파일 없이 thread_id 해제)
+            var rc = e.target.closest && e.target.closest('.law-list-recache');
+            if (rc) {
+                rc.disabled = true; rc.textContent = '처리 중…';
+                fetch('/upload-cache/recache', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ law_name: rc.dataset.law }),
+                })
+                    .then(function () { loadUploadCache(ov); })
+                    .catch(function () { rc.disabled = false; rc.textContent = '전역 재캐싱'; });
+                return;
+            }
+            // 교체 (파일 선택 → 삭제 후 재업로드)
+            var rp = e.target.closest && e.target.closest('.law-list-replace');
+            if (rp) {
+                var inp = ov.querySelector('#upload-replace-input');
+                inp.dataset.oldLaw = rp.dataset.law;
+                inp.click();
+                return;
             }
         });
-        // 파일 선택 즉시 업로드 (같은 파일 재선택도 트리거되게 value 초기화)
+        // 파일 추가: 선택 즉시 업로드 (같은 파일 재선택 위해 value 초기화)
         ov.querySelector('#upload-add-input').addEventListener('change', function (e) {
             var file = e.target.files && e.target.files[0];
             uploadCacheFile(ov, file);
             e.target.value = '';
+        });
+        // 교체: 기존 항목 삭제 후 새 파일 등록
+        ov.querySelector('#upload-replace-input').addEventListener('change', function (e) {
+            var file = e.target.files && e.target.files[0];
+            var oldLaw = e.target.dataset.oldLaw;
+            e.target.value = '';
+            if (!file || !oldLaw) return;
+            var status = ov.querySelector('#upload-add-status');
+            if (!/\.pdf$/i.test(file.name)) { status.textContent = 'PDF 파일만 가능합니다.'; return; }
+            status.textContent = '⏳ 교체 중… (' + file.name + ')';
+            fetch('/upload-cache/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ law_name: oldLaw }),
+            })
+                .then(function () {
+                    var fd = new FormData(); fd.append('file', file);
+                    return fetch('/upload-cache/add', { method: 'POST', body: fd });
+                })
+                .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+                .then(function (res) {
+                    if (!res.ok || res.d.error) { status.textContent = '✗ ' + (res.d.error || '교체 실패'); return; }
+                    status.textContent = '✓ 「' + res.d.law_name + '」(으)로 교체됨 (' + res.d.chunks + '개 청크)';
+                    loadUploadCache(ov);
+                })
+                .catch(function () { status.textContent = '✗ 교체 실패 (네트워크)'; });
         });
         ov.querySelector('.law-list-close').onclick = function () { ov.style.display = 'none'; };
         document.addEventListener('keydown', function (e) {

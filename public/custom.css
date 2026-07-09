@@ -156,6 +156,24 @@ a[href*="github.com/Chainlit"],
 .law-list-del:hover { background: #FFEBEE; }
 .law-list-del:disabled { opacity: 0.6; cursor: default; }
 
+/* 업로드 캐시 목록 — 전역 재캐싱 / 교체 버튼 */
+.law-list-recache,
+.law-list-replace {
+    background: #fff;
+    color: #1565C0;
+    border: 1px solid #90CAF9;
+    border-radius: 6px;
+    padding: 3px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    margin-right: 4px;
+}
+.law-list-recache:hover,
+.law-list-replace:hover { background: #E3F2FD; }
+.law-list-recache:disabled,
+.law-list-replace:disabled { opacity: 0.6; cursor: default; }
+
 .law-list-box {
     background: #fff;
     border-radius: 12px;

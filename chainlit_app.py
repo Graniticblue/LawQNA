@@ -122,10 +122,12 @@ try:
                 metas = _upload_col(key).get(include=["metadatas"], limit=10000)["metadatas"]
                 for m in metas:
                     ln = m.get("law_name", "업로드 법령")
-                    e = agg.setdefault(ln, {"chunks": 0, "ord": False})
+                    e = agg.setdefault(ln, {"chunks": 0, "ord": False, "scoped": False})
                     e["chunks"] += 1
                     if m.get("is_ordinance") == "true":
                         e["ord"] = True
+                        if m.get("thread_id", ""):   # thread_id 있으면 특정 대화 한정
+                            e["scoped"] = True
             except Exception:
                 pass
         parts = ['<div class="law-db">', "<h2>📂 업로드 캐시</h2>"]
@@ -135,12 +137,22 @@ try:
             parts.append("<table><thead><tr><th>자료</th><th>청크</th><th></th></tr></thead><tbody>")
             for ln in sorted(agg):
                 e = agg[ln]
-                tag = " · 조례(업로드한 대화 한정)" if e["ord"] else ""
+                if e["ord"]:
+                    tag = " · 조례(이 대화 한정)" if e["scoped"] else " · 조례(모든 대화)"
+                else:
+                    tag = ""
+                law_attr = _h.escape(ln, quote=True)
+                btns = ""
+                if e["scoped"]:   # 대화 한정 조례만 '전역 재캐싱' 노출
+                    btns += f'<button class="law-list-recache" data-law="{law_attr}">전역 재캐싱</button> '
+                btns += f'<button class="law-list-replace" data-law="{law_attr}">교체</button> '
+                btns += f'<button class="law-list-del" data-law="{law_attr}">삭제</button>'
                 parts.append(
                     f"<tr><td>{_h.escape(ln)}{_h.escape(tag)}</td><td>{e['chunks']}</td>"
-                    f'<td><button class="law-list-del" data-law="{_h.escape(ln, quote=True)}">삭제</button></td></tr>')
+                    f"<td>{btns}</td></tr>")
             parts.append("</tbody></table>")
-            parts.append('<p class="law-db-foot">미사용 30일 후엔 자동 정리됩니다.</p>')
+            parts.append('<p class="law-db-foot">‘전역 재캐싱’: 이 대화에만 쓰이던 조례를 모든 대화에서 쓰이게 함. '
+                         '‘교체’: 최신 PDF로 덮어쓰기. 미사용 30일 후 자동 정리.</p>')
         parts.append("</div>")
         return HTMLResponse("\n".join(parts))
 
@@ -163,6 +175,33 @@ try:
             except Exception:
                 pass
         return JSONResponse({"deleted": n})
+
+    @_cl_server_app.post("/upload-cache/recache")
+    async def _upload_cache_recache(request: Request):
+        # 전역 재캐싱: 그 법령 청크의 thread_id 메타만 ""로 바꿔 모든 대화에서
+        # 검색되게 한다(재파싱·재임베딩 없이 메타만 update). 조례의 '이 대화 한정'
+        # 격리를 파일 재선택 없이 해제하는 용도.
+        key = request.cookies.get("anon_id", "")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        law = (body or {}).get("law_name", "")
+        n = 0
+        if key and law:
+            try:
+                col = _upload_col(key)
+                got = col.get(where={"law_name": {"$eq": law}},
+                              include=["metadatas"], limit=10000)
+                ids, metas = got["ids"], got["metadatas"]
+                if ids:
+                    for m in metas:
+                        m["thread_id"] = ""   # 전역화
+                    col.update(ids=ids, metadatas=metas)
+                    n = len(ids)
+            except Exception:
+                pass
+        return JSONResponse({"recached": n})
 
     @_cl_server_app.post("/upload-cache/add")
     async def _upload_cache_add(request: Request):
@@ -218,7 +257,7 @@ try:
     # Chainlit SPA catch-all(/{full_path:path} → index.html)보다 먼저 매칭되도록
     # 커스텀 라우트들을 라우터 맨 앞으로 재배열.
     _MY_PATHS = {"/element-files/{object_key:path}", "/law-list", "/upload-cache",
-                 "/upload-cache/delete", "/upload-cache/add"}
+                 "/upload-cache/delete", "/upload-cache/add", "/upload-cache/recache"}
     _front = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") in _MY_PATHS]
     _rest  = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") not in _MY_PATHS]
     _cl_server_app.router.routes[:] = _front + _rest
