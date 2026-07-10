@@ -1682,8 +1682,8 @@ async def _render_blind_spot_notice(
 
     # 지자체 조례 등은 법제처 API에 없어 페치가 실패한다 → 직접 업로드 경로 안내
     if any("조례" in f.get("law_name", "") for f in fetchable) or manual_check:
-        lines.append("\n💡 지자체 조례 등 API로 못 찾는 자료는 상단 **‘업로드 캐시 → ＋PDF 파일 추가’**로 "
-                     "직접 등록하면 이후 답변에 반영됩니다.")
+        lines.append("\n💡 지자체 조례 등 API로 못 찾는 자료는 아래 **‘PDF 직접 첨부’** 버튼이나 "
+                     "상단 **‘업로드 캐시 → ＋PDF 파일 추가’**로 등록하면 답변에 반영됩니다.")
 
     actions: list = []
     if fetchable:
@@ -1698,6 +1698,16 @@ async def _render_blind_spot_notice(
                 "fetchable":  fetchable,
             },
         ))
+    # API 페치 대신(또는 API에 없는 자료를) PDF로 직접 등록하는 선택지 — 항상 노출
+    actions.append(cl.Action(
+        name="blind_spot_pdf_attach",
+        label="📎 PDF 직접 첨부 후 답변 다시 생성",
+        payload={
+            "query":      query,
+            "provider":   provider,
+            "model_label": model_label,
+        },
+    ))
 
     await cl.Message(
         content="\n".join(lines),
@@ -1843,8 +1853,8 @@ async def on_regenerate_with_fetch(action: cl.Action):
         hint = ""
         if any("조례" in fa.get("law_name", "") for fa in failed):
             hint = ("\n\n💡 지자체 조례는 법제처 API에 없어 페치되지 않습니다. "
-                    "상단 **‘업로드 캐시 → ＋PDF 파일 추가’**로 조례 PDF를 직접 등록하시면 "
-                    "이후 답변에 반영됩니다.")
+                    "사각지대 알림의 **‘📎 PDF 직접 첨부’** 버튼이나 상단 **‘업로드 캐시 → "
+                    "＋PDF 파일 추가’**로 조례 PDF를 직접 등록하시면 답변에 반영됩니다.")
         await cl.Message(
             content="페치 성공 자료가 없어 재생성을 진행하지 않습니다." + hint,
             author="사각지대 알림",
@@ -1854,14 +1864,7 @@ async def on_regenerate_with_fetch(action: cl.Action):
     # extra_context로 페치된 raw 텍스트 주입 + 재생성
     extra_lines = ["=== [API 페치 자료 — 답변 재생성용] ==="]
     extra_lines.append(
-        "※ 아래는 방금 법제처 API로 페치한 사각지대 법령 자료다. 이 재생성 답변은 "
-        "직전 답변을 대체하는 '완전판'이므로 반드시 다음을 지켜라:\n"
-        "① 직전 답변에서 다룬 모든 항목(예: 각 시설)을 빠짐없이 포함해 다시 작성한다. "
-        "'이미 설명했다'·'중복이다'는 이유로 항목을 생략하거나 답변 범위를 좁히지 마라 "
-        "— 직전 대화 맥락의 '반복 금지' 지시는 이 재생성에는 적용되지 않는다.\n"
-        "② 아래 페치 자료의 법령은 그것이 적용되는 항목에 본문에서 명시적으로 연결한다 "
-        "(예: '어린이집 면적 기준은 「영유아보육법」 제○조의 보육실 면적 기준에 따라 ~').\n"
-        "③ 페치 자료에 해당 항목의 기준이 없으면 '해당 법령에서 구체 수치는 확인되지 않음'이라고 밝힌다.")
+        "※ 아래는 방금 법제처 API로 페치한 사각지대 법령 자료다. " + _REGEN_RULES)
     for s in success:
         extra_lines.append(f"\n[법령원문] 「{s['law_name']}」 {s.get('article_no', '')}")
         extra_lines.append(s["content"])
@@ -1874,10 +1877,19 @@ async def on_regenerate_with_fetch(action: cl.Action):
             "\n[위임법령 목록] 아래 조문들도 위임 관계이나 본문은 미주입 — "
             "답변에 필요하면 해당 조문의 존재를 안내하세요.")
         extra_lines.extend(delegated_rest)
-    # 재생성도 연속 질의 맥락 유지 (페치 자료만 넣으면 대화 흐름이 유실됨)
+    await _regen_with_material(query, provider, model_label, "\n".join(extra_lines))
+
+
+async def _regen_with_material(query: str, provider: str, model_label: str,
+                               material: str) -> None:
+    """페치/업로드 자료(material)를 주입해 직전 답변을 '완전판'으로 재생성.
+
+    연속 질의 맥락(history+사실표)과 carry(누적 법령·결론)를 함께 넘기고,
+    재생성 후 세션 기억을 완전판 기준으로 갱신한다 — API 페치 재생성과
+    PDF 직접 첨부 재생성이 공유하는 꼬리."""
     hist_block = _history_context(cl.user_session.get("history", []),
                                   cl.user_session.get("session_facts") or {})
-    extra_context = ((hist_block + "\n\n") if hist_block else "") + "\n".join(extra_lines)
+    extra_context = ((hist_block + "\n\n") if hist_block else "") + material
 
     gen = get_generator()
     session_id = cl.user_session.get("upload_key", "")
@@ -1924,6 +1936,96 @@ async def on_regenerate_with_fetch(action: cl.Action):
                         _accumulate_used_laws(cl.user_session.get("used_laws"), result))
     cl.user_session.set("session_conclusions",
                         _accumulate_conclusions(cl.user_session.get("session_conclusions"), result))
+
+
+# 재생성 공통 '완전판' 지시 — 페치/첨부 자료 주입 헤더에 붙는다
+_REGEN_RULES = (
+    "이 재생성 답변은 직전 답변을 대체하는 '완전판'이므로 반드시 다음을 지켜라:\n"
+    "① 직전 답변에서 다룬 모든 항목(예: 각 시설)을 빠짐없이 포함해 다시 작성한다. "
+    "'이미 설명했다'·'중복이다'는 이유로 항목을 생략하거나 답변 범위를 좁히지 마라 "
+    "— 직전 대화 맥락의 '반복 금지' 지시는 이 재생성에는 적용되지 않는다.\n"
+    "② 아래 자료의 법령은 그것이 적용되는 항목에 본문에서 명시적으로 연결한다 "
+    "(예: '어린이집 면적 기준은 「영유아보육법」 제○조의 보육실 면적 기준에 따라 ~').\n"
+    "③ 자료에 해당 항목의 기준이 없으면 '해당 법령에서 구체 수치는 확인되지 않음'이라고 밝힌다."
+)
+
+
+@cl.action_callback("blind_spot_pdf_attach")
+async def on_blind_spot_pdf_attach(action: cl.Action):
+    """사각지대 알림의 'PDF 직접 첨부' — 업로드 캐시에 전역 등록 후 답변 재생성.
+
+    API 페치의 대안 선택지: API에 없는 자료(지자체 조례 등)나 사용자가
+    직접 확보한 원문 PDF를 질문 재입력 없이 이 자리에서 반영한다."""
+    payload = action.payload or {}
+    query       = payload.get("query", "")
+    provider    = payload.get("provider", "gemini")
+    model_label = payload.get("model_label", "⚡ Gemini")
+
+    files = await cl.AskFileMessage(
+        content="반영할 법령/자료 PDF를 첨부해주세요 (여러 개 가능).",
+        accept=["application/pdf"],
+        max_files=5,
+        max_size_mb=30,
+        timeout=300,
+    ).send()
+    if not files:
+        await cl.Message(content="첨부된 파일이 없어 재생성을 진행하지 않습니다.",
+                         author="사각지대 알림").send()
+        return
+
+    await action.remove()   # 첨부까지 완료된 뒤에만 버튼 제거 (취소 시 재시도 가능)
+
+    key = cl.user_session.get("upload_key", "")
+    gen = get_generator()
+    retriever = gen._get_retriever()
+
+    def _index_one(path: str, filename: str):
+        law_label = filename.rsplit(".", 1)[0]
+        text = parse_pdf(path)
+        chunks = chunk_law_pdf(text, law_label)
+        retriever.create_session_collection(key)
+        n = retriever.index_uploaded_chunks(key, chunks, "")  # thread_id="" → 전역
+        return law_label, n, chunks
+
+    registered: list[tuple[str, int, list]] = []
+    failed_files: list[str] = []
+    for f in files:
+        try:
+            law_label, n, chunks = await asyncio.to_thread(_index_one, f.path, f.name)
+        except Exception:
+            n, chunks = 0, []
+            law_label = f.name
+        if n > 0:
+            registered.append((law_label, n, chunks))
+        else:
+            failed_files.append(f.name)
+
+    result_lines = ["📎 **PDF 등록 결과**"]
+    for label, n, _ in registered:
+        result_lines.append(f"  · ✓ **{label}** ({n}개 청크, 전역 캐시)")
+    for name in failed_files:
+        result_lines.append(f"  · ✗ {name} — 텍스트 추출 실패(스캔본 PDF?)")
+    await cl.Message(content="\n".join(result_lines), author="사각지대 알림").send()
+
+    if not registered or not query:
+        return
+
+    # 등록 원문을 조 단위로 주입해 재생성 (컨텍스트 상한 내에서)
+    extra_lines = ["=== [직접 첨부 자료 — 답변 재생성용] ===",
+                   "※ 아래는 사용자가 방금 직접 등록한 법령/자료 PDF 원문이다. " + _REGEN_RULES]
+    budget = 15000
+    for label, _, chunks in registered:
+        for c in chunks:
+            if budget <= 0:
+                extra_lines.append("\n[이하 생략 — 나머지 조문은 업로드 캐시 검색으로 참조 가능]")
+                break
+            piece = f"\n[업로드 원문] 「{c['law_name']}」 {c['article_no']}\n{c['content']}"
+            extra_lines.append(piece)
+            budget -= len(piece)
+        if budget <= 0:
+            break
+
+    await _regen_with_material(query, provider, model_label, "\n".join(extra_lines))
 
 
 # on_chat_end에서 업로드 컬렉션을 삭제하지 않는다 (영속화):
