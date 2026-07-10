@@ -1016,7 +1016,7 @@ def make_collapsible_html(body: str) -> str:
 
 async def generate_streaming(gen, query: str, extra_context: str, session_id: str,
                              provider: str = "gemini", model_label: str = "⚡ Gemini",
-                             thread_id: str = ""):
+                             thread_id: str = "", carry_laws: list = None):
     token_q: _queue.Queue = _queue.Queue()
     result_holder: list = [None]
     error_holder:  list = [None]
@@ -1031,6 +1031,7 @@ async def generate_streaming(gen, query: str, extra_context: str, session_id: st
                 stream_callback=stream_cb,
                 provider=provider,
                 thread_id=thread_id,
+                carry_laws=carry_laws,
             )
         except Exception as e:
             error_holder[0] = e
@@ -1237,6 +1238,7 @@ def _init_session():
     cl.user_session.set("pdf_ready", False)
     cl.user_session.set("history", [])
     cl.user_session.set("session_facts", {})
+    cl.user_session.set("used_laws", [])
 
     session_id = cl.context.session.id
     # 업로드 영속 키: 사용자 anon_id 기준 → 재방문 시 이전 업로드 재사용.
@@ -1258,6 +1260,42 @@ def _init_session():
 
 _HISTORY_TURNS = 3        # 주입할 직전 턴 수
 _HISTORY_A_CAP = 1200     # 턴당 답변 보존 길이
+
+
+_USED_LAWS_CAP = 30   # 누적 법령 세트 상한 (오래된 것부터 밀려남)
+
+
+def _accumulate_used_laws(prev: list, result: dict) -> list:
+    """이번 답변이 활용한 법령을 누적 세트에 더한다(연속 질의에서 계속 붙잡을 대상).
+
+    활용 근거로 삼는 것: 업로드 조례(source=uploaded, 사용자가 올린 핵심 자료)와
+    law_hints로 강제 포함된 조문(score_type=exact) + 상위 벡터 조문 소수.
+    검색됐으나 인용도 안 된 하위 벡터 노이즈까지 누적하지 않도록 선별한다."""
+    used = list(prev or [])
+    seen = {(u["law_name"], u["article_no"]) for u in used}
+
+    def _add(law_name, article_no, source):
+        if not law_name or not article_no:
+            return
+        k = (law_name, article_no)
+        if k in seen:
+            return
+        seen.add(k)
+        used.append({"law_name": law_name, "article_no": article_no, "source": source})
+
+    # 업로드 조례·법령 — 전부 누적 (사용자가 명시적으로 올린 자료)
+    for d in result.get("uploaded_docs") or []:
+        _add(getattr(d, "law_name", ""), getattr(d, "article_no", ""), "uploaded")
+    # DB 조문 — exact(law_hints 강제) 우선, 그 외 상위 몇 개만
+    vec_added = 0
+    for d in result.get("law_docs") or []:
+        st = getattr(d, "score_type", "")
+        if st in ("exact", "carry"):
+            _add(getattr(d, "law_name", ""), getattr(d, "article_no", ""), "db")
+        elif vec_added < 5:
+            _add(getattr(d, "law_name", ""), getattr(d, "article_no", ""), "db")
+            vec_added += 1
+    return used[-_USED_LAWS_CAP:]
 
 
 def _history_answer(body: str) -> str:
@@ -1350,6 +1388,7 @@ async def on_not_helpful(action: cl.Action):
 async def on_new_chat(action: cl.Action):
     cl.user_session.set("history", [])
     cl.user_session.set("session_facts", {})
+    cl.user_session.set("used_laws", [])
     cl.user_session.set("pdf_list", [])
     cl.user_session.set("pdf_ready", False)
     cl.user_session.set("provider", None)   # 모델 선택 초기화 → 새 채팅 첫 질문에 다시 선택
@@ -1519,7 +1558,8 @@ async def on_message(message: cl.Message):
     try:
         msg, result = await generate_streaming(
             gen, query, extra_context, session_id, provider, model_label,
-            thread_id=_thread_scope()
+            thread_id=_thread_scope(),
+            carry_laws=cl.user_session.get("used_laws") or [],
         )
     except Exception as e:
         await cl.Message(content=f"오류가 발생했습니다: {e}").send()
@@ -1564,6 +1604,9 @@ async def on_message(message: cl.Message):
     # 세션 사실표 갱신 — pass1이 매 턴 '현재 유효한 파라미터 전체'를 다시 내놓으므로
     # 병합 없이 최신본으로 교체(주제가 바뀌면 자연히 비워짐)
     cl.user_session.set("session_facts", result.get("session_facts") or {})
+    # 누적 법령 세트 갱신 — 이번 답변이 활용한 법령을 계속 붙잡아 다음 질문에 강제 포함
+    cl.user_session.set("used_laws",
+                        _accumulate_used_laws(cl.user_session.get("used_laws"), result))
 
 
 # ── 사각지대 알림 + 재생성 ──────────────────────────────────────

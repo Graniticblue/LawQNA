@@ -1120,7 +1120,7 @@ class Generator:
             self._retriever = mod.Retriever()
         return self._retriever
 
-    def generate(self, query: str, verbose: bool = True, extra_context: str = "", session_id: str = "", stream_callback=None, provider: str = "gemini", as_of_date: str = "", exclude_doc_codes: set = None, as_of_code: str = "", thread_id: str = "") -> dict:
+    def generate(self, query: str, verbose: bool = True, extra_context: str = "", session_id: str = "", stream_callback=None, provider: str = "gemini", as_of_date: str = "", exclude_doc_codes: set = None, as_of_code: str = "", thread_id: str = "", carry_laws: list = None) -> dict:
         """
         2-pass 생성 실행.
         반환: {"query", "pass1", "context", "answer"}
@@ -1128,6 +1128,11 @@ class Generator:
         as_of_date        : 'YYYY-MM-DD'. 지정 시 이 시점 이후의 해석례·판례를
                             검색에서 제외(eval 전용 시점 컷오프). 실서비스는 빈 값.
         exclude_doc_codes : 검색에서 제외할 doc_code 집합(평가 대상 자기 자신 등).
+        carry_laws        : 앞선 답변들이 활용한 법령 누적 세트
+                            [{"law_name","article_no","source"}]. DB 법령은 law_hints에
+                            병합해 강제 포함하고, 업로드 조례는 search_uploaded에
+                            force로 넘겨 벡터 랭킹과 무관하게 계속 붙잡는다(연속 질의에서
+                            이미 활용한 법령을 놓치지 않게). eval 등 단발 호출은 None.
         """
         if verbose:
             print(f"\n{'='*60}")
@@ -1178,6 +1183,22 @@ class Generator:
         definition_terms = parsed["definition_terms"]
         answer_mode      = parsed["answer_mode"]
         session_facts    = parsed["session_facts"]
+
+        # ── 누적 법령 세트(carry_laws): 이미 활용한 법령을 계속 붙잡는다 ──
+        # DB 법령은 law_hints에 병합(fetch_exact로 강제 포함), 업로드 조례는 아래
+        # search_uploaded에 force로 넘긴다. 연속 질의에서 후속 질문이 벡터 랭킹으로
+        # 이전 법령을 놓쳐 새 조문을 환각하던 문제를 막는다.
+        carry_laws = carry_laws or []
+        carry_force_uploaded = [
+            (c["law_name"], c["article_no"]) for c in carry_laws
+            if c.get("source") == "uploaded" and c.get("law_name") and c.get("article_no")
+        ]
+        for c in carry_laws:
+            if c.get("source") == "uploaded":
+                continue
+            h = f"{c.get('law_name','')} {c.get('article_no','')}".strip()
+            if h and h not in law_hints:
+                law_hints.append(h)
 
         if verbose:
             print(f"\n→ 질문 유형: {question_type}")
@@ -1242,9 +1263,10 @@ class Generator:
         if session_id:
             uploaded_docs = retriever.search_uploaded(
                 session_id, search_query, top_k=5, thread_id=thread_id,
-                context=extra_context)
+                context=extra_context, force_articles=carry_force_uploaded)
             if verbose and uploaded_docs:
-                print(f"→ 업로드 법령 {len(uploaded_docs)}건 검색됨")
+                print(f"→ 업로드 법령 {len(uploaded_docs)}건 검색됨"
+                      + (f" (누적 강제 {len(carry_force_uploaded)}건 포함)" if carry_force_uploaded else ""))
 
         # ── 원칙·메모 → 출처 페어링 (인용된 해석례·판례 강제 동반) ──
         # 검색된 원칙·메모가 인용한 source를 raw 텍스트로 답변 컨텍스트에 넣어,
@@ -1454,6 +1476,23 @@ class Generator:
                 "- 이전 대화에서 확정된 파라미터·산출값과 모순되지 않게 하라. 근거 조항이 달라졌다면 그 이유를 명시한다.\n"
             )
 
+        # ── 누적 법령 안내 (연속 질의에서 이미 활용한 법령을 계속 근거로 삼도록) ──
+        carry_note = ""
+        if carry_laws:
+            carry_list = " / ".join(
+                f"「{c.get('law_name','')}」 {c.get('article_no','')}".strip()
+                for c in carry_laws
+            )
+            carry_note = (
+                "\n## 📎 이 대화에서 이미 활용한 법령 (계속 근거로 삼을 것)\n"
+                f"{carry_list}\n"
+                "- 위 법령·조문은 앞선 답변에서 활용했고 이번 검색 컨텍스트에도 포함돼 있다. "
+                "후속 질문의 근거를 새로 지어내지 말고 **위 목록과 검색 컨텍스트 안에서** 해석하라.\n"
+                "- 특히 지역 조례(예: 「○○시 주택 조례」)가 위 목록에 있으면, 그 조례가 정한 "
+                "구체 기준(시설별 면적 등)을 우선 적용하고, 조례에 있는 내용을 '별도 확인 필요'로 "
+                "미루지 마라.\n"
+            )
+
         # ── 테스트 모드 안내 (질의에 판례·해석례 번호가 명시된 경우) ──
         test_mode_note = ""
         if test_exclusions:
@@ -1470,7 +1509,7 @@ class Generator:
 
         pass2_input = f"""## 질문
 {query}
-{mode_note}
+{mode_note}{carry_note}
 {ref_list}
 
 ## Pass 1 분석 결과
@@ -1656,6 +1695,7 @@ class Generator:
             "law_docs":          law_docs,
             "qa_docs":           qa_docs,
             "case_docs":         case_docs,
+            "uploaded_docs":     uploaded_docs,
             "amendment_docs":    all_amendment_docs,
             "source_info":       source_info,
         }

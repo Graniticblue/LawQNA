@@ -1226,7 +1226,8 @@ class HybridSearcher:
         return len(ids)
 
     def search_uploaded(self, session_id: str, query: str, top_k: int = 5,
-                        thread_id: str = "", context: str = "") -> list:
+                        thread_id: str = "", context: str = "",
+                        force_articles: Optional[list] = None) -> list:
         """세션 컬렉션에서 유사도 검색. RetrievedDoc 리스트 반환.
 
         조례는 원칙적으로 업로드한 대화(thread_id)에서만 노출하되, 다음 중 하나면
@@ -1234,7 +1235,11 @@ class HybridSearcher:
           (a) 그 컬렉션에 조례가 1종류뿐 — 구분할 다른 지역 조례가 없어 격리가 무의미
           (b) 질문 또는 직전 대화 맥락(context)에 그 조례의 지역명이 언급됨
         연속 질의에서 후속 질문("각 상세시설 면적은?")에 지역명이 빠져도 직전 맥락으로
-        해소된다(과거에는 지역명 없는 후속 질문에서 조례가 통째로 누락됐음)."""
+        해소된다(과거에는 지역명 없는 후속 질문에서 조례가 통째로 누락됐음).
+
+        force_articles: [(law_name, article_no), ...] — 앞선 답변에서 이미 활용한
+        업로드 조문을 벡터 랭킹·스코프와 무관하게 강제 포함(누적 법령 세트). '시설
+        리스트' 같은 질문이 조례 제5조와 유사도가 낮아 밀려도 조례를 계속 붙잡게 한다."""
         col = self._session_cols.get(session_id)
         if col is None or col.count() == 0:
             return []
@@ -1293,6 +1298,35 @@ class HybridSearcher:
             ))
             if len(results) >= top_k:
                 break
+
+        # ── 누적 법령 세트 강제 포함 (벡터 랭킹·스코프 무관) ──
+        if force_articles:
+            have = {(d.law_name, d.article_no) for d in results}
+            for ln, art in force_articles:
+                if not ln or not art or (ln, art) in have:
+                    continue
+                try:
+                    got = col.get(
+                        where={"$and": [{"law_name": {"$eq": ln}},
+                                        {"article_no": {"$eq": art}}]},
+                        include=["documents", "metadatas"], limit=5,
+                    )
+                except Exception:
+                    continue
+                for doc_t, meta in zip(got.get("documents", []), got.get("metadatas", [])):
+                    key = (meta.get("law_name", ln), meta.get("article_no", art))
+                    if key in have:
+                        continue
+                    have.add(key)
+                    results.append(RetrievedDoc(
+                        source="uploaded",
+                        law_name=key[0],
+                        article_no=key[1],
+                        content=doc_t,
+                        score=1.5,            # 강제 포함 — 상위 가중
+                        score_type="carry",
+                        metadata={"source": "uploaded"},
+                    ))
         return results
 
     def list_uploaded_docs(self, session_id: str) -> list[dict]:
@@ -1913,8 +1947,10 @@ class Retriever:
         return self._searcher.index_uploaded_chunks(session_id, chunks, thread_id)
 
     def search_uploaded(self, session_id: str, query: str, top_k: int = 5,
-                        thread_id: str = "", context: str = "") -> list:
-        return self._searcher.search_uploaded(session_id, query, top_k, thread_id, context)
+                        thread_id: str = "", context: str = "",
+                        force_articles: Optional[list] = None) -> list:
+        return self._searcher.search_uploaded(
+            session_id, query, top_k, thread_id, context, force_articles)
 
     def list_uploaded_docs(self, session_id: str) -> list[dict]:
         return self._searcher.list_uploaded_docs(session_id)
