@@ -1881,7 +1881,9 @@ async def on_regenerate_with_fetch(action: cl.Action):
     try:
         msg, result = await generate_streaming(
             gen, query, extra_context, session_id, provider, model_label,
-            thread_id=_thread_scope()
+            thread_id=_thread_scope(),
+            carry_laws=cl.user_session.get("used_laws") or [],
+            carry_conclusions=cl.user_session.get("session_conclusions") or [],
         )
     except Exception as e:
         await cl.Message(content=f"재생성 오류: {e}").send()
@@ -1906,6 +1908,19 @@ async def on_regenerate_with_fetch(action: cl.Action):
         amendment_text, src_elements = build_citation_elements(amendment_text, result)
         await cl.Message(content=amendment_text, author="입법요지",
                          elements=src_elements or None).send()
+
+    # 재생성 답변은 직전 답변을 대체하는 '완전판' — 세션 기억도 이것으로 갱신.
+    # 안 하면 다음 질문의 [이전 대화 맥락]·누적 법령·결론이 불완전판 기준으로 남는다.
+    history = cl.user_session.get("history", [])
+    if history and history[-1].get("q") == query:
+        history[-1]["a"] = _history_answer(body)
+    else:
+        history.append({"q": query, "a": _history_answer(body)})
+    cl.user_session.set("history", history)
+    cl.user_session.set("used_laws",
+                        _accumulate_used_laws(cl.user_session.get("used_laws"), result))
+    cl.user_session.set("session_conclusions",
+                        _accumulate_conclusions(cl.user_session.get("session_conclusions"), result))
 
 
 # on_chat_end에서 업로드 컬렉션을 삭제하지 않는다 (영속화):
