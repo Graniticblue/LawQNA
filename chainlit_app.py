@@ -1669,7 +1669,7 @@ async def _render_blind_spot_notice(
 
     lines: list[str] = ["📡 **사각지대 법령 감지**"]
     if fetchable:
-        lines.append("\n**API 페치 가능 (현행 법령, DB 미수록):**")
+        lines.append("\n**API 패치 가능 (현행 법령, DB 미수록):**")
         for f in fetchable:
             art = f.get("article_no", "") or "(법령 전체)"
             lines.append(f"  · 「{f['law_name']}」 {art}")
@@ -1701,7 +1701,7 @@ async def _render_blind_spot_notice(
                 "fetchable":  fetchable,
             },
         ))
-    # API 페치 대신(또는 API에 없는 자료를) PDF로 직접 등록하는 선택지 — 항상 노출
+    # API 패치 대신(또는 API에 없는 자료를) PDF로 직접 등록하는 선택지 — 항상 노출
     actions.append(cl.Action(
         name="blind_spot_pdf_attach",
         label="📎 PDF 직접 첨부",
@@ -1726,7 +1726,7 @@ async def _render_blind_spot_notice(
 
 @cl.action_callback("regenerate_with_fetch")
 async def on_regenerate_with_fetch(action: cl.Action):
-    """'해당 법령 캐싱' 클릭 시 — API 페치만 수행하고 자료를 적재.
+    """'해당 법령 캐싱' 클릭 시 — API 패치만 수행하고 자료를 적재.
 
     재생성은 별도의 '답변 다시 생성' 버튼이 담당한다(캐싱·첨부를 여러 번
     거친 뒤 한 번에 반영). 콜백 이름은 기존 렌더링된 버튼과의 호환을 위해 유지."""
@@ -1742,14 +1742,14 @@ async def on_regenerate_with_fetch(action: cl.Action):
     # 버튼 제거 (중복 클릭 방지)
     await action.remove()
 
-    # 페치 진행 메시지
+    # 패치 진행 메시지
     fetch_msg = cl.Message(
-        content=f"📡 법제처 API에서 {len(fetchable)}건 페치 중…",
+        content=f"📡 법제처 API에서 {len(fetchable)}건 패치 중…",
         author="사각지대 알림",
     )
     await fetch_msg.send()
 
-    # API 페치 (백그라운드 스레드)
+    # API 패치 (백그라운드 스레드)
     from ingest import law_api_fetcher
 
     success: list[dict] = []
@@ -1839,7 +1839,7 @@ async def on_regenerate_with_fetch(action: cl.Action):
                 f"「{s['law_name']}」 {s['article_no']}의 그 밖의 위임 조문: "
                 + ", ".join(rest))
 
-    # 페치 성공한 조례는 업로드 캐시에도 전역 인덱싱 — law_cache(JSON)만으로는
+    # 패치 성공한 조례는 업로드 캐시에도 전역 인덱싱 — law_cache(JSON)만으로는
     # 이후 턴의 벡터 검색이 안 되므로, PDF 업로드와 동일하게 검색·조 전체 강제
     # 포함이 동작하게 한다. 이미 등록된 조례는 건너뜀(갱신은 업로드 캐시 창의 재캐싱).
     ordin_indexed: list[tuple[str, int]] = []
@@ -1871,7 +1871,7 @@ async def on_regenerate_with_fetch(action: cl.Action):
                 ordin_indexed.append((ln, n))
 
     # 결과 알림
-    result_lines = ["📡 **페치 결과**"]
+    result_lines = ["📡 **패치 결과**"]
     if success:
         result_lines.append("\n**✓ 캐싱 성공:**")
         for s in success:
@@ -1889,7 +1889,7 @@ async def on_regenerate_with_fetch(action: cl.Action):
         if delegated_rest:
             result_lines.append("  · (그 밖의 위임 조문은 목록으로만 제공)")
     if failed:
-        result_lines.append("\n**✗ 페치 실패 (API에서 못 찾음):**")
+        result_lines.append("\n**✗ 패치 실패 (API에서 못 찾음):**")
         for fa in failed:
             art = fa.get("article_no", "") or "(전체)"
             result_lines.append(f"  · 「{fa['law_name']}」 {art}")
@@ -1905,13 +1905,13 @@ async def on_regenerate_with_fetch(action: cl.Action):
                     "첨부’** 버튼이나 상단 **‘업로드 캐시 → ＋PDF 파일 추가’**로 직접 "
                     "등록하시면 답변에 반영됩니다.")
         await cl.Message(
-            content="페치 성공 자료가 없습니다." + hint,
+            content="패치 성공 자료가 없습니다." + hint,
             author="사각지대 알림",
         ).send()
         return
 
-    # 페치 원문을 재생성용 자료로 적재 (재생성은 '답변 다시 생성' 버튼에서 일괄)
-    blocks = ["[출처: 법제처 API 페치]"]
+    # 패치 원문을 재생성용 자료로 적재 (재생성은 '답변 다시 생성' 버튼에서 일괄)
+    blocks = ["[출처: 법제처 API 패치]"]
     for s in success:
         blocks.append(f"[법령원문] 「{s['law_name']}」 {s.get('article_no', '')}")
         blocks.append(s["content"])
@@ -1935,10 +1935,10 @@ async def on_regenerate_with_fetch(action: cl.Action):
 
 async def _regen_with_material(query: str, provider: str, model_label: str,
                                material: str) -> None:
-    """페치/업로드 자료(material)를 주입해 직전 답변을 '완전판'으로 재생성.
+    """패치/업로드 자료(material)를 주입해 직전 답변을 '완전판'으로 재생성.
 
     연속 질의 맥락(history+사실표)과 carry(누적 법령·결론)를 함께 넘기고,
-    재생성 후 세션 기억을 완전판 기준으로 갱신한다 — API 페치 재생성과
+    재생성 후 세션 기억을 완전판 기준으로 갱신한다 — API 패치 재생성과
     PDF 직접 첨부 재생성이 공유하는 꼬리."""
     hist_block = _history_context(cl.user_session.get("history", []),
                                   cl.user_session.get("session_facts") or {})
@@ -1992,7 +1992,7 @@ async def _regen_with_material(query: str, provider: str, model_label: str,
 
 
 def _stash_regen_material(query: str, block: str) -> None:
-    """캐싱(API 페치)·첨부(PDF)로 확보한 원문을 질문 단위로 적재.
+    """캐싱(API 패치)·첨부(PDF)로 확보한 원문을 질문 단위로 적재.
 
     '답변 다시 생성' 버튼이 같은 질문의 적재분을 모아 한 번에 주입한다."""
     store = cl.user_session.get("regen_material") or {}
@@ -2021,7 +2021,7 @@ async def on_blind_spot_regen(action: cl.Action):
     material = ""
     if blocks:
         material = ("=== [캐싱·첨부 자료 — 답변 재생성용] ===\n"
-                    "※ 아래는 방금 캐싱(API 페치)·첨부(PDF)로 확보한 사각지대 자료다. "
+                    "※ 아래는 방금 캐싱(API 패치)·첨부(PDF)로 확보한 사각지대 자료다. "
                     + _REGEN_RULES + "\n\n" + "\n\n".join(blocks))
     else:
         await cl.Message(
@@ -2032,7 +2032,7 @@ async def on_blind_spot_regen(action: cl.Action):
     await _regen_with_material(query, provider, model_label, material)
 
 
-# 재생성 공통 '완전판' 지시 — 페치/첨부 자료 주입 헤더에 붙는다
+# 재생성 공통 '완전판' 지시 — 패치/첨부 자료 주입 헤더에 붙는다
 _REGEN_RULES = (
     "이 재생성 답변은 직전 답변을 대체하는 '완전판'이므로 반드시 다음을 지켜라:\n"
     "① 직전 답변에서 다룬 모든 항목(예: 각 시설)을 빠짐없이 포함해 다시 작성한다. "
@@ -2048,7 +2048,7 @@ _REGEN_RULES = (
 async def on_blind_spot_pdf_attach(action: cl.Action):
     """사각지대 알림의 'PDF 직접 첨부' — 업로드 캐시에 전역 등록 + 재생성용 적재.
 
-    API 페치의 대안 선택지: API에 없는 자료(지자체 조례 등)나 사용자가 직접
+    API 패치의 대안 선택지: API에 없는 자료(지자체 조례 등)나 사용자가 직접
     확보한 원문 PDF를 등록한다. 버튼은 남겨 여러 번 첨부할 수 있고,
     재생성은 '답변 다시 생성' 버튼이 적재분을 모아 한 번에 수행한다."""
     payload = action.payload or {}

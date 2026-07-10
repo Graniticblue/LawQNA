@@ -289,7 +289,7 @@ def _parse_law_hint(hint: str) -> tuple[str, str, bool]:
     "건축법 시행령 제3조의2" → ("건축법 시행령", "제3조의2", False)
     Returns: (law_name, article_prefix, is_byeolpyo)
 
-    의M(가지조문)을 보존해야 사각지대 페치가 제3조의2 힌트에 제3조를(다른 조문)
+    의M(가지조문)을 보존해야 사각지대 패치가 제3조의2 힌트에 제3조를(다른 조문)
     잘못 반환하지 않는다. fetch_exact_articles의 부분문자열 매칭도 더 정밀해짐.
     """
     hint = _normalize_middot(hint.strip().strip("「」"))
@@ -1006,7 +1006,7 @@ class HybridSearcher:
                 exists_in_db = False
 
             if not exists_in_db:
-                # 법령 자체 부재 → API 페치 가능
+                # 법령 자체 부재 → API 패치 가능
                 result["fetchable"].append({
                     "hint": hint,
                     "law_name": law_name,
@@ -2170,7 +2170,7 @@ class Retriever:
         return load_article_roles(law_hints, definition_terms=definition_terms)
 
     def detect_blind_spots(self, law_hints: list[str]) -> dict:
-        """law_hints 중 DB 미수록 법령(API 페치 가능) + 수동 확인 필요 항목 식별."""
+        """law_hints 중 DB 미수록 법령(API 패치 가능) + 수동 확인 필요 항목 식별."""
         return self._searcher.detect_blind_spots(law_hints)
 
     def format_context(
