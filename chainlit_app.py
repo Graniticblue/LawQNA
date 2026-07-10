@@ -1685,12 +1685,14 @@ async def _render_blind_spot_notice(
         lines.append("\n💡 지자체 조례 등 API로 못 찾는 자료는 아래 **‘PDF 직접 첨부’** 버튼이나 "
                      "상단 **‘업로드 캐시 → ＋PDF 파일 추가’**로 등록하면 답변에 반영됩니다.")
 
+    # 자료 모으기(캐싱·첨부)와 재생성을 분리 — 여러 자료를 캐싱/첨부로 적재한 뒤
+    # '답변 다시 생성' 한 번으로 전부 반영한다.
     actions: list = []
     if fetchable:
         # 페이로드에 필요한 정보 전부 담아 콜백에서 그대로 사용
         actions.append(cl.Action(
             name="regenerate_with_fetch",
-            label="🔄 해당 법령을 캐싱 후 답변 다시 생성",
+            label="📡 해당 법령 캐싱",
             payload={
                 "query":      query,
                 "provider":   provider,
@@ -1701,7 +1703,12 @@ async def _render_blind_spot_notice(
     # API 페치 대신(또는 API에 없는 자료를) PDF로 직접 등록하는 선택지 — 항상 노출
     actions.append(cl.Action(
         name="blind_spot_pdf_attach",
-        label="📎 PDF 직접 첨부 후 답변 다시 생성",
+        label="📎 PDF 직접 첨부",
+        payload={"query": query},
+    ))
+    actions.append(cl.Action(
+        name="blind_spot_regen",
+        label="🔄 답변 다시 생성",
         payload={
             "query":      query,
             "provider":   provider,
@@ -1718,16 +1725,17 @@ async def _render_blind_spot_notice(
 
 @cl.action_callback("regenerate_with_fetch")
 async def on_regenerate_with_fetch(action: cl.Action):
-    """사용자가 '캐싱 후 재생성' 클릭 시 — API 페치 + Pass 2 재호출."""
+    """'해당 법령 캐싱' 클릭 시 — API 페치만 수행하고 자료를 적재.
+
+    재생성은 별도의 '답변 다시 생성' 버튼이 담당한다(캐싱·첨부를 여러 번
+    거친 뒤 한 번에 반영). 콜백 이름은 기존 렌더링된 버튼과의 호환을 위해 유지."""
     payload = action.payload or {}
     fetchable = payload.get("fetchable", [])
     query     = payload.get("query", "")
-    provider  = payload.get("provider", "gemini")
-    model_label = payload.get("model_label", "⚡ Gemini")
 
     if not query or not fetchable:
         await action.remove()
-        await cl.Message(content="재생성 정보가 부족합니다.", author="사각지대 알림").send()
+        await cl.Message(content="캐싱 정보가 부족합니다.", author="사각지대 알림").send()
         return
 
     # 버튼 제거 (중복 클릭 방지)
@@ -1856,28 +1864,32 @@ async def on_regenerate_with_fetch(action: cl.Action):
                     "사각지대 알림의 **‘📎 PDF 직접 첨부’** 버튼이나 상단 **‘업로드 캐시 → "
                     "＋PDF 파일 추가’**로 조례 PDF를 직접 등록하시면 답변에 반영됩니다.")
         await cl.Message(
-            content="페치 성공 자료가 없어 재생성을 진행하지 않습니다." + hint,
+            content="페치 성공 자료가 없습니다." + hint,
             author="사각지대 알림",
         ).send()
         return
 
-    # extra_context로 페치된 raw 텍스트 주입 + 재생성
-    extra_lines = ["=== [API 페치 자료 — 답변 재생성용] ==="]
-    extra_lines.append(
-        "※ 아래는 방금 법제처 API로 페치한 사각지대 법령 자료다. " + _REGEN_RULES)
+    # 페치 원문을 재생성용 자료로 적재 (재생성은 '답변 다시 생성' 버튼에서 일괄)
+    blocks = ["[출처: 법제처 API 페치]"]
     for s in success:
-        extra_lines.append(f"\n[법령원문] 「{s['law_name']}」 {s.get('article_no', '')}")
-        extra_lines.append(s["content"])
+        blocks.append(f"[법령원문] 「{s['law_name']}」 {s.get('article_no', '')}")
+        blocks.append(s["content"])
     for d in delegated:
-        extra_lines.append(
-            f"\n[위임법령] 「{d['law_name']}」 {d['article_no']} — {d['via']}의 위임 조문")
-        extra_lines.append(d["content"])
+        blocks.append(
+            f"[위임법령] 「{d['law_name']}」 {d['article_no']} — {d['via']}의 위임 조문")
+        blocks.append(d["content"])
     if delegated_rest:
-        extra_lines.append(
-            "\n[위임법령 목록] 아래 조문들도 위임 관계이나 본문은 미주입 — "
+        blocks.append(
+            "[위임법령 목록] 아래 조문들도 위임 관계이나 본문은 미주입 — "
             "답변에 필요하면 해당 조문의 존재를 안내하세요.")
-        extra_lines.extend(delegated_rest)
-    await _regen_with_material(query, provider, model_label, "\n".join(extra_lines))
+        blocks.extend(delegated_rest)
+    _stash_regen_material(query, "\n".join(blocks))
+
+    await cl.Message(
+        content="✅ 캐싱 완료 — 더 캐싱·첨부할 자료가 있으면 계속 등록하시고, "
+                "**‘🔄 답변 다시 생성’**을 누르면 적재된 자료가 한 번에 반영됩니다.",
+        author="사각지대 알림",
+    ).send()
 
 
 async def _regen_with_material(query: str, provider: str, model_label: str,
@@ -1938,6 +1950,47 @@ async def _regen_with_material(query: str, provider: str, model_label: str,
                         _accumulate_conclusions(cl.user_session.get("session_conclusions"), result))
 
 
+def _stash_regen_material(query: str, block: str) -> None:
+    """캐싱(API 페치)·첨부(PDF)로 확보한 원문을 질문 단위로 적재.
+
+    '답변 다시 생성' 버튼이 같은 질문의 적재분을 모아 한 번에 주입한다."""
+    store = cl.user_session.get("regen_material") or {}
+    store.setdefault(query, []).append(block)
+    cl.user_session.set("regen_material", store)
+
+
+@cl.action_callback("blind_spot_regen")
+async def on_blind_spot_regen(action: cl.Action):
+    """'답변 다시 생성' — 캐싱·첨부로 적재된 자료를 모아 한 번에 재생성."""
+    payload = action.payload or {}
+    query       = payload.get("query", "")
+    provider    = payload.get("provider", "gemini")
+    model_label = payload.get("model_label", "⚡ Gemini")
+    if not query:
+        await action.remove()
+        await cl.Message(content="재생성 정보가 부족합니다.", author="사각지대 알림").send()
+        return
+
+    await action.remove()
+
+    store = cl.user_session.get("regen_material") or {}
+    blocks = store.pop(query, [])
+    cl.user_session.set("regen_material", store)
+
+    material = ""
+    if blocks:
+        material = ("=== [캐싱·첨부 자료 — 답변 재생성용] ===\n"
+                    "※ 아래는 방금 캐싱(API 페치)·첨부(PDF)로 확보한 사각지대 자료다. "
+                    + _REGEN_RULES + "\n\n" + "\n\n".join(blocks))
+    else:
+        await cl.Message(
+            content="적재된 캐싱·첨부 자료가 없어 기존 자료만으로 재생성합니다.",
+            author="사각지대 알림",
+        ).send()
+
+    await _regen_with_material(query, provider, model_label, material)
+
+
 # 재생성 공통 '완전판' 지시 — 페치/첨부 자료 주입 헤더에 붙는다
 _REGEN_RULES = (
     "이 재생성 답변은 직전 답변을 대체하는 '완전판'이므로 반드시 다음을 지켜라:\n"
@@ -1952,14 +2005,13 @@ _REGEN_RULES = (
 
 @cl.action_callback("blind_spot_pdf_attach")
 async def on_blind_spot_pdf_attach(action: cl.Action):
-    """사각지대 알림의 'PDF 직접 첨부' — 업로드 캐시에 전역 등록 후 답변 재생성.
+    """사각지대 알림의 'PDF 직접 첨부' — 업로드 캐시에 전역 등록 + 재생성용 적재.
 
-    API 페치의 대안 선택지: API에 없는 자료(지자체 조례 등)나 사용자가
-    직접 확보한 원문 PDF를 질문 재입력 없이 이 자리에서 반영한다."""
+    API 페치의 대안 선택지: API에 없는 자료(지자체 조례 등)나 사용자가 직접
+    확보한 원문 PDF를 등록한다. 버튼은 남겨 여러 번 첨부할 수 있고,
+    재생성은 '답변 다시 생성' 버튼이 적재분을 모아 한 번에 수행한다."""
     payload = action.payload or {}
-    query       = payload.get("query", "")
-    provider    = payload.get("provider", "gemini")
-    model_label = payload.get("model_label", "⚡ Gemini")
+    query = payload.get("query", "")
 
     files = await cl.AskFileMessage(
         content="반영할 법령/자료 PDF를 첨부해주세요 (여러 개 가능).",
@@ -1969,11 +2021,9 @@ async def on_blind_spot_pdf_attach(action: cl.Action):
         timeout=300,
     ).send()
     if not files:
-        await cl.Message(content="첨부된 파일이 없어 재생성을 진행하지 않습니다.",
+        await cl.Message(content="첨부된 파일이 없습니다.",
                          author="사각지대 알림").send()
         return
-
-    await action.remove()   # 첨부까지 완료된 뒤에만 버튼 제거 (취소 시 재시도 가능)
 
     key = cl.user_session.get("upload_key", "")
     gen = get_generator()
@@ -2005,27 +2055,28 @@ async def on_blind_spot_pdf_attach(action: cl.Action):
         result_lines.append(f"  · ✓ **{label}** ({n}개 청크, 전역 캐시)")
     for name in failed_files:
         result_lines.append(f"  · ✗ {name} — 텍스트 추출 실패(스캔본 PDF?)")
+    if registered and query:
+        result_lines.append("\n더 캐싱·첨부할 자료가 있으면 계속 등록하시고, "
+                            "**‘🔄 답변 다시 생성’**을 누르면 적재된 자료가 한 번에 반영됩니다.")
     await cl.Message(content="\n".join(result_lines), author="사각지대 알림").send()
 
     if not registered or not query:
         return
 
-    # 등록 원문을 조 단위로 주입해 재생성 (컨텍스트 상한 내에서)
-    extra_lines = ["=== [직접 첨부 자료 — 답변 재생성용] ===",
-                   "※ 아래는 사용자가 방금 직접 등록한 법령/자료 PDF 원문이다. " + _REGEN_RULES]
+    # 등록 원문을 조 단위로 재생성용 적재 (컨텍스트 상한 내에서)
+    blocks = ["[출처: 사용자 직접 첨부 PDF]"]
     budget = 15000
     for label, _, chunks in registered:
         for c in chunks:
             if budget <= 0:
-                extra_lines.append("\n[이하 생략 — 나머지 조문은 업로드 캐시 검색으로 참조 가능]")
+                blocks.append("[이하 생략 — 나머지 조문은 업로드 캐시 검색으로 참조 가능]")
                 break
-            piece = f"\n[업로드 원문] 「{c['law_name']}」 {c['article_no']}\n{c['content']}"
-            extra_lines.append(piece)
+            piece = f"[업로드 원문] 「{c['law_name']}」 {c['article_no']}\n{c['content']}"
+            blocks.append(piece)
             budget -= len(piece)
         if budget <= 0:
             break
-
-    await _regen_with_material(query, provider, model_label, "\n".join(extra_lines))
+    _stash_regen_material(query, "\n".join(blocks))
 
 
 # on_chat_end에서 업로드 컬렉션을 삭제하지 않는다 (영속화):
