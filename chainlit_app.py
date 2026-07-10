@@ -1016,7 +1016,8 @@ def make_collapsible_html(body: str) -> str:
 
 async def generate_streaming(gen, query: str, extra_context: str, session_id: str,
                              provider: str = "gemini", model_label: str = "⚡ Gemini",
-                             thread_id: str = "", carry_laws: list = None):
+                             thread_id: str = "", carry_laws: list = None,
+                             carry_conclusions: list = None):
     token_q: _queue.Queue = _queue.Queue()
     result_holder: list = [None]
     error_holder:  list = [None]
@@ -1032,6 +1033,7 @@ async def generate_streaming(gen, query: str, extra_context: str, session_id: st
                 provider=provider,
                 thread_id=thread_id,
                 carry_laws=carry_laws,
+                carry_conclusions=carry_conclusions,
             )
         except Exception as e:
             error_holder[0] = e
@@ -1239,6 +1241,7 @@ def _init_session():
     cl.user_session.set("history", [])
     cl.user_session.set("session_facts", {})
     cl.user_session.set("used_laws", [])
+    cl.user_session.set("session_conclusions", [])
 
     session_id = cl.context.session.id
     # 업로드 영속 키: 사용자 anon_id 기준 → 재방문 시 이전 업로드 재사용.
@@ -1260,6 +1263,37 @@ def _init_session():
 
 _HISTORY_TURNS = 3        # 주입할 직전 턴 수
 _HISTORY_A_CAP = 1200     # 턴당 답변 보존 길이
+
+
+_CONCLUSIONS_CAP = 20   # 세션 내 결론 누적 상한 (오래된 것부터 밀려남)
+
+
+def _accumulate_conclusions(prev: list, result: dict) -> list:
+    """이번 답변에서 추출된 결론을 세션 누적 리스트에 추가.
+
+    또한 이전과 동일한 법령 ref를 가진 결론은 새 결론으로 교체 (조정된 결론 반영)."""
+    new_conclusions = result.get("conclusions") or []
+    if not new_conclusions:
+        return list(prev or [])
+
+    # 새 결론의 ref 집합
+    new_ref_keys: set[str] = set()
+    for c in new_conclusions:
+        for ref in c.get("refs", []):
+            new_ref_keys.add(re.sub(r'\s+', '', ref))
+
+    # 기존 결론 중 새 결론과 겹치는 ref가 있으면 제거 (업데이트)
+    kept = []
+    for c in (prev or []):
+        overlap = any(
+            re.sub(r'\s+', '', ref) in new_ref_keys
+            for ref in c.get("refs", [])
+        )
+        if not overlap:
+            kept.append(c)
+
+    kept.extend(new_conclusions)
+    return kept[-_CONCLUSIONS_CAP:]
 
 
 _USED_LAWS_CAP = 30   # 누적 법령 세트 상한 (오래된 것부터 밀려남)
@@ -1389,6 +1423,7 @@ async def on_new_chat(action: cl.Action):
     cl.user_session.set("history", [])
     cl.user_session.set("session_facts", {})
     cl.user_session.set("used_laws", [])
+    cl.user_session.set("session_conclusions", [])
     cl.user_session.set("pdf_list", [])
     cl.user_session.set("pdf_ready", False)
     cl.user_session.set("provider", None)   # 모델 선택 초기화 → 새 채팅 첫 질문에 다시 선택
@@ -1560,6 +1595,7 @@ async def on_message(message: cl.Message):
             gen, query, extra_context, session_id, provider, model_label,
             thread_id=_thread_scope(),
             carry_laws=cl.user_session.get("used_laws") or [],
+            carry_conclusions=cl.user_session.get("session_conclusions") or [],
         )
     except Exception as e:
         await cl.Message(content=f"오류가 발생했습니다: {e}").send()
@@ -1607,6 +1643,9 @@ async def on_message(message: cl.Message):
     # 누적 법령 세트 갱신 — 이번 답변이 활용한 법령을 계속 붙잡아 다음 질문에 강제 포함
     cl.user_session.set("used_laws",
                         _accumulate_used_laws(cl.user_session.get("used_laws"), result))
+    # 누적 결론 세트 갱신 — 이번 답변에서 도출한 결론을 다음 질문에 전제로 전달
+    cl.user_session.set("session_conclusions",
+                        _accumulate_conclusions(cl.user_session.get("session_conclusions"), result))
 
 
 # ── 사각지대 알림 + 재생성 ──────────────────────────────────────

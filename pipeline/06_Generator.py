@@ -925,6 +925,111 @@ def _extract_answer_law_hints(answer: str) -> list[str]:
 
 
 # ============================================================
+# 답변 결론 추출 (세션 결론 캐싱용)
+# ============================================================
+
+# 법령 인용 + 조항까지 매칭 (결론 추출용, 항·호까지)
+_CONCLUSION_LAW_PAT = re.compile(
+    r'「([^」]{2,40})」\s*(제\d+조(?:의\d+)?(?:제\d+항(?:제\d+호)?)?)',
+)
+
+_CONCLUSIONS_PER_TURN = 10   # 턴당 결론 추출 상한
+
+
+def _extract_conclusions(answer: str, query: str = "") -> list[dict]:
+    """답변 본문에서 법령별 핵심 결론 청크를 구조화 추출.
+
+    전략:
+    1. [산출 결과] 블록이 있으면 → 블록 전체를 하나의 결론으로 (산출형)
+    2. 법령 인용이 포함된 문단에서 핵심 결론 문장을 추출 (해석형)
+    3. 문단 길이가 길면 200자로 절단 + 법령 참조 보존
+
+    반환: [{"refs": ["「남양주시 주택 조례」 제5조제1항", ...],
+            "text": "1000세대 이상: 625㎡+세대당2.5㎡ = 3700㎡",
+            "query": "원래 질문(100자)"}]
+    """
+    # 출처·부록 섹션 이전까지만 분석
+    body = answer
+    for marker in ("[출처 요약]", "[관련 조문", "[근거 법령", "[담당부서", "[검색 태그"):
+        idx = body.find(marker)
+        if idx > 0:
+            body = body[:idx]
+
+    conclusions: list[dict] = []
+    seen_refs: set[str] = set()
+    query_short = (query or "")[:100]
+
+    # ── 1. [산출 결과] 블록 우선 추출 ──
+    calc_match = re.search(r'\[산출 결과\](.*?)(?=\n##|\n\[|$)', body, re.DOTALL)
+    if calc_match:
+        calc_text = calc_match.group(1).strip()[:500]
+        calc_refs = []
+        for m in _CONCLUSION_LAW_PAT.finditer(calc_text):
+            ref = f"「{m.group(1)}」 {m.group(2)}"
+            ref_key = re.sub(r'\s+', '', ref)
+            if ref_key not in seen_refs:
+                calc_refs.append(ref)
+                seen_refs.add(ref_key)
+        if calc_refs or calc_text:
+            conclusions.append({
+                "refs": calc_refs,
+                "text": calc_text,
+                "query": query_short,
+            })
+
+    # ── 2. 법령 인용 포함 문단에서 결론 추출 ──
+    paragraphs = [p.strip() for p in body.split('\n') if p.strip() and len(p.strip()) > 40]
+    for para in paragraphs:
+        refs_in_para = []
+        for m in _CONCLUSION_LAW_PAT.finditer(para):
+            ref = f"「{m.group(1)}」 {m.group(2)}"
+            ref_key = re.sub(r'\s+', '', ref)
+            if ref_key not in seen_refs:
+                refs_in_para.append(ref)
+                seen_refs.add(ref_key)
+
+        if not refs_in_para:
+            continue
+
+        # 문단을 결론 텍스트로 (200자 제한)
+        text = para[:200]
+        if len(para) > 200:
+            text += "…"
+        conclusions.append({
+            "refs": refs_in_para,
+            "text": text,
+            "query": query_short,
+        })
+
+        if len(conclusions) >= _CONCLUSIONS_PER_TURN:
+            break
+
+    return conclusions
+
+
+def _format_conclusions_block(conclusions: list[dict]) -> str:
+    """누적된 세션 결론을 pass2 주입용 텍스트 블록으로 포맷."""
+    if not conclusions:
+        return ""
+    lines = [
+        "\n## 📋 이전 답변에서 도출한 결론 (확정 사실로 전제할 것)",
+        "아래는 이 대화의 이전 답변에서 법령·조례를 근거로 도출한 핵심 결론입니다.",
+        "후속 질문에서 같은 사안을 다시 분석할 때 이 결론을 전제로 삼고,",
+        "모순되는 새 근거가 없는 한 같은 결론을 유지하세요.\n",
+    ]
+    for i, c in enumerate(conclusions, 1):
+        refs = " / ".join(c.get("refs", []))
+        q = c.get("query", "")
+        if refs:
+            lines.append(f"[결론{i}] ({q})")
+            lines.append(f"  근거: {refs}")
+        else:
+            lines.append(f"[결론{i}] ({q})")
+        lines.append(f"  → {c.get('text', '')}\n")
+    return "\n".join(lines)
+
+
+# ============================================================
 # 출처 파서
 # ============================================================
 
@@ -1120,10 +1225,10 @@ class Generator:
             self._retriever = mod.Retriever()
         return self._retriever
 
-    def generate(self, query: str, verbose: bool = True, extra_context: str = "", session_id: str = "", stream_callback=None, provider: str = "gemini", as_of_date: str = "", exclude_doc_codes: set = None, as_of_code: str = "", thread_id: str = "", carry_laws: list = None) -> dict:
+    def generate(self, query: str, verbose: bool = True, extra_context: str = "", session_id: str = "", stream_callback=None, provider: str = "gemini", as_of_date: str = "", exclude_doc_codes: set = None, as_of_code: str = "", thread_id: str = "", carry_laws: list = None, carry_conclusions: list = None) -> dict:
         """
         2-pass 생성 실행.
-        반환: {"query", "pass1", "context", "answer"}
+        반환: {"query", "pass1", "context", "answer", "conclusions", ...}
 
         as_of_date        : 'YYYY-MM-DD'. 지정 시 이 시점 이후의 해석례·판례를
                             검색에서 제외(eval 전용 시점 컷오프). 실서비스는 빈 값.
@@ -1133,6 +1238,11 @@ class Generator:
                             병합해 강제 포함하고, 업로드 조례는 search_uploaded에
                             force로 넘겨 벡터 랭킹과 무관하게 계속 붙잡는다(연속 질의에서
                             이미 활용한 법령을 놓치지 않게). eval 등 단발 호출은 None.
+        carry_conclusions : 이전 답변에서 도출한 핵심 결론 청크 리스트
+                            [{"refs": [...], "text": "...", "query": "..."}].
+                            pass2에 [이전 도출 결론] 블록으로 주입해 후속 질문이
+                            같은 사안을 처음부터 재분석하지 않고 확정된 결론을
+                            전제로 답변하게 한다. eval 등 단발 호출은 None.
         """
         if verbose:
             print(f"\n{'='*60}")
@@ -1493,6 +1603,9 @@ class Generator:
                 "미루지 마라.\n"
             )
 
+        # ── 이전 도출 결론 주입 (연속 질의에서 확정 결론을 전제로 삼도록) ──
+        conclusions_note = _format_conclusions_block(carry_conclusions or [])
+
         # ── 테스트 모드 안내 (질의에 판례·해석례 번호가 명시된 경우) ──
         test_mode_note = ""
         if test_exclusions:
@@ -1509,7 +1622,7 @@ class Generator:
 
         pass2_input = f"""## 질문
 {query}
-{mode_note}{carry_note}
+{mode_note}{carry_note}{conclusions_note}
 {ref_list}
 
 ## Pass 1 분석 결과
@@ -1698,6 +1811,7 @@ class Generator:
             "uploaded_docs":     uploaded_docs,
             "amendment_docs":    all_amendment_docs,
             "source_info":       source_info,
+            "conclusions":       _extract_conclusions(answer, query),
         }
 
 
