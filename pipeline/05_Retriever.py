@@ -2224,6 +2224,10 @@ class Retriever:
                                    art_root: str = "제1조") -> str:
         return self._searcher.get_ordinance_article_text(session_id, law_name, art_root)
 
+    def fetch_exact_articles(self, law_hints: list[str], top_n: int = 5) -> list[RetrievedDoc]:
+        """law_hints에 명시된 법령 조문을 강제로 가져오는 wrapper 메서드"""
+        return self._searcher.fetch_exact_articles(law_hints, top_n)
+
     def delete_uploaded_doc(self, session_id: str, law_name: str) -> int:
         return self._searcher.delete_uploaded_doc(session_id, law_name)
 
