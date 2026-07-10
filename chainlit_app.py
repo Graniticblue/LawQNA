@@ -1680,10 +1680,11 @@ async def _render_blind_spot_notice(
             tag = {"별표": "📎 별표", "과거시점": "🕰 과거시점", "미상": "❓ 미상"}.get(reason, reason)
             lines.append(f"  · {m['hint']} — {tag}")
 
-    # 지자체 조례 등은 법제처 API에 없어 페치가 실패한다 → 직접 업로드 경로 안내
+    # 조례도 자치법규 API(ordin)로 캐싱을 시도한다. API에서 못 찾는 자료(미등재
+    # 자치법규·옛 자료·별표 등)를 위한 직접 업로드 경로 안내.
     if any("조례" in f.get("law_name", "") for f in fetchable) or manual_check:
-        lines.append("\n💡 지자체 조례 등 API로 못 찾는 자료는 아래 **‘PDF 직접 첨부’** 버튼이나 "
-                     "상단 **‘업로드 캐시 → ＋PDF 파일 추가’**로 등록하면 답변에 반영됩니다.")
+        lines.append("\n💡 API로 못 찾는 자료(미등재 자치법규·옛 자료 등)는 아래 **‘PDF 직접 첨부’** "
+                     "버튼이나 상단 **‘업로드 캐시 → ＋PDF 파일 추가’**로 등록하면 답변에 반영됩니다.")
 
     # 자료 모으기(캐싱·첨부)와 재생성을 분리 — 여러 자료를 캐싱/첨부로 적재한 뒤
     # '답변 다시 생성' 한 번으로 전부 반영한다.
@@ -1756,10 +1757,14 @@ async def on_regenerate_with_fetch(action: cl.Action):
 
     def do_fetch_one(law_name: str, article_no: str):
         # 조문 단위. 같은 법령의 다른 조문은 캐시에서 즉시.
+        # (조례는 fetch_article 내부에서 ordin 타겟으로 자동 라우팅)
         if article_no:
             content = law_api_fetcher.fetch_article(law_name, article_no)
             return content
         # article_no 없으면 법령 전체 — 일단 캐시만 채우고 본문은 None 처리
+        if law_api_fetcher._is_ordinance(law_name):
+            articles = law_api_fetcher.fetch_ordinance(law_name)
+            return next(iter(articles.values()), None) if articles else None
         law_id = law_api_fetcher._fetch_law_id(law_name)
         if not law_id:
             return None
@@ -1834,6 +1839,37 @@ async def on_regenerate_with_fetch(action: cl.Action):
                 f"「{s['law_name']}」 {s['article_no']}의 그 밖의 위임 조문: "
                 + ", ".join(rest))
 
+    # 페치 성공한 조례는 업로드 캐시에도 전역 인덱싱 — law_cache(JSON)만으로는
+    # 이후 턴의 벡터 검색이 안 되므로, PDF 업로드와 동일하게 검색·조 전체 강제
+    # 포함이 동작하게 한다. 이미 등록된 조례는 건너뜀(갱신은 업로드 캐시 창의 재캐싱).
+    ordin_indexed: list[tuple[str, int]] = []
+    ordin_names = {s["law_name"] for s in success
+                   if law_api_fetcher._is_ordinance(s.get("law_name", ""))}
+    if ordin_names:
+        up_key = cl.user_session.get("upload_key", "")
+        retr = get_generator()._get_retriever()
+        try:
+            already = {d["law_name"] for d in retr.list_uploaded_docs(up_key)}
+        except Exception:
+            already = set()
+
+        def _index_ordin(ln: str) -> int:
+            arts = law_api_fetcher.fetch_ordinance(ln) or {}   # 방금 캐싱분 — 즉시
+            text = "\n".join(arts.values())
+            chunks = chunk_law_pdf(text, ln)
+            if not chunks:
+                return 0
+            retr.create_session_collection(up_key)
+            return retr.index_uploaded_chunks(up_key, chunks, "")  # thread_id="" → 전역
+
+        for ln in sorted(ordin_names - already):
+            try:
+                n = await asyncio.to_thread(_index_ordin, ln)
+            except Exception:
+                n = 0
+            if n:
+                ordin_indexed.append((ln, n))
+
     # 결과 알림
     result_lines = ["📡 **페치 결과**"]
     if success:
@@ -1841,6 +1877,10 @@ async def on_regenerate_with_fetch(action: cl.Action):
         for s in success:
             art = s.get("article_no", "") or "(전체)"
             result_lines.append(f"  · 「{s['law_name']}」 {art}")
+    if ordin_indexed:
+        result_lines.append("\n**↳ 조례 업로드 캐시 전역 등록:**")
+        for ln, n in ordin_indexed:
+            result_lines.append(f"  · 「{ln}」 ({n}개 청크) — 이후 대화에서도 검색됩니다")
     if delegated:
         result_lines.append("\n**↳ 위임 조문 동반 로드:**")
         for d in delegated:
@@ -1860,9 +1900,10 @@ async def on_regenerate_with_fetch(action: cl.Action):
     if not success:
         hint = ""
         if any("조례" in fa.get("law_name", "") for fa in failed):
-            hint = ("\n\n💡 지자체 조례는 법제처 API에 없어 페치되지 않습니다. "
-                    "사각지대 알림의 **‘📎 PDF 직접 첨부’** 버튼이나 상단 **‘업로드 캐시 → "
-                    "＋PDF 파일 추가’**로 조례 PDF를 직접 등록하시면 답변에 반영됩니다.")
+            hint = ("\n\n💡 조례는 지자체명을 포함한 정확한 명칭이어야 자치법규 API에서 "
+                    "찾습니다(예: '남양주시 주택 조례'). 그래도 못 찾으면 **‘📎 PDF 직접 "
+                    "첨부’** 버튼이나 상단 **‘업로드 캐시 → ＋PDF 파일 추가’**로 직접 "
+                    "등록하시면 답변에 반영됩니다.")
         await cl.Message(
             content="페치 성공 자료가 없습니다." + hint,
             author="사각지대 알림",

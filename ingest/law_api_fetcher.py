@@ -296,12 +296,16 @@ def fetch_article(law_name: str, article_no: str) -> str | None:
     - 캐시 있으면 즉시 반환
     - 캐시 없으면 API로 법령 전체 조회 후 캐시, 해당 조문 추출
 
-    law_name  : "건축기본법"
+    law_name  : "건축기본법" / "남양주시 주택 조례" (자치법규는 ordin 타겟으로 자동 라우팅)
     article_no: "제2조"
     """
     cached = _load_cache(law_name)
     if cached:
         return cached.get("articles", {}).get(article_no)
+
+    if _is_ordinance(law_name):
+        articles = fetch_ordinance(law_name)   # 내부에서 캐시 저장
+        return (articles or {}).get(article_no)
 
     # API 조회 — 조문과 함께 위임 링크(lsDelegated)도 같은 캐시에 동봉
     law_id = _fetch_law_id(law_name)
@@ -314,6 +318,89 @@ def fetch_article(law_name: str, article_no: str) -> str | None:
 
     _save_cache(law_name, articles, _fetch_delegations(law_id))
     return articles.get(article_no)
+
+
+# ============================================================
+# 자치법규(조례) — target=ordin
+#   국가법령과 같은 DRF 엔드포인트를 쓰되 타겟만 다르다.
+#   본문 구조가 단순: LawService → 조문 → 조[] 의 '조내용'에
+#   항·호·목이 이미 합쳐진 완전한 조 텍스트가 들어 있다.
+# ============================================================
+
+def _is_ordinance(name: str) -> bool:
+    """자치법규 판별 — '조례'가 들어가면 ordin 타겟 ('...조례 시행규칙' 포함)."""
+    return "조례" in (name or "")
+
+
+def _fetch_ordin_mst(name: str) -> str | None:
+    """자치법규명으로 일련번호(MST) 조회 — 정확 명칭 일치만 인정.
+
+    동명 조례가 지자체마다 있으므로('주택 조례') 질의에 지자체명이 포함된
+    정확 명칭이어야 한다. 복수 매칭 시 시행일자 최신본."""
+    key = _get_api_key()
+    if not key:
+        return None
+    try:
+        r = requests.get(
+            LAW_SEARCH_URL,
+            params={"OC": key, "target": "ordin", "type": "JSON",
+                    "query": name, "display": 50},
+            timeout=15,
+        )
+        root = r.json().get("OrdinSearch", {})
+        laws = root.get("law") or []
+        if isinstance(laws, dict):
+            laws = [laws]
+        def norm(s):
+            return re.sub(r"\s+", "", str(s or ""))
+        cands = [l for l in laws if norm(l.get("자치법규명")) == norm(name)]
+        if not cands:
+            return None
+        cands.sort(key=lambda l: str(l.get("시행일자", "")), reverse=True)
+        return str(cands[0].get("자치법규일련번호") or "") or None
+    except Exception:
+        return None
+
+
+def _fetch_full_ordin(mst: str) -> dict[str, str]:
+    """자치법규 전체 조문 조회. 반환: {"제5조": "제5조(주민공동시설)① ...", ...}"""
+    key = _get_api_key()
+    articles: dict[str, str] = {}
+    try:
+        r = requests.get(
+            LAW_ARTICLE_URL,
+            params={"OC": key, "target": "ordin", "type": "JSON", "MST": mst},
+            timeout=15,
+        )
+        units = r.json().get("LawService", {}).get("조문", {}).get("조", [])
+        if isinstance(units, dict):
+            units = [units]
+        for u in units:
+            content = u.get("조내용", "")
+            if isinstance(content, list):
+                content = "\n".join(str(x) for x in content)
+            content = str(content).strip()
+            m = re.match(r'(제\d+조(?:의\d+)?)', content)
+            if m and m.group(1) not in articles:   # 개정 전/후 중복은 첫 번째 우선
+                articles[m.group(1)] = content
+    except Exception:
+        return {}
+    return articles
+
+
+def fetch_ordinance(name: str) -> dict[str, str] | None:
+    """자치법규(조례) 전체 조문 반환 + 캐시. 위임 링크는 자치법규엔 미제공."""
+    cached = _load_cache(name)
+    if cached:
+        return cached.get("articles") or None
+    mst = _fetch_ordin_mst(name)
+    if not mst:
+        return None
+    articles = _fetch_full_ordin(mst)
+    if not articles:
+        return None
+    _save_cache(name, articles, {})
+    return articles
 
 
 def fetch_delegations(law_name: str, article_no: str) -> list[dict]:
