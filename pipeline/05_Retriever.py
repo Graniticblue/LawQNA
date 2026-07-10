@@ -1300,21 +1300,30 @@ class HybridSearcher:
                 break
 
         # ── 누적 법령 세트 강제 포함 (벡터 랭킹·스코프 무관) ──
+        # 업로드 청킹은 항 단위("제5조 ①"·"제5조 ②")라 조문번호 정확 일치로 가져오면
+        # 처음 검색된 항 하나에 갇힌다(제5조 ①만 계속 붙잡고 ②의 시설별 기준은 실종).
+        # 조문번호를 조 단위로 정규화해 그 조의 '모든 항 청크'를 포함한다.
         if force_articles:
             have = {(d.law_name, d.article_no) for d in results}
             for ln, art in force_articles:
-                if not ln or not art or (ln, art) in have:
+                if not ln or not art:
+                    continue
+                root = re.sub(r'[①-⑳㉑-㉚].*$', '', str(art).replace(" ", "")).strip()
+                if not root:
                     continue
                 try:
                     got = col.get(
-                        where={"$and": [{"law_name": {"$eq": ln}},
-                                        {"article_no": {"$eq": art}}]},
-                        include=["documents", "metadatas"], limit=5,
+                        where={"law_name": {"$eq": ln}},
+                        include=["documents", "metadatas"], limit=500,
                     )
                 except Exception:
                     continue
                 for doc_t, meta in zip(got.get("documents", []), got.get("metadatas", [])):
-                    key = (meta.get("law_name", ln), meta.get("article_no", art))
+                    a_n = str(meta.get("article_no", "")).replace(" ", "")
+                    # 조 일치 또는 그 조의 항 청크만 — "제5조의2"가 "제5조"에 딸려오지 않게
+                    if a_n != root and not re.match(re.escape(root) + r'[①-⑳㉑-㉚]', a_n):
+                        continue
+                    key = (meta.get("law_name", ln), meta.get("article_no", ""))
                     if key in have:
                         continue
                     have.add(key)

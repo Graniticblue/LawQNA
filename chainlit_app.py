@@ -1311,6 +1311,9 @@ def _accumulate_used_laws(prev: list, result: dict) -> list:
     def _add(law_name, article_no, source):
         if not law_name or not article_no:
             return
+        # 항 청크("제5조 ①")는 조 단위로 정규화 — 다음 턴 강제 포함·law_hints가
+        # 특정 항에 갇히지 않고 조 전체(모든 항)를 잡도록.
+        article_no = re.sub(r'\s*[①-⑳㉑-㉚].*$', '', str(article_no)).strip() or str(article_no)
         k = (law_name, article_no)
         if k in seen:
             return
