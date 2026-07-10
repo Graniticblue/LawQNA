@@ -936,7 +936,7 @@ _CONCLUSION_LAW_PAT = re.compile(
 _CONCLUSIONS_PER_TURN = 10   # 턴당 결론 추출 상한
 
 
-def _extract_conclusions(answer: str, query: str = "") -> list[dict]:
+def _extract_conclusions(answer: str, query: str = "", facts: dict = None) -> list[dict]:
     """답변 본문에서 법령별 핵심 결론 청크를 구조화 추출.
 
     전략:
@@ -944,7 +944,12 @@ def _extract_conclusions(answer: str, query: str = "") -> list[dict]:
     2. 법령 인용이 포함된 문단에서 핵심 결론 문장을 추출 (해석형)
     3. 문단 길이가 길면 200자로 절단 + 법령 참조 보존
 
+    facts: pass1의 session_facts — 이 결론이 성립하는 정의역(파라미터).
+           후속 턴에서 파라미터가 바뀌면(세대수·지역 등) 결론을 재사용하지 않고
+           재산출해야 하므로, 결론에 적용 범위를 함께 박아 둔다.
+
     반환: [{"refs": ["「남양주시 주택 조례」 제5조제1항", ...],
+            "params": {"지역": "남양주시", "규모": "1230세대"},
             "text": "1000세대 이상: 625㎡+세대당2.5㎡ = 3700㎡",
             "query": "원래 질문(100자)"}]
     """
@@ -958,6 +963,8 @@ def _extract_conclusions(answer: str, query: str = "") -> list[dict]:
     conclusions: list[dict] = []
     seen_refs: set[str] = set()
     query_short = (query or "")[:100]
+    # session_facts는 파싱 단계에서 이미 12항목·길이 제한이 걸려 있음
+    params = {str(k): str(v) for k, v in (facts or {}).items()}
 
     # ── 1. [산출 결과] 블록 우선 추출 ──
     calc_match = re.search(r'\[산출 결과\](.*?)(?=\n##|\n\[|$)', body, re.DOTALL)
@@ -973,6 +980,7 @@ def _extract_conclusions(answer: str, query: str = "") -> list[dict]:
         if calc_refs or calc_text:
             conclusions.append({
                 "refs": calc_refs,
+                "params": params,
                 "text": calc_text,
                 "query": query_short,
             })
@@ -997,6 +1005,7 @@ def _extract_conclusions(answer: str, query: str = "") -> list[dict]:
             text += "…"
         conclusions.append({
             "refs": refs_in_para,
+            "params": params,
             "text": text,
             "query": query_short,
         })
@@ -1014,17 +1023,23 @@ def _format_conclusions_block(conclusions: list[dict]) -> str:
     lines = [
         "\n## 📋 이전 답변에서 도출한 결론 (확정 사실로 전제할 것)",
         "아래는 이 대화의 이전 답변에서 법령·조례를 근거로 도출한 핵심 결론입니다.",
-        "후속 질문에서 같은 사안을 다시 분석할 때 이 결론을 전제로 삼고,",
-        "모순되는 새 근거가 없는 한 같은 결론을 유지하세요.\n",
+        "각 결론의 '정의역'은 그 결론이 성립하는 파라미터입니다.",
+        "현재 질문이 같은 정의역이면 결론을 전제로 삼아 재산출하지 말고,",
+        "정의역이 달라졌으면(세대수·지역 등 변경) 결론을 재사용하지 말고 새로 산출하세요.\n",
     ]
     for i, c in enumerate(conclusions, 1):
         refs = " / ".join(c.get("refs", []))
+        p = c.get("params") or {}
+        domain = " · ".join(f"{k}={v}" for k, v in p.items())
         q = c.get("query", "")
-        if refs:
-            lines.append(f"[결론{i}] ({q})")
-            lines.append(f"  근거: {refs}")
+        if domain:
+            lines.append(f"[결론{i}] 정의역({domain})")
+            if q:
+                lines.append(f"  질문: {q}")
         else:
             lines.append(f"[결론{i}] ({q})")
+        if refs:
+            lines.append(f"  근거: {refs}")
         lines.append(f"  → {c.get('text', '')}\n")
     return "\n".join(lines)
 
@@ -1811,7 +1826,7 @@ class Generator:
             "uploaded_docs":     uploaded_docs,
             "amendment_docs":    all_amendment_docs,
             "source_info":       source_info,
-            "conclusions":       _extract_conclusions(answer, query),
+            "conclusions":       _extract_conclusions(answer, query, session_facts),
         }
 
 
