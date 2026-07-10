@@ -1555,6 +1555,33 @@ class HybridSearcher:
                     ))
         return results
 
+    def get_ordinance_article_text(self, session_id: str, law_name: str,
+                                   art_root: str = "제1조") -> str:
+        """조례의 특정 조(모든 항)를 세션 업로드 → 내장 지역 팩 순으로 찾아 원문 반환.
+        조례→모법 역링크에서 약칭 정의('이하 "법"이라 한다')가 있는 제1조를 꺼낼 때 씀."""
+        def norm(s):
+            return re.sub(r"\s+", "", str(s or ""))
+
+        def pick(col):
+            if col is None:
+                return ""
+            try:
+                got = col.get(where={"law_name": {"$eq": law_name}},
+                              include=["documents", "metadatas"], limit=500)
+            except Exception:
+                return ""
+            parts = []
+            for doc_t, meta in zip(got.get("documents", []), got.get("metadatas", [])):
+                a_n = norm(meta.get("article_no", ""))
+                if a_n == art_root or re.match(re.escape(art_root) + r'[①-⑳㉑-㉚]', a_n):
+                    parts.append(doc_t)
+            return "\n".join(parts)
+
+        txt = pick(self._session_cols.get(session_id)) if session_id else ""
+        if not txt:
+            txt = pick(self._region_col())
+        return txt
+
     def fetch_exact_region(self, law_name: str, art_prefix: str, top_n: int = 5) -> list:
         """law_hints의 조례 힌트를 내장 팩에서 조문번호 부분일치로 강제 포함
         (fetch_exact_articles의 조례판 — 명칭은 공백 무시 정확 일치)."""
@@ -2192,6 +2219,10 @@ class Retriever:
 
     def index_region_chunks(self, region: str, chunks: list[dict]) -> int:
         return self._searcher.index_region_chunks(region, chunks)
+
+    def get_ordinance_article_text(self, session_id: str, law_name: str,
+                                   art_root: str = "제1조") -> str:
+        return self._searcher.get_ordinance_article_text(session_id, law_name, art_root)
 
     def delete_uploaded_doc(self, session_id: str, law_name: str) -> int:
         return self._searcher.delete_uploaded_doc(session_id, law_name)

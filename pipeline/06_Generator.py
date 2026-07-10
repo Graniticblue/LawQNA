@@ -925,6 +925,78 @@ def _extract_answer_law_hints(answer: str) -> list[str]:
 
 
 # ============================================================
+# 조례 → 모법 역링크 (검색된 조례가 인용하는 상위 법령 동반 로드)
+# ============================================================
+
+# 제1조(목적)의 약칭 정의: 「도시 및 주거환경정비법」(이하 "법"이라 한다)
+_ORD_ABBREV_DEF_PAT = re.compile(
+    r'「([^」]{2,40})」[^「]{0,20}?\(이하\s*["“]?(법|영|규칙)["”]?\s*이라')
+# 본문의 전체 명칭 인용: 「건축법」 제2조제1항 / 「…시행령」 별표1
+_ORD_FULL_CITE_PAT = re.compile(
+    r'「([^」]{2,40})」\s*(제\d+조(?:의\d+)?(?:제\d+항(?:제\d+호)?)?|별표\s?\d*)')
+# 본문의 약칭 인용: 법 제2조제3호 / 영 별표1 / 규칙 제10조
+#   (?<![가-힣「]) — '건축법 제2조'의 '법'처럼 단어 일부인 경우는 제외
+_ORD_ABBREV_CITE_PAT = re.compile(
+    r'(?<![가-힣「])(법|영|규칙)\s*(제\d+조(?:의\d+)?(?:제\d+항(?:제\d+호)?)?|별표\s?\d+)')
+
+
+def _ordinance_parent_hints(docs: list, get_art1) -> list[str]:
+    """검색된 조례 청크가 인용하는 모법 조문 힌트 추출.
+
+    조례는 제1조(목적)에서 「모법」(이하 "법"), 시행령(이하 "영") 약칭을 정의하고
+    본문에서 '법 제2조제3호'·'영 별표1'처럼 인용한다. 검색된 청크에는 제1조가
+    없는 경우가 대부분이므로 get_art1(law_name)으로 그 조례의 제1조를 컬렉션에서
+    직접 꺼내 약칭 지도를 만든 뒤 해석한다. 조례만 컨텍스트에 실리면 모델이
+    모법의 정의 조문 없이 해석을 창작하는 문제(노후도 질의 오답)의 대책."""
+    hints: list[str] = []
+    seen: set[str] = set()
+    by_law: dict[str, list] = {}
+    for d in docs:
+        ln = getattr(d, "law_name", "")
+        if "조례" in ln:
+            by_law.setdefault(ln, []).append(d)
+
+    for ln, dlist in by_law.items():
+        try:
+            art1 = get_art1(ln) or ""
+        except Exception:
+            art1 = ""
+        amap: dict[str, str] = {}
+        for m in _ORD_ABBREV_DEF_PAT.finditer(art1):
+            amap.setdefault(m.group(2), m.group(1))
+        base = amap.get("법", "")
+        if not base:
+            # 약칭 정의가 없으면 제1조 위임 문구의 첫 모법을 기본으로
+            # ("이 조례는 「도시 및 주거환경정비법」, 같은 법 시행령 …에서 위임된" 형태)
+            m1 = re.search(r'「([^」]{2,40})」', art1)
+            if m1 and "조례" not in m1.group(1):
+                base = m1.group(1)
+                amap.setdefault("법", base)
+        if base:  # '법'만 정의돼도 영·규칙은 관례상 그 시행령·시행규칙
+            amap.setdefault("영", base + " 시행령")
+            amap.setdefault("규칙", base + " 시행규칙")
+
+        texts = art1 + "\n" + "\n".join(getattr(d, "content", "") or "" for d in dlist)
+        for m in _ORD_FULL_CITE_PAT.finditer(texts):
+            nm = m.group(1)
+            if "조례" in nm:      # 다른 조례 인용은 모법이 아님
+                continue
+            h = f"{nm} {m.group(2)}".strip()
+            if h not in seen:
+                seen.add(h)
+                hints.append(h)
+        for m in _ORD_ABBREV_CITE_PAT.finditer(texts):
+            target = amap.get(m.group(1), "")
+            if not target:
+                continue
+            h = f"{target} {m.group(2)}".strip()
+            if h not in seen:
+                seen.add(h)
+                hints.append(h)
+    return hints[:12]
+
+
+# ============================================================
 # 답변 결론 추출 (세션 결론 캐싱용)
 # ============================================================
 
@@ -1393,6 +1465,28 @@ class Generator:
                 print(f"→ 업로드 법령 {len(uploaded_docs)}건 검색됨"
                       + (f" (누적 강제 {len(carry_force_uploaded)}건 포함)" if carry_force_uploaded else ""))
 
+        # ── 조례 → 모법 역링크: 검색된 조례가 인용하는 상위 법령 동반 로드 ──
+        # 조례만 실리면 모델이 모법 정의(예: 노후·불량건축물, 건축물의 범위) 없이
+        # 조례 문언 위에서 해석을 창작한다. 인용된 모법 조문을 fetch_exact로 함께
+        # 싣고, DB에 없는 모법은 law_hints에 합쳐 사각지대(패치 제안)로 올린다.
+        if uploaded_docs:
+            parent_hints = _ordinance_parent_hints(
+                uploaded_docs,
+                lambda ln: retriever.get_ordinance_article_text(session_id, ln, "제1조"),
+            )
+            parent_hints = [h for h in parent_hints if h not in law_hints]
+            if parent_hints:
+                if verbose:
+                    print(f"→ 조례 모법 역링크: {parent_hints[:6]}"
+                          + ("…" if len(parent_hints) > 6 else ""))
+                have_arts = {(d.law_name, d.article_no) for d in law_docs}
+                for d in retriever.fetch_exact_articles(parent_hints, top_n=2):
+                    k = (d.law_name, d.article_no)
+                    if k not in have_arts:
+                        have_arts.add(k)
+                        law_docs.append(d)
+                law_hints = law_hints + parent_hints   # 사각지대 감지에도 반영
+
         # ── 원칙·메모 → 출처 페어링 (인용된 해석례·판례 강제 동반) ──
         # 검색된 원칙·메모가 인용한 source를 raw 텍스트로 답변 컨텍스트에 넣어,
         # LLM이 '원칙 + 출처 인용문언' 페어를 답변에 노출할 수 있도록 한다.
@@ -1799,8 +1893,13 @@ class Generator:
             except Exception:
                 pass
             if up_names:
+                # 공백 변주('주거환경 정비조례' vs '주거환경정비 조례')로 대조가
+                # 빗나가 보유 조례에 패치를 권하던 오탐 방지 — 공백 제거 후 비교
+                up_norm = {re.sub(r"\s+", "", u) for u in up_names if u}
+
                 def _in_upload(name: str) -> bool:
-                    return any(u and (u in name or name in u) for u in up_names)
+                    n = re.sub(r"\s+", "", name or "")
+                    return any(u and (u in n or n in u) for u in up_norm)
                 blind_spots["fetchable"] = [
                     f for f in blind_spots["fetchable"]
                     if not _in_upload(f.get("law_name", ""))

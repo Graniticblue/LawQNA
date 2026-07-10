@@ -1888,10 +1888,21 @@ async def on_regenerate_with_fetch(action: cl.Action):
     if ordin_names:
         up_key = cl.user_session.get("upload_key", "")
         retr = get_generator()._get_retriever()
+
+        # 보유 대조는 공백 제거 정규화 — '주거환경 정비조례'/'주거환경정비 조례'
+        # 표기 변주로 이미 가진(업로드·내장 팩) 조례를 중복 등록하지 않게.
+        def _norm_ln(s: str) -> str:
+            return re.sub(r"\s+", "", s or "")
+
+        already: set = set()
         try:
-            already = {d["law_name"] for d in retr.list_uploaded_docs(up_key)}
+            already |= {_norm_ln(d["law_name"]) for d in retr.list_uploaded_docs(up_key)}
         except Exception:
-            already = set()
+            pass
+        try:
+            already |= {_norm_ln(d["law_name"]) for d in retr.list_region_laws()}
+        except Exception:
+            pass
 
         def _index_ordin(ln: str) -> int:
             arts = law_api_fetcher.fetch_ordinance(ln) or {}   # 방금 캐싱분 — 즉시
@@ -1902,7 +1913,7 @@ async def on_regenerate_with_fetch(action: cl.Action):
             retr.create_session_collection(up_key)
             return retr.index_uploaded_chunks(up_key, chunks, "")  # thread_id="" → 전역
 
-        for ln in sorted(ordin_names - already):
+        for ln in sorted(ln for ln in ordin_names if _norm_ln(ln) not in already):
             try:
                 n = await asyncio.to_thread(_index_ordin, ln)
             except Exception:
