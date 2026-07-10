@@ -1595,6 +1595,11 @@ async def _render_blind_spot_notice(
             tag = {"별표": "📎 별표", "과거시점": "🕰 과거시점", "미상": "❓ 미상"}.get(reason, reason)
             lines.append(f"  · {m['hint']} — {tag}")
 
+    # 지자체 조례 등은 법제처 API에 없어 페치가 실패한다 → 직접 업로드 경로 안내
+    if any("조례" in f.get("law_name", "") for f in fetchable) or manual_check:
+        lines.append("\n💡 지자체 조례 등 API로 못 찾는 자료는 상단 **‘업로드 캐시 → ＋PDF 파일 추가’**로 "
+                     "직접 등록하면 이후 답변에 반영됩니다.")
+
     actions: list = []
     if fetchable:
         # 페이로드에 필요한 정보 전부 담아 콜백에서 그대로 사용
@@ -1750,8 +1755,13 @@ async def on_regenerate_with_fetch(action: cl.Action):
     await cl.Message(content="\n".join(result_lines), author="사각지대 알림").send()
 
     if not success:
+        hint = ""
+        if any("조례" in fa.get("law_name", "") for fa in failed):
+            hint = ("\n\n💡 지자체 조례는 법제처 API에 없어 페치되지 않습니다. "
+                    "상단 **‘업로드 캐시 → ＋PDF 파일 추가’**로 조례 PDF를 직접 등록하시면 "
+                    "이후 답변에 반영됩니다.")
         await cl.Message(
-            content="페치 성공 자료가 없어 재생성을 진행하지 않습니다.",
+            content="페치 성공 자료가 없어 재생성을 진행하지 않습니다." + hint,
             author="사각지대 알림",
         ).send()
         return

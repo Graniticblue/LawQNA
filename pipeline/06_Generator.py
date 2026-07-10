@@ -1613,6 +1613,27 @@ class Generator:
                 print(f"  [답변 인용 사각지대] +{len(extra_bs['fetchable'])}건: "
                       f"{[f['law_name'] for f in extra_bs['fetchable']]}")
 
+        # ── 업로드 캐시에 이미 있는 법령은 사각지대에서 제외 (오탐 방지) ──
+        # detect_blind_spots는 law_articles DB만 확인하므로, 업로드 캐시(세션 컬렉션)에
+        # 올린 조례·법령을 'DB 미수록'으로 오판해 API 페치를 권했음. 지자체 조례는
+        # 법제처 API에 없어 페치도 실패 → 사용자가 이미 가진 자료에 헛제안이 뜸.
+        if session_id and blind_spots.get("fetchable"):
+            try:
+                up_names = {d["law_name"] for d in retriever.list_uploaded_docs(session_id)}
+            except Exception:
+                up_names = set()
+            if up_names:
+                def _in_upload(name: str) -> bool:
+                    return any(u and (u in name or name in u) for u in up_names)
+                blind_spots["fetchable"] = [
+                    f for f in blind_spots["fetchable"]
+                    if not _in_upload(f.get("law_name", ""))
+                ]
+                blind_spots["manual_check"] = [
+                    m for m in blind_spots.get("manual_check", [])
+                    if not _in_upload(m.get("hint", ""))
+                ]
+
         source_info = parse_source_info(answer)
 
         return {
