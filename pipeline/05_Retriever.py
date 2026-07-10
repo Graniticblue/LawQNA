@@ -881,6 +881,16 @@ class HybridSearcher:
             if not law_name or not art_prefix:
                 continue
 
+            # 조례 힌트는 내장 지역 팩에서 조회 (law_articles에는 조례가 없음)
+            if "조례" in law_name:
+                for d in self.fetch_exact_region(law_name, art_prefix, top_n):
+                    key = f"{d.law_name}::{d.article_no}::{d.content[:40]}"
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    result.append(d)
+                continue
+
             if is_byeolpyo:
                 where: dict = {"$and": [
                     {"law_name":    {"$eq": law_name}},
@@ -1377,6 +1387,213 @@ class HybridSearcher:
         except Exception:
             pass
         self._session_cols.pop(key, None)
+
+    # ----------------------------------------------------------
+    # 내장 지역 조례 팩 (region_ordinances 전역 컬렉션)
+    #   ingest/region_packs/*.json을 앱 기동 시 인덱싱해 두는 붙박이 조례.
+    #   업로드 캐시와 달리 사용자·세션과 무관하게 전 사용자 공용이며,
+    #   질문·맥락에 그 지역명이 언급될 때만 벡터 검색에 참여한다.
+    # ----------------------------------------------------------
+
+    _REGION_COL_NAME = "region_ordinances"
+
+    def _region_col(self):
+        if getattr(self, "_region_col_cache", None) is not None:
+            return self._region_col_cache
+        try:
+            self._region_col_cache = self._chroma.get_or_create_collection(
+                name=self._REGION_COL_NAME,
+                metadata={"hnsw:space": "cosine"},
+            )
+        except Exception:
+            self._region_col_cache = None
+        return self._region_col_cache
+
+    def list_region_laws(self) -> list[dict]:
+        """내장 조례 팩 목록: [{'law_name','region','chunks'}] — UI·사각지대 필터용. 캐시됨."""
+        cached = getattr(self, "_region_laws_cache", None)
+        if cached is not None:
+            return cached
+        col = self._region_col()
+        if col is None or col.count() == 0:
+            self._region_laws_cache = []
+            return []
+        try:
+            metas = col.get(include=["metadatas"], limit=100000)["metadatas"]
+        except Exception:
+            return []
+        agg: dict = {}
+        for m in metas:
+            ln = m.get("law_name", "")
+            e = agg.setdefault(ln, {"law_name": ln, "region": m.get("region", ""), "chunks": 0})
+            e["chunks"] += 1
+        self._region_laws_cache = sorted(agg.values(), key=lambda x: (x["region"], x["law_name"]))
+        return self._region_laws_cache
+
+    def index_region_chunks(self, region: str, chunks: list[dict]) -> int:
+        """지역 팩 청크 인덱싱 — 그 지역 기존 항목을 지우고 재적재(팩 갱신 대응)."""
+        col = self._region_col()
+        if col is None or not chunks:
+            return 0
+        try:
+            old = col.get(where={"region": {"$eq": region}}, include=[], limit=100000)["ids"]
+            if old:
+                col.delete(ids=old)
+        except Exception:
+            pass
+        ids, texts, metas = [], [], []
+        for i, ch in enumerate(chunks):
+            ids.append(f"region::{region}::{i}")
+            texts.append(ch["content"][:6000])
+            metas.append({
+                "law_name": ch.get("law_name", ""),
+                "article_no": ch.get("article_no", f"chunk_{i}"),
+                "source": "region",
+                "region": region,
+                "is_ordinance": "true",
+            })
+        BATCH = 32
+        embeddings = []
+        for i in range(0, len(texts), BATCH):
+            embeddings.extend([self._embed_text(t) for t in texts[i:i + BATCH]])
+        col.add(ids=ids, embeddings=embeddings, documents=texts, metadatas=metas)
+        self._region_laws_cache = None   # 목록 캐시 무효화
+        return len(ids)
+
+    @staticmethod
+    def _region_aliases(region: str) -> list[str]:
+        """'서울특별시' → ['서울특별시','서울시','서울'] — 질문·맥락의 지역 언급 매칭용."""
+        base = re.sub(r"(특별자치시|특별자치도|특별시|광역시|시|군|구|도)$", "", region)
+        out = {region}
+        if base and base != region:
+            out.add(base)
+            out.add(base + "시")
+        return sorted(out, key=len, reverse=True)
+
+    def search_region(self, query: str, top_k: int = 5, context: str = "",
+                      force_articles: Optional[list] = None,
+                      exclude: Optional[set] = None) -> list:
+        """내장 지역 조례 검색.
+
+        질문 또는 직전 맥락(context)에 팩 지역명이 언급된 경우에만 그 지역 조례를
+        벡터 검색한다(무관 지역의 질문을 오염시키지 않게). force_articles의 조례는
+        지역 언급과 무관하게 조 단위(모든 항 청크)로 강제 포함 — 누적 법령 세트가
+        업로드 캐시와 동일하게 동작한다. exclude: 이미 확보된 (law_name, article_no)."""
+        col = self._region_col()
+        if col is None or col.count() == 0:
+            return []
+        have = set(exclude or set())
+        results: list = []
+
+        regions = {d["region"] for d in self.list_region_laws() if d["region"]}
+        match_text = f"{query}\n{context}"
+        matched = [r for r in regions
+                   if any(a in match_text for a in self._region_aliases(r))]
+        if matched:
+            try:
+                where = ({"region": {"$eq": matched[0]}} if len(matched) == 1
+                         else {"region": {"$in": matched}})
+                res = col.query(
+                    query_embeddings=[self._embed_text(query)],
+                    n_results=min(top_k * 2, col.count()),
+                    where=where,
+                    include=["documents", "metadatas", "distances"],
+                )
+                for doc, meta, dist in zip(
+                    res["documents"][0], res["metadatas"][0], res["distances"][0]
+                ):
+                    score = max(0.0, 1.0 - dist)
+                    if score < 0.3:
+                        continue
+                    key = (meta.get("law_name", ""), meta.get("article_no", ""))
+                    if key in have:
+                        continue
+                    have.add(key)
+                    results.append(RetrievedDoc(
+                        source="uploaded",
+                        law_name=key[0],
+                        article_no=key[1],
+                        content=doc,
+                        score=score,
+                        score_type="vector",
+                        metadata={"source": "region", "region": meta.get("region", "")},
+                    ))
+                    if len(results) >= top_k:
+                        break
+            except Exception:
+                pass
+
+        # 누적 법령 세트 강제 포함 — 업로드 캐시 force와 동일한 조 단위 규칙
+        if force_articles:
+            for ln, art in force_articles:
+                if not ln or not art or "조례" not in str(ln):
+                    continue
+                root = re.sub(r'[①-⑳㉑-㉚].*$', '', str(art).replace(" ", "")).strip()
+                if not root:
+                    continue
+                try:
+                    got = col.get(where={"law_name": {"$eq": ln}},
+                                  include=["documents", "metadatas"], limit=500)
+                except Exception:
+                    continue
+                for doc_t, meta in zip(got.get("documents", []), got.get("metadatas", [])):
+                    a_n = str(meta.get("article_no", "")).replace(" ", "")
+                    if a_n != root and not re.match(re.escape(root) + r'[①-⑳㉑-㉚]', a_n):
+                        continue
+                    key = (meta.get("law_name", ln), meta.get("article_no", ""))
+                    if key in have:
+                        continue
+                    have.add(key)
+                    results.append(RetrievedDoc(
+                        source="uploaded",
+                        law_name=key[0],
+                        article_no=key[1],
+                        content=doc_t,
+                        score=1.5,
+                        score_type="carry",
+                        metadata={"source": "region", "region": meta.get("region", "")},
+                    ))
+        return results
+
+    def fetch_exact_region(self, law_name: str, art_prefix: str, top_n: int = 5) -> list:
+        """law_hints의 조례 힌트를 내장 팩에서 조문번호 부분일치로 강제 포함
+        (fetch_exact_articles의 조례판 — 명칭은 공백 무시 정확 일치)."""
+        col = self._region_col()
+        if col is None or col.count() == 0:
+            return []
+
+        def norm(s):
+            return re.sub(r"\s+", "", str(s or ""))
+
+        target = None
+        for d in self.list_region_laws():
+            if norm(d["law_name"]) == norm(law_name):
+                target = d["law_name"]
+                break
+        if not target:
+            return []
+        try:
+            res = col.get(where={"law_name": {"$eq": target}},
+                          include=["documents", "metadatas"], limit=500)
+        except Exception:
+            return []
+        art_key = norm(art_prefix)
+        out: list = []
+        for doc_text, meta in zip(res.get("documents", []), res.get("metadatas", [])):
+            if art_key and art_key not in norm(meta.get("article_no", "")):
+                continue
+            out.append(RetrievedDoc(
+                source="uploaded",
+                law_name=meta.get("law_name", ""),
+                article_no=meta.get("article_no", ""),
+                content=doc_text,
+                score=2.0,
+                score_type="exact",
+                metadata={"source": "region", "region": meta.get("region", "")},
+            ))
+            if len(out) >= top_n:
+                break
+        return out
 
     def cleanup_expired_uploads(self, days: int = 30) -> int:
         """N일 이상 미사용 upload_* 컬렉션 + 레거시 session_* 컬렉션을 정리.
@@ -1958,11 +2175,23 @@ class Retriever:
     def search_uploaded(self, session_id: str, query: str, top_k: int = 5,
                         thread_id: str = "", context: str = "",
                         force_articles: Optional[list] = None) -> list:
-        return self._searcher.search_uploaded(
+        # 사용자 업로드 + 내장 지역 조례 팩을 하나의 스트림으로 (업로드 우선, 중복 제거)
+        res = self._searcher.search_uploaded(
             session_id, query, top_k, thread_id, context, force_articles)
+        have = {(d.law_name, d.article_no) for d in res}
+        res += self._searcher.search_region(
+            query, top_k=top_k, context=context,
+            force_articles=force_articles, exclude=have)
+        return res
 
     def list_uploaded_docs(self, session_id: str) -> list[dict]:
         return self._searcher.list_uploaded_docs(session_id)
+
+    def list_region_laws(self) -> list[dict]:
+        return self._searcher.list_region_laws()
+
+    def index_region_chunks(self, region: str, chunks: list[dict]) -> int:
+        return self._searcher.index_region_chunks(region, chunks)
 
     def delete_uploaded_doc(self, session_id: str, law_name: str) -> int:
         return self._searcher.delete_uploaded_doc(session_id, law_name)
@@ -2195,8 +2424,8 @@ class Retriever:
 
         # ── 업로드 문서층 ────────────────────────────────
         if uploaded_docs:
-            lines.append("=== [사용자 업로드 법령] ===")
-            lines.append("※ 아래는 사용자가 업로드한 법령 조문입니다. 질의와 관련된 경우 우선 참조하세요.")
+            lines.append("=== [사용자 업로드·내장 조례 법령] ===")
+            lines.append("※ 아래는 사용자가 업로드했거나 시스템에 내장된 조례·법령 조문입니다. 질의와 관련된 경우 우선 참조하세요.")
             for doc in uploaded_docs:
                 lines.append(f"\n[{doc.law_name} {doc.article_no}]")
                 lines.append(doc.content)

@@ -155,6 +155,96 @@ def cleanup_uploads(days: int = 30):
         print(f"[startup] 업로드 정리 생략(앱 계속): {e}")
 
 
+def _split_article_hangs(article_no: str, content: str) -> list:
+    """조 텍스트를 항 단위로 분할 — chainlit chunk_law_pdf와 동일 규칙.
+    다항 조문이 한 청크로 임베딩되면 max_seq_length에 뒷항이 잘려 검색 누락되므로."""
+    import re
+    HANG = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳㉑㉒㉓㉔㉕㉖㉗㉘㉙㉚"
+    positions = [(m.start(), m.group()) for m in re.finditer(f"[{HANG}]", content)]
+    if len(positions) < 2:
+        return [(article_no, content)]
+    out = []
+    for i, (pos, marker) in enumerate(positions):
+        end = positions[i + 1][0] if i + 1 < len(positions) else len(content)
+        htext = content[pos:end].strip()
+        if len(htext) > 3:
+            out.append((f"{article_no} {marker}", htext))
+    return out
+
+
+def index_region_packs():
+    """내장 지역 조례 팩(ingest/region_packs/*.json) → region_ordinances 컬렉션.
+
+    팩의 (지역, 법규명 집합)이 컬렉션과 일치하면 스킵 — 평시 부팅은 메타 확인만.
+    구성이 바뀌면 컬렉션 전체를 재적재한다(지역별 증분 add는 HNSW search_ef
+    recall 함정이 있어 전량 재빌드가 안전). 임베딩은 검색과 동일 모델."""
+    packs_dir = BASE_DIR / "ingest" / "region_packs"
+    if not packs_dir.exists():
+        return
+    import json
+    packs = []
+    for pf in sorted(packs_dir.glob("*.json")):
+        try:
+            p = json.loads(pf.read_text(encoding="utf-8"))
+            if p.get("region") and p.get("laws"):
+                packs.append(p)
+        except Exception as e:
+            print(f"[startup] 지역 팩 파싱 실패({pf.name}): {e}")
+    if not packs:
+        return
+    try:
+        import chromadb
+        client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+        col = client.get_or_create_collection(
+            "region_ordinances", metadata={"hnsw:space": "cosine"})
+        state: dict = {}
+        if col.count():
+            for m in col.get(include=["metadatas"], limit=200000)["metadatas"]:
+                state.setdefault(m.get("region", ""), set()).add(m.get("law_name", ""))
+        expected = {p["region"]: set(p["laws"].keys()) for p in packs}
+        if {r: s for r, s in state.items() if s} == expected:
+            total = sum(len(s) for s in expected.values())
+            print(f"[startup] 지역 조례 팩 최신 — 스킵 ({len(expected)}개 지역, {total}건)")
+            return
+
+        print(f"[startup] 지역 조례 팩 인덱싱 시작 ({len(packs)}개 지역)…")
+        try:
+            client.delete_collection("region_ordinances")
+        except Exception:
+            pass
+        col = client.get_or_create_collection(
+            "region_ordinances", metadata={"hnsw:space": "cosine"})
+
+        from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+        embed = HuggingFaceEmbedding(model_name="jhgan/ko-sroberta-multitask")
+
+        for p in packs:
+            region = p["region"]
+            ids, texts, metas = [], [], []
+            i = 0
+            for ln, info in p["laws"].items():
+                for art_no, content in (info.get("articles") or {}).items():
+                    for a_no, text in _split_article_hangs(art_no, str(content)):
+                        ids.append(f"region::{region}::{i}")
+                        i += 1
+                        texts.append(text[:6000])
+                        metas.append({
+                            "law_name": ln,
+                            "article_no": a_no,
+                            "source": "region",
+                            "region": region,
+                            "is_ordinance": "true",
+                        })
+            B = 64
+            for s in range(0, len(ids), B):
+                embs = [embed.get_text_embedding(t) for t in texts[s:s + B]]
+                col.add(ids=ids[s:s + B], embeddings=embs,
+                        documents=texts[s:s + B], metadatas=metas[s:s + B])
+            print(f"[startup] 지역 조례 팩 '{region}': 법규 {len(p['laws'])}건, 청크 {len(ids)}개 인덱싱 완료")
+    except Exception as e:
+        print(f"[startup] 지역 팩 인덱싱 생략(앱 계속): {e}")
+
+
 if __name__ == "__main__":
     ensure_chat_history_schema()
     cleanup_uploads()
@@ -224,3 +314,6 @@ if __name__ == "__main__":
         print(f"[startup] qa_precedents 재빌드 {'완료' if r.returncode == 0 else '실패(앱은 계속)'}")
     else:
         print(f"[startup] ChromaDB 존재 확인 ({CHROMA_DIR}) — 빌드 스킵")
+
+    # 내장 지역 조례 팩 — 본 빌드 뒤에 실행 (FORCE_REINDEX로 지워져도 여기서 복구)
+    index_region_packs()

@@ -1784,15 +1784,20 @@ class Generator:
                 print(f"  [답변 인용 사각지대] +{len(extra_bs['fetchable'])}건: "
                       f"{[f['law_name'] for f in extra_bs['fetchable']]}")
 
-        # ── 업로드 캐시에 이미 있는 법령은 사각지대에서 제외 (오탐 방지) ──
-        # detect_blind_spots는 law_articles DB만 확인하므로, 업로드 캐시(세션 컬렉션)에
-        # 올린 조례·법령을 'DB 미수록'으로 오판해 API 패치를 권했음. 지자체 조례는
-        # 법제처 API에 없어 패치도 실패 → 사용자가 이미 가진 자료에 헛제안이 뜸.
-        if session_id and blind_spots.get("fetchable"):
+        # ── 업로드 캐시·내장 지역 팩에 이미 있는 법령은 사각지대에서 제외 (오탐 방지) ──
+        # detect_blind_spots는 law_articles DB만 확인하므로, 업로드 캐시(세션 컬렉션)나
+        # 내장 조례 팩에 이미 있는 조례·법령을 'DB 미수록'으로 오판해 패치를 권했음.
+        if blind_spots.get("fetchable") or blind_spots.get("manual_check"):
+            up_names = set()
+            if session_id:
+                try:
+                    up_names = {d["law_name"] for d in retriever.list_uploaded_docs(session_id)}
+                except Exception:
+                    up_names = set()
             try:
-                up_names = {d["law_name"] for d in retriever.list_uploaded_docs(session_id)}
+                up_names |= {d["law_name"] for d in retriever.list_region_laws()}
             except Exception:
-                up_names = set()
+                pass
             if up_names:
                 def _in_upload(name: str) -> bool:
                     return any(u and (u in name or name in u) for u in up_names)

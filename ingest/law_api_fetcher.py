@@ -340,26 +340,36 @@ def _fetch_ordin_mst(name: str) -> str | None:
     key = _get_api_key()
     if not key:
         return None
+
+    def norm(s):
+        return re.sub(r"\s+", "", str(s or ""))
+
+    # 흔한 명칭('주택 조례')은 동명 지자체가 수백 건이라 상위 페이지에 정확 일치가
+    # 안 들어올 수 있다 → 몇 페이지 넘겨 가며 정확 일치를 찾는다.
+    cands = []
     try:
-        r = requests.get(
-            LAW_SEARCH_URL,
-            params={"OC": key, "target": "ordin", "type": "JSON",
-                    "query": name, "display": 50},
-            timeout=15,
-        )
-        root = r.json().get("OrdinSearch", {})
-        laws = root.get("law") or []
-        if isinstance(laws, dict):
-            laws = [laws]
-        def norm(s):
-            return re.sub(r"\s+", "", str(s or ""))
-        cands = [l for l in laws if norm(l.get("자치법규명")) == norm(name)]
-        if not cands:
-            return None
-        cands.sort(key=lambda l: str(l.get("시행일자", "")), reverse=True)
-        return str(cands[0].get("자치법규일련번호") or "") or None
+        for page in range(1, 6):
+            r = requests.get(
+                LAW_SEARCH_URL,
+                params={"OC": key, "target": "ordin", "type": "JSON",
+                        "query": name, "display": 100, "page": page},
+                timeout=15,
+            )
+            root = r.json().get("OrdinSearch", {})
+            laws = root.get("law") or []
+            if isinstance(laws, dict):
+                laws = [laws]
+            if not laws:
+                break
+            cands += [l for l in laws if norm(l.get("자치법규명")) == norm(name)]
+            if cands or page * 100 >= int(root.get("totalCnt", 0)):
+                break
     except Exception:
         return None
+    if not cands:
+        return None
+    cands.sort(key=lambda l: str(l.get("시행일자", "")), reverse=True)
+    return str(cands[0].get("자치법규일련번호") or "") or None
 
 
 def _fetch_full_ordin(mst: str) -> dict[str, str]:

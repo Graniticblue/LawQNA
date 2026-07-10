@@ -1192,8 +1192,48 @@ def build_law_db_html() -> str:
         parts.append("</tbody></table>")
     parts.append(f'<p class="law-db-foot">총 <b>{total}개</b> 법령 내장. '
                  "목록에 없는 법령은 PDF를 첨부하시면 실시간 분석에 활용됩니다.</p>")
+
+    # ── 조례계열 (내장 지역 팩 — ingest/region_packs/*.json) ──
+    try:
+        packs = _collect_region_packs()
+    except Exception:
+        packs = []
+    if packs:
+        parts.append("<h3>조례계열 (지역 팩)</h3>")
+        for region, fetched_at, rows in packs:
+            parts.append(f"<h3>🏙️ {html.escape(region)}</h3>")
+            parts.append("<table><thead><tr><th>자치법규</th><th>조문</th>"
+                         "<th>근거(인용 국가법령)</th></tr></thead><tbody>")
+            for nm, n_art, cited in rows:
+                parts.append(f"<tr><td>{html.escape(nm)}</td><td>{n_art}</td>"
+                             f"<td>{html.escape(cited)}</td></tr>")
+            parts.append("</tbody></table>")
+            parts.append(f'<p class="law-db-foot">{html.escape(region)} 자치법규 {len(rows)}건 내장 '
+                         f'· 자치법규 API 패치 기준일 {html.escape(fetched_at)}. '
+                         "질문·대화에 이 지역이 언급되면 자동으로 검색에 참여합니다.</p>")
+
     parts.append("</div>")
     return "\n".join(parts)
+
+
+def _collect_region_packs() -> list:
+    """내장 지역 조례 팩 목록 — [(지역, 패치일, [(법규명, 조문수, 인용법령), ...])]."""
+    out = []
+    d = BASE_DIR / "ingest" / "region_packs"
+    if not d.exists():
+        return out
+    for pf in sorted(d.glob("*.json")):
+        try:
+            pack = json.loads(pf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        rows = []
+        for ln, info in sorted((pack.get("laws") or {}).items()):
+            cited = ", ".join((info.get("cited_laws") or [])[:3])
+            rows.append((ln, len(info.get("articles") or {}), cited))
+        if rows:
+            out.append((pack.get("region", ""), pack.get("fetched_at", ""), rows))
+    return out
 
 _LAW_LIST_TRIGGER = "📋 내장 법령 목록"
 
