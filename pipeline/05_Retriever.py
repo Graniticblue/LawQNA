@@ -1334,8 +1334,9 @@ class HybridSearcher:
                     continue
                 for doc_t, meta in zip(got.get("documents", []), got.get("metadatas", [])):
                     a_n = str(meta.get("article_no", "")).replace(" ", "")
-                    # 조 일치 또는 그 조의 항 청크만 — "제5조의2"가 "제5조"에 딸려오지 않게
-                    if a_n != root and not re.match(re.escape(root) + r'[①-⑳㉑-㉚]', a_n):
+                    # 조 일치 또는 그 조의 항 청크('제5조 ①')·별표 조각('별표1(2)')만
+                    # — "제5조의2"가 "제5조"에 딸려오지 않게
+                    if a_n != root and not re.match(re.escape(root) + r'[①-⑳㉑-㉚(]', a_n):
                         continue
                     key = (meta.get("law_name", ln), meta.get("article_no", ""))
                     if key in have:
@@ -1542,7 +1543,8 @@ class HybridSearcher:
                     continue
                 for doc_t, meta in zip(got.get("documents", []), got.get("metadatas", [])):
                     a_n = str(meta.get("article_no", "")).replace(" ", "")
-                    if a_n != root and not re.match(re.escape(root) + r'[①-⑳㉑-㉚]', a_n):
+                    # 조·항 청크 및 별표 조각('별표1(2)')까지 — '제5조의2'는 제외
+                    if a_n != root and not re.match(re.escape(root) + r'[①-⑳㉑-㉚(]', a_n):
                         continue
                     key = (meta.get("law_name", ln), meta.get("article_no", ""))
                     if key in have:

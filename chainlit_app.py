@@ -357,13 +357,17 @@ def chunk_law_pdf(text: str, law_name: str) -> list[dict]:
         # 다항 조문은 항 단위로 분할 (법령 DB와 동일 룰). 단항/짧은 조문은 통째로.
         hangs = _split_hangs(part)
         if hangs:
+            # 항 청크 본문에 조 헤더('제3조(적용의 완화)')를 프리픽스 — 항 텍스트만으로는
+            # 임베딩이 무슨 조(제목·주제)의 항인지 몰라 제목 키워드 검색에서 누락된다.
+            m_h = re.match(r'\s*(제\d+조(?:의\d+)?\([^)\n]{1,40}\))', part)
+            header = m_h.group(1) if m_h else article_no
             for marker, htext in hangs:
                 if len(htext) <= 3:     # 마커만 있는 빈 항 제외
                     continue
                 chunks.append({
                     "law_name": law_name,
                     "article_no": f"{article_no} {marker}",
-                    "content": htext[:6000],
+                    "content": f"[{header}] {htext}"[:6000],
                 })
         else:
             chunks.append({
@@ -1908,7 +1912,8 @@ async def on_regenerate_with_fetch(action: cl.Action):
             arts = law_api_fetcher.fetch_ordinance(ln) or {}   # 방금 캐싱분 — 즉시
             jo_text = "\n".join(v for k, v in arts.items() if not str(k).startswith("별표"))
             chunks = chunk_law_pdf(jo_text, ln) if jo_text else []
-            # 별표는 조문 정규식으로 못 쪼개므로 별도 청크로 (긴 별표는 길이 분할)
+            # 별표는 조문 정규식으로 못 쪼개므로 별도 청크로 (긴 별표는 길이 분할).
+            # 별표 유형별 청킹 전략은 별도 설계 예정 — 그때 전용 청커로 교체.
             for k, v in arts.items():
                 if not str(k).startswith("별표"):
                     continue

@@ -157,18 +157,22 @@ def cleanup_uploads(days: int = 30):
 
 def _split_article_hangs(article_no: str, content: str) -> list:
     """조 텍스트를 항 단위로 분할 — chainlit chunk_law_pdf와 동일 규칙.
-    다항 조문이 한 청크로 임베딩되면 max_seq_length에 뒷항이 잘려 검색 누락되므로."""
+    다항 조문이 한 청크로 임베딩되면 max_seq_length에 뒷항이 잘려 검색 누락되므로.
+    각 항 청크 본문에는 조 헤더('제3조(적용의 완화)')를 프리픽스한다 — 항 텍스트만으로는
+    임베딩이 무슨 조(제목·주제)의 항인지 몰라 제목 키워드 검색에서 누락된다."""
     import re
     HANG = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳㉑㉒㉓㉔㉕㉖㉗㉘㉙㉚"
     positions = [(m.start(), m.group()) for m in re.finditer(f"[{HANG}]", content)]
     if len(positions) < 2:
         return [(article_no, content)]
+    m_h = re.match(r'\s*(제\d+조(?:의\d+)?\([^)\n]{1,40}\))', content)
+    header = m_h.group(1) if m_h else article_no
     out = []
     for i, (pos, marker) in enumerate(positions):
         end = positions[i + 1][0] if i + 1 < len(positions) else len(content)
         htext = content[pos:end].strip()
         if len(htext) > 3:
-            out.append((f"{article_no} {marker}", htext))
+            out.append((f"{article_no} {marker}", f"[{header}] {htext}"))
     return out
 
 
@@ -202,9 +206,10 @@ def index_region_packs():
         # 팩 시그니처(지역→법규→조문·별표 수) — 법규명이 같아도 내용(별표 추가 등)이
         # 바뀌면 재인덱싱되도록 컬렉션 메타데이터와 대조한다.
         sig_src = json.dumps(
-            {p["region"]: {ln: len(info.get("articles") or {})
-                           for ln, info in p["laws"].items()}
-             for p in packs},
+            {"_chunker": 2,   # 청킹 규칙이 바뀌면 버전을 올려 재인덱싱 유도
+             **{p["region"]: {ln: len(info.get("articles") or {})
+                              for ln, info in p["laws"].items()}
+                for p in packs}},
             sort_keys=True, ensure_ascii=False)
         pack_sig = hashlib.md5(sig_src.encode("utf-8")).hexdigest()
         if col.count() and (col.metadata or {}).get("pack_sig") == pack_sig:
@@ -232,7 +237,8 @@ def index_region_packs():
                 for art_no, content in (info.get("articles") or {}).items():
                     content = str(content)
                     if str(art_no).startswith("별표"):
-                        # 별표는 항 구조가 없으므로 길이 분할 (임베딩 절단 방지)
+                        # 별표는 항 구조가 없으므로 길이 분할 (유형별 청킹 전략은
+                        # 별도 설계 예정 — 그때 전용 청커로 교체)
                         pieces = [(art_no if j == 0 else f"{art_no}({j // 4000 + 1})",
                                    content[j:j + 4000])
                                   for j in range(0, len(content), 4000)]
