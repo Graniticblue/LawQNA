@@ -1906,8 +1906,18 @@ async def on_regenerate_with_fetch(action: cl.Action):
 
         def _index_ordin(ln: str) -> int:
             arts = law_api_fetcher.fetch_ordinance(ln) or {}   # 방금 캐싱분 — 즉시
-            text = "\n".join(arts.values())
-            chunks = chunk_law_pdf(text, ln)
+            jo_text = "\n".join(v for k, v in arts.items() if not str(k).startswith("별표"))
+            chunks = chunk_law_pdf(jo_text, ln) if jo_text else []
+            # 별표는 조문 정규식으로 못 쪼개므로 별도 청크로 (긴 별표는 길이 분할)
+            for k, v in arts.items():
+                if not str(k).startswith("별표"):
+                    continue
+                for j in range(0, len(v), 4000):
+                    chunks.append({
+                        "law_name": ln,
+                        "article_no": k if j == 0 else f"{k}({j // 4000 + 1})",
+                        "content": v[j:j + 4000],
+                    })
             if not chunks:
                 return 0
             retr.create_session_collection(up_key)

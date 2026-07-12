@@ -194,17 +194,22 @@ def index_region_packs():
         return
     try:
         import chromadb
+        import hashlib
         client = chromadb.PersistentClient(path=str(CHROMA_DIR))
         col = client.get_or_create_collection(
             "region_ordinances", metadata={"hnsw:space": "cosine"})
-        state: dict = {}
-        if col.count():
-            for m in col.get(include=["metadatas"], limit=200000)["metadatas"]:
-                state.setdefault(m.get("region", ""), set()).add(m.get("law_name", ""))
-        expected = {p["region"]: set(p["laws"].keys()) for p in packs}
-        if {r: s for r, s in state.items() if s} == expected:
-            total = sum(len(s) for s in expected.values())
-            print(f"[startup] 지역 조례 팩 최신 — 스킵 ({len(expected)}개 지역, {total}건)")
+
+        # 팩 시그니처(지역→법규→조문·별표 수) — 법규명이 같아도 내용(별표 추가 등)이
+        # 바뀌면 재인덱싱되도록 컬렉션 메타데이터와 대조한다.
+        sig_src = json.dumps(
+            {p["region"]: {ln: len(info.get("articles") or {})
+                           for ln, info in p["laws"].items()}
+             for p in packs},
+            sort_keys=True, ensure_ascii=False)
+        pack_sig = hashlib.md5(sig_src.encode("utf-8")).hexdigest()
+        if col.count() and (col.metadata or {}).get("pack_sig") == pack_sig:
+            total = sum(len(p["laws"]) for p in packs)
+            print(f"[startup] 지역 조례 팩 최신 — 스킵 ({len(packs)}개 지역, {total}건)")
             return
 
         print(f"[startup] 지역 조례 팩 인덱싱 시작 ({len(packs)}개 지역)…")
@@ -213,7 +218,8 @@ def index_region_packs():
         except Exception:
             pass
         col = client.get_or_create_collection(
-            "region_ordinances", metadata={"hnsw:space": "cosine"})
+            "region_ordinances",
+            metadata={"hnsw:space": "cosine", "pack_sig": pack_sig})
 
         from llama_index.embeddings.huggingface import HuggingFaceEmbedding
         embed = HuggingFaceEmbedding(model_name="jhgan/ko-sroberta-multitask")
@@ -224,7 +230,15 @@ def index_region_packs():
             i = 0
             for ln, info in p["laws"].items():
                 for art_no, content in (info.get("articles") or {}).items():
-                    for a_no, text in _split_article_hangs(art_no, str(content)):
+                    content = str(content)
+                    if str(art_no).startswith("별표"):
+                        # 별표는 항 구조가 없으므로 길이 분할 (임베딩 절단 방지)
+                        pieces = [(art_no if j == 0 else f"{art_no}({j // 4000 + 1})",
+                                   content[j:j + 4000])
+                                  for j in range(0, len(content), 4000)]
+                    else:
+                        pieces = _split_article_hangs(art_no, content)
+                    for a_no, text in pieces:
                         ids.append(f"region::{region}::{i}")
                         i += 1
                         texts.append(text[:6000])

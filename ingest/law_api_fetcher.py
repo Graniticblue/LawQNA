@@ -215,6 +215,9 @@ def _fetch_full_law(law_id: str) -> dict[str, str]:
                 # 중복 조문(개정 전/후)은 첫 번째 우선
                 if art_key not in articles:
                     articles[art_key] = content
+        # 별표 전문도 같은 dict에 동봉 ("별표1"·"별표5의2" 키 — 서식 제외)
+        for k, v in _parse_byeolpyo_units(data.get("법령", {}).get("별표", {})).items():
+            articles.setdefault(k, v)
     except Exception:
         pass
     return articles
@@ -301,11 +304,18 @@ def fetch_article(law_name: str, article_no: str) -> str | None:
     """
     cached = _load_cache(law_name)
     if cached:
-        return cached.get("articles", {}).get(article_no)
+        arts = cached.get("articles", {})
+        hit = _get_article(arts, article_no)
+        # 별표 요청인데 별표가 하나도 없는 구버전 캐시면 무시하고 재패치
+        stale_byeolpyo = (hit is None
+                          and str(article_no).replace(" ", "").startswith("별표")
+                          and not any(str(k).startswith("별표") for k in arts))
+        if not stale_byeolpyo:
+            return hit
 
     if _is_ordinance(law_name):
-        articles = fetch_ordinance(law_name)   # 내부에서 캐시 저장
-        return (articles or {}).get(article_no)
+        articles = fetch_ordinance(law_name, force=True) if cached else fetch_ordinance(law_name)
+        return _get_article(articles or {}, article_no)
 
     # API 조회 — 조문과 함께 위임 링크(lsDelegated)도 같은 캐시에 동봉
     law_id = _fetch_law_id(law_name)
@@ -317,7 +327,62 @@ def fetch_article(law_name: str, article_no: str) -> str | None:
         return None
 
     _save_cache(law_name, articles, _fetch_delegations(law_id))
-    return articles.get(article_no)
+    return _get_article(articles, article_no)
+
+
+# ============================================================
+# 별표 — 법령·자치법규 공통 파싱
+#   별표내용이 중첩 문자열 리스트로 오므로 평탄화해 전문 텍스트로 만든다.
+#   서식(신청서 양식)은 제외. 키는 "별표1"·"별표5의2" 형태로 정규화.
+# ============================================================
+
+def _flatten_strs(x) -> list:
+    if isinstance(x, str):
+        return [x]
+    out = []
+    for i in (x or []):
+        out.extend(_flatten_strs(i))
+    return out
+
+
+def _parse_byeolpyo_units(units) -> dict[str, str]:
+    """별표단위[] → {"별표1": 전문, "별표5의2": 전문}."""
+    if isinstance(units, dict):
+        units = units.get("별표단위", units)
+    if isinstance(units, dict):
+        units = [units]
+    out: dict[str, str] = {}
+    for u in (units or []):
+        if not isinstance(u, dict):
+            continue
+        if u.get("별표구분", "별표") == "서식":
+            continue
+        try:
+            no = int(str(u.get("별표번호", "0")).lstrip("0") or "0")
+        except ValueError:
+            continue
+        if no <= 0:
+            continue
+        gaji = str(u.get("별표가지번호", "") or "").lstrip("0")
+        key = f"별표{no}" + (f"의{gaji}" if gaji else "")
+        text = "\n".join(
+            l.rstrip() for l in _flatten_strs(u.get("별표내용")) if str(l).strip())
+        if text and key not in out:
+            out[key] = text
+    return out
+
+
+def _get_article(articles: dict, article_no: str):
+    """조문번호 조회 — 공백 변주('별표 1' vs '별표1') 무시 매칭."""
+    if not articles:
+        return None
+    if article_no in articles:
+        return articles[article_no]
+    key = re.sub(r"\s+", "", str(article_no or ""))
+    for k, v in articles.items():
+        if re.sub(r"\s+", "", k) == key:
+            return v
+    return None
 
 
 # ============================================================
@@ -382,7 +447,8 @@ def _fetch_full_ordin(mst: str) -> dict[str, str]:
             params={"OC": key, "target": "ordin", "type": "JSON", "MST": mst},
             timeout=15,
         )
-        units = r.json().get("LawService", {}).get("조문", {}).get("조", [])
+        svc = r.json().get("LawService", {})
+        units = svc.get("조문", {}).get("조", [])
         if isinstance(units, dict):
             units = [units]
         for u in units:
@@ -393,16 +459,21 @@ def _fetch_full_ordin(mst: str) -> dict[str, str]:
             m = re.match(r'(제\d+조(?:의\d+)?)', content)
             if m and m.group(1) not in articles:   # 개정 전/후 중복은 첫 번째 우선
                 articles[m.group(1)] = content
+        # 자치법규 별표 — 응답 최상위 '별표단위' (법령과 위치가 다름)
+        for k, v in _parse_byeolpyo_units(svc.get("별표단위") or svc.get("별표") or []).items():
+            articles.setdefault(k, v)
     except Exception:
         return {}
     return articles
 
 
-def fetch_ordinance(name: str) -> dict[str, str] | None:
-    """자치법규(조례) 전체 조문 반환 + 캐시. 위임 링크는 자치법규엔 미제공."""
-    cached = _load_cache(name)
-    if cached:
-        return cached.get("articles") or None
+def fetch_ordinance(name: str, force: bool = False) -> dict[str, str] | None:
+    """자치법규(조례) 전체 조문+별표 반환 + 캐시. 위임 링크는 자치법규엔 미제공.
+    force=True면 캐시를 무시하고 재패치(구버전 캐시에 별표가 없을 때)."""
+    if not force:
+        cached = _load_cache(name)
+        if cached:
+            return cached.get("articles") or None
     mst = _fetch_ordin_mst(name)
     if not mst:
         return None
