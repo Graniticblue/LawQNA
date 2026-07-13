@@ -237,3 +237,7 @@ a[href*="github.com/Chainlit"],
     color: #555;
     margin-top: 12px;
 }
+/* 다크모드 제거 — 테마 토글 버튼 숨김 (JS killDarkMode의 CSS 백업) */
+#theme-toggle {
+    display: none !important;
+}

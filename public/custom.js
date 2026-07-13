@@ -247,6 +247,67 @@
         setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
     }
 
+    // ── 모델 선택 토글 (Gemini ↔ Claude) — 질문 시 묻지 않고 헤더에서 전환 ──
+    var MODEL_KEY = 'model_provider';
+
+    function currentModel() {
+        var v = '';
+        try { v = localStorage.getItem(MODEL_KEY) || ''; } catch (e) { }
+        return v === 'claude' ? 'claude' : 'gemini';
+    }
+
+    function renderModelToggle() {
+        var btn = document.getElementById('model-toggle-btn');
+        if (!btn) return;
+        btn.textContent = currentModel() === 'claude' ? '🔷 Claude' : '⚡ Gemini';
+        btn.title = '클릭하면 답변 모델이 전환됩니다';
+    }
+
+    function pushModel(p) {
+        try {
+            fetch('/provider', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({ provider: p })
+            });
+        } catch (e) { }
+    }
+
+    function toggleModel() {
+        var next = currentModel() === 'claude' ? 'gemini' : 'claude';
+        try { localStorage.setItem(MODEL_KEY, next); } catch (e) { }
+        renderModelToggle();
+        pushModel(next);
+    }
+
+    var modelSynced = false;
+    function syncModelOnce() {
+        // 서버 재시작으로 선호가 비워져도 페이지 로드 시 로컬 선택을 재동기화
+        if (modelSynced) return;
+        modelSynced = true;
+        pushModel(currentModel());
+    }
+
+    // ── 다크모드 제거: 테마 토글 숨김 + 라이트 강제 ──────────────────
+    function killDarkMode() {
+        try {
+            var root = document.documentElement;
+            if (root.classList.contains('dark')) {
+                root.classList.remove('dark');
+                try { localStorage.setItem('vite-ui-theme', 'light'); } catch (e) { }
+                try { localStorage.setItem('theme', 'light'); } catch (e) { }
+            }
+            var tt = document.getElementById('theme-toggle');
+            if (tt) tt.style.display = 'none';
+            document.querySelectorAll('svg.lucide-sun, svg.lucide-moon, svg.lucide-sun-moon')
+                .forEach(function (s) {
+                    var b = s.closest('button');
+                    if (b) b.style.display = 'none';
+                });
+        } catch (e) { }
+    }
+
     function insertLawListButton() {
         try {
             if (document.getElementById('law-list-btn')) return;
@@ -277,6 +338,15 @@
             sb.className = 'law-list-btn';
             sb.onclick = downloadChat;
             readme.parentElement.insertBefore(sb, readme);
+            // 모델 토글 버튼 (대화 저장 오른쪽) — Gemini ↔ Claude 전환
+            var mt = document.createElement('button');
+            mt.id = 'model-toggle-btn';
+            mt.type = 'button';
+            mt.className = 'law-list-btn';
+            mt.onclick = toggleModel;
+            readme.parentElement.insertBefore(mt, readme);
+            renderModelToggle();
+            syncModelOnce();
             // Readme 버튼 숨김 — 우리 버튼들의 삽입 기준점으로만 쓰고 표시하지 않는다
             // (DOM에서 제거하면 재렌더 때 기준점 탐색이 깨지므로 display만 끔.
             //  Readme 기준 등간격 측정 코드는 숨김과 함께 제거됨)
@@ -368,6 +438,7 @@
         layoutStarters();
         insertLawListButton();
         insertSidebarResizeHandle();
+        killDarkMode();
     }
 
     const observer = new MutationObserver(update);

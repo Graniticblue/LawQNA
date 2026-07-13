@@ -84,6 +84,10 @@ class VolumeStorageClient(BaseStorageClient):
             return False
 
 
+# 모델 선호(헤더 토글) — anon_id별. 질문 시 모델을 묻지 않고 이 값을 따른다.
+# 서버 재시작 시 비워지지만 프런트(localStorage)가 페이지 로드 때 재동기화한다.
+_PROVIDER_PREF: dict = {}
+
 # element 파일을 서빙하는 라우트를 Chainlit FastAPI 앱에 등록 (프런트가 url로 fetch)
 try:
     from chainlit.server import app as _cl_server_app
@@ -105,6 +109,19 @@ try:
     @_cl_server_app.get("/law-list")
     async def _law_list_html():
         return HTMLResponse(build_law_db_html())
+
+    # 모델 토글(헤더) — 프런트가 선택·페이지 로드 시 POST로 동기화
+    @_cl_server_app.post("/provider")
+    async def _set_provider(request: Request):
+        key = request.cookies.get("anon_id", "")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        p = (body or {}).get("provider", "")
+        if key and p in ("gemini", "claude"):
+            _PROVIDER_PREF[key] = p
+        return JSONResponse({"provider": _PROVIDER_PREF.get(key, "gemini")})
 
     # 업로드 캐시 조회/삭제 (헤더 버튼 모달 — anon_id 쿠키로 본인 것만)
     def _upload_col(key: str):
@@ -256,7 +273,8 @@ try:
     # Chainlit SPA catch-all(/{full_path:path} → index.html)보다 먼저 매칭되도록
     # 커스텀 라우트들을 라우터 맨 앞으로 재배열.
     _MY_PATHS = {"/element-files/{object_key:path}", "/law-list", "/upload-cache",
-                 "/upload-cache/delete", "/upload-cache/add", "/upload-cache/recache"}
+                 "/upload-cache/delete", "/upload-cache/add", "/upload-cache/recache",
+                 "/provider"}
     _front = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") in _MY_PATHS]
     _rest  = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") not in _MY_PATHS]
     _cl_server_app.router.routes[:] = _front + _rest
@@ -1526,7 +1544,7 @@ async def on_new_chat(action: cl.Action):
     cl.user_session.set("session_conclusions", [])
     cl.user_session.set("pdf_list", [])
     cl.user_session.set("pdf_ready", False)
-    cl.user_session.set("provider", None)   # 모델 선택 초기화 → 새 채팅 첫 질문에 다시 선택
+    cl.user_session.set("provider", None)   # 모델은 헤더 토글(anon_id별 선호)이 결정
     await cl.Message(content="대화 이력이 초기화되었습니다. 새 질의를 입력해 주세요.").send()
 
 
@@ -1648,35 +1666,16 @@ async def on_message(message: cl.Message):
             return
 
     # ── 모델 선택 ─────────────────────────────────────────────
+    # 질문 시 묻지 않는다 — 헤더의 모델 토글(anon_id별 선호)을 그대로 따른다.
     gen = get_generator()
     if gemma_forced:
         provider = "gemma"
         model_label = "🟢 Gemma (Local)"
     else:
-        saved = cl.user_session.get("provider")
-        if saved:
-            # 한 번 선택한 모델을 세션 내내 재사용 (후속 질문엔 다시 묻지 않음).
-            # 모델을 바꾸려면 새 채팅을 시작하면 된다.
-            provider = saved
-        else:
-            actions = [
-                cl.Action(name="gemini", label="⚡ Gemini", payload={"provider": "gemini"}),
-            ]
-            if gen._claude_client:
-                actions.append(
-                    cl.Action(name="claude", label="🔷 Claude", payload={"provider": "claude"})
-                )
-
-            if len(actions) > 1:
-                res = await cl.AskActionMessage(
-                    content="어떤 모델로 답변할까요?",
-                    actions=actions,
-                    timeout=30,
-                ).send()
-                provider = (res.get("payload") or {}).get("provider", "gemini") if res else "gemini"
-            else:
-                provider = "gemini"
-            cl.user_session.set("provider", provider)   # 첫 선택을 세션에 저장
+        provider = _PROVIDER_PREF.get(cl.user_session.get("upload_key", ""), "gemini")
+        if provider == "claude" and not gen._claude_client:
+            provider = "gemini"   # Claude 미설정 배포에선 안전 폴백
+        cl.user_session.set("provider", provider)
 
     # 히스토리 + 세션 사실표에서 연속 질의 맥락 구성
     history = cl.user_session.get("history", [])
