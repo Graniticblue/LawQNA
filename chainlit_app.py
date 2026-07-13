@@ -1793,7 +1793,11 @@ async def _render_blind_spot_notice(
     actions.append(cl.Action(
         name="blind_spot_pdf_attach",
         label="📎 PDF 직접 첨부",
-        payload={"query": query},
+        payload={
+            "query":      query,
+            "provider":   provider,
+            "model_label": model_label,
+        },
     ))
     actions.append(cl.Action(
         name="blind_spot_regen",
@@ -1821,6 +1825,8 @@ async def on_regenerate_with_fetch(action: cl.Action):
     payload = action.payload or {}
     fetchable = payload.get("fetchable", [])
     query     = payload.get("query", "")
+    provider    = payload.get("provider", "gemini")
+    model_label = payload.get("model_label", "⚡ Gemini")
 
     if not query or not fetchable:
         await action.remove()
@@ -2036,9 +2042,16 @@ async def on_regenerate_with_fetch(action: cl.Action):
         blocks.extend(delegated_rest)
     _stash_regen_material(query, "\n".join(blocks))
 
+    # 재생성 버튼을 이 자리에 다시 노출 — 원래 알림 카드의 버튼은 패치 결과가
+    # 길면 화면 위로 밀려 찾기 어렵다.
     await cl.Message(
         content="✅ 캐싱 완료 — 더 캐싱·첨부할 자료가 있으면 계속 등록하시고, "
                 "**‘🔄 답변 다시 생성’**을 누르면 적재된 자료가 한 번에 반영됩니다.",
+        actions=[cl.Action(
+            name="blind_spot_regen",
+            label="🔄 답변 다시 생성",
+            payload={"query": query, "provider": provider, "model_label": model_label},
+        )],
         author="사각지대 알림",
     ).send()
 
@@ -2162,7 +2175,9 @@ async def on_blind_spot_pdf_attach(action: cl.Action):
     확보한 원문 PDF를 등록한다. 버튼은 남겨 여러 번 첨부할 수 있고,
     재생성은 '답변 다시 생성' 버튼이 적재분을 모아 한 번에 수행한다."""
     payload = action.payload or {}
-    query = payload.get("query", "")
+    query       = payload.get("query", "")
+    provider    = payload.get("provider", "gemini")
+    model_label = payload.get("model_label", "⚡ Gemini")
 
     files = await cl.AskFileMessage(
         content="반영할 법령/자료 PDF를 첨부해주세요 (여러 개 가능).",
@@ -2206,10 +2221,19 @@ async def on_blind_spot_pdf_attach(action: cl.Action):
         result_lines.append(f"  · ✓ **{label}** ({n}개 청크, 전역 캐시)")
     for name in failed_files:
         result_lines.append(f"  · ✗ {name} — 텍스트 추출 실패(스캔본 PDF?)")
+    regen_actions = []
     if registered and query:
         result_lines.append("\n더 캐싱·첨부할 자료가 있으면 계속 등록하시고, "
                             "**‘🔄 답변 다시 생성’**을 누르면 적재된 자료가 한 번에 반영됩니다.")
-    await cl.Message(content="\n".join(result_lines), author="사각지대 알림").send()
+        # 재생성 버튼을 이 자리에 노출 — 알림 카드의 버튼은 위로 밀려 찾기 어렵다
+        regen_actions.append(cl.Action(
+            name="blind_spot_regen",
+            label="🔄 답변 다시 생성",
+            payload={"query": query, "provider": provider, "model_label": model_label},
+        ))
+    await cl.Message(content="\n".join(result_lines),
+                     actions=regen_actions or None,
+                     author="사각지대 알림").send()
 
     if not registered or not query:
         return
