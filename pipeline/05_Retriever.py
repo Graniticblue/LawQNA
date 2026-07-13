@@ -1563,8 +1563,8 @@ class HybridSearcher:
 
     def get_ordinance_article_text(self, session_id: str, law_name: str,
                                    art_root: str = "제1조") -> str:
-        """조례의 특정 조(모든 항)를 세션 업로드 → 내장 지역 팩 순으로 찾아 원문 반환.
-        조례→모법 역링크에서 약칭 정의('이하 "법"이라 한다')가 있는 제1조를 꺼낼 때 씀."""
+        """조례의 특정 조(모든 항)/별표(모든 조각)를 세션 업로드 → 내장 지역 팩
+        순으로 찾아 원문 반환. 조례→모법 역링크(제1조 약칭 정의)와 인용 팝업에서 씀."""
         def norm(s):
             return re.sub(r"\s+", "", str(s or ""))
 
@@ -1579,7 +1579,8 @@ class HybridSearcher:
             parts = []
             for doc_t, meta in zip(got.get("documents", []), got.get("metadatas", [])):
                 a_n = norm(meta.get("article_no", ""))
-                if a_n == art_root or re.match(re.escape(art_root) + r'[①-⑳㉑-㉚]', a_n):
+                # 조 일치, 항 청크('제3조 ①'), 별표 조각('별표1(2)') 포함
+                if a_n == art_root or re.match(re.escape(art_root) + r'[①-⑳㉑-㉚(]', a_n):
                     parts.append(doc_t)
             return "\n".join(parts)
 

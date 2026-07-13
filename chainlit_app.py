@@ -888,6 +888,50 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
         content = f"**{ln}  {art}**{sep}{header_extra}\n\n{body}"
         elements.append(cl.Text(name=ref_name, content=content, display="side"))
 
+    # 3-조례) 인용된 조례·업로드 법령 조문 팝업 — 내장 국가법령(3·3b)과 동급 대우.
+    #    law_docs가 아니라 내장 지역 팩·업로드 캐시 컬렉션에서 직접 조회하므로,
+    #    이번 검색에 안 잡혔어도 보유 중인 조례 인용이면 팝업이 뜬다.
+    #    항 청크는 조 단위로, 별표 조각은 통째로 합쳐 원문을 제공한다.
+    try:
+        _retr = get_generator()._get_retriever()
+        _up_key = cl.user_session.get("upload_key", "") or ""
+        _ord_names: list[str] = [r["law_name"] for r in _retr.list_region_laws()]
+        if _up_key:
+            _have = set(_ord_names)
+            _ord_names += [r["law_name"] for r in _retr.list_uploaded_docs(_up_key)
+                           if r["law_name"] not in _have]
+    except Exception:
+        _retr, _up_key, _ord_names = None, "", []
+
+    if _retr and _ord_names:
+        _ORD_ART_GRP = r"(제\d+조(?:의\d+)?|별표\s?\d+(?:의\d+)?)"
+        _answer_norm = re.sub(r"\s+", "", answer)
+        for law in _ord_names:
+            # 빠른 스킵 — 대부분의 보유 조례는 답변에 안 나온다 (공백 무시 비교)
+            if re.sub(r"\s+", "", law) not in _answer_norm:
+                continue
+            # 명칭 공백 변주 허용 ('도시계획 조례'/'도시계획조례') — 토큰 사이 \s*
+            name_pat = r"\s*".join(re.escape(tok) for tok in law.split())
+            for pat in (re.compile(rf"「\s*{name_pat}\s*」\s*{_ORD_ART_GRP}" + ART_EXT),
+                        re.compile(rf"(?<![가-힣·「]){name_pat}\s+{_ORD_ART_GRP}" + ART_EXT)):
+                for m in pat.finditer(answer):
+                    ref_name = m.group(0).strip()
+                    if ref_name in seen_names:
+                        continue
+                    art_root = m.group(1).replace(" ", "")
+                    try:
+                        text = _retr.get_ordinance_article_text(_up_key, law, art_root)
+                    except Exception:
+                        text = ""
+                    if not text:
+                        continue
+                    seen_names.add(ref_name)
+                    # 항 청크의 '[제3조(…)]' 임베딩용 프리픽스는 팝업 표시에선 제거
+                    body = re.sub(r"^\[제\d+조[^\]]*\]\s*", "",
+                                  clean_article_content(text), flags=re.M)
+                    content = f"**{law}  {art_root}**\n\n{body}"
+                    elements.append(cl.Text(name=ref_name, content=content, display="side"))
+
     # 3c) '같은 법/영/규칙 제N조' 대명사 해소 → 앞서 언급된 법령으로 팝업 마킹.
     #     예: "「주차장법 시행령」 …" 다음의 "같은 영 제6조제2항" → 주차장법 시행령 제6조.
     _mentions = [(mm.start(), mm.group(1).strip())
