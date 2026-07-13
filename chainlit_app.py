@@ -786,8 +786,12 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
     # 태그 없는 인용으로 뭉개졌다.
     for d in qa_docs:
         label = d.metadata.get("cite_label", "")
-        if not label or label.startswith("법제처 ") or label in seen_names:
-            continue   # 법제처형은 위 _QA_PROSE_PAT 경로가 처리
+        if not label or label in seen_names:
+            continue
+        # 번호형 법제처 회신(법제처 14-0840)은 위 _QA_PROSE_PAT 경로가 처리.
+        # 날짜형(법제처 2006.06.07. 회신)은 번호 정규식에 안 걸리므로 여기서 팝업.
+        if re.match(r"법제처\s+\d{2}-\d{3,5}", label):
+            continue
         if label not in answer:
             continue
         seen_names.add(label)
@@ -906,11 +910,17 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
         _ORD_ART_GRP = r"(제\d+조(?:의\d+)?|별표\s?\d+(?:의\d+)?)"
         _answer_norm = re.sub(r"\s+", "", answer)
         for law in _ord_names:
+            # 저장 명칭에는 파일명 유래 접미가 붙을 수 있다
+            # ('남양주시 건축 조례(경기도 남양주시조례)(제2536호)(20260515)').
+            # 인용 대조는 괄호 앞 기본 명칭으로, 원문 조회는 저장 명칭 그대로.
+            base = re.split(r"[(\[]", law)[0].strip(" -–—")
+            if len(base) < 4:
+                base = law
             # 빠른 스킵 — 대부분의 보유 조례는 답변에 안 나온다 (공백 무시 비교)
-            if re.sub(r"\s+", "", law) not in _answer_norm:
+            if re.sub(r"\s+", "", base) not in _answer_norm:
                 continue
             # 명칭 공백 변주 허용 ('도시계획 조례'/'도시계획조례') — 토큰 사이 \s*
-            name_pat = r"\s*".join(re.escape(tok) for tok in law.split())
+            name_pat = r"\s*".join(re.escape(tok) for tok in base.split())
             for pat in (re.compile(rf"「\s*{name_pat}\s*」\s*{_ORD_ART_GRP}" + ART_EXT),
                         re.compile(rf"(?<![가-힣·「]){name_pat}\s+{_ORD_ART_GRP}" + ART_EXT)):
                 for m in pat.finditer(answer):
@@ -928,7 +938,7 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
                     # 항 청크의 '[제3조(…)]' 임베딩용 프리픽스는 팝업 표시에선 제거
                     body = re.sub(r"^\[제\d+조[^\]]*\]\s*", "",
                                   clean_article_content(text), flags=re.M)
-                    content = f"**{law}  {art_root}**\n\n{body}"
+                    content = f"**{base}  {art_root}**\n\n{body}"
                     elements.append(cl.Text(name=ref_name, content=content, display="side"))
 
     # 3c) '같은 법/영/규칙 제N조' 대명사 해소 → 앞서 언급된 법령으로 팝업 마킹.
