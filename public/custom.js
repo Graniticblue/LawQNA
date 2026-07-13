@@ -247,20 +247,31 @@
         setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
     }
 
-    // ── 모델 선택 토글 (Gemini ↔ Claude) — 질문 시 묻지 않고 헤더에서 전환 ──
+    // ── 모델 선택 드롭다운 — 질문 시 묻지 않고 헤더에서 선택 ──────────
+    // 새 모델(예: ChatGPT)은 이 배열에 항목만 추가하면 된다 (백엔드 /provider
+    // 허용 목록과 06_Generator provider 분기도 함께 확장).
+    var MODELS = [
+        { id: 'gemini', label: '⚡ Gemini' },
+        { id: 'claude', label: '🔷 Claude' }
+    ];
     var MODEL_KEY = 'model_provider';
 
     function currentModel() {
         var v = '';
         try { v = localStorage.getItem(MODEL_KEY) || ''; } catch (e) { }
-        return v === 'claude' ? 'claude' : 'gemini';
+        return MODELS.some(function (m) { return m.id === v; }) ? v : MODELS[0].id;
     }
 
-    function renderModelToggle() {
-        var btn = document.getElementById('model-toggle-btn');
+    function modelLabel(id) {
+        var m = MODELS.find(function (x) { return x.id === id; });
+        return m ? m.label : MODELS[0].label;
+    }
+
+    function renderModelButton() {
+        var btn = document.getElementById('model-select-btn');
         if (!btn) return;
-        btn.textContent = currentModel() === 'claude' ? '🔷 Claude' : '⚡ Gemini';
-        btn.title = '클릭하면 답변 모델이 전환됩니다';
+        btn.textContent = modelLabel(currentModel()) + ' ▾';
+        btn.title = '답변 모델 선택';
     }
 
     function pushModel(p) {
@@ -274,11 +285,41 @@
         } catch (e) { }
     }
 
-    function toggleModel() {
-        var next = currentModel() === 'claude' ? 'gemini' : 'claude';
-        try { localStorage.setItem(MODEL_KEY, next); } catch (e) { }
-        renderModelToggle();
-        pushModel(next);
+    function closeModelMenu() {
+        var m = document.getElementById('model-select-menu');
+        if (m) m.remove();
+        document.removeEventListener('click', closeModelMenu);
+    }
+
+    function chooseModel(id) {
+        try { localStorage.setItem(MODEL_KEY, id); } catch (e) { }
+        renderModelButton();
+        pushModel(id);
+        closeModelMenu();
+    }
+
+    function toggleModelMenu(ev) {
+        ev.stopPropagation();
+        if (document.getElementById('model-select-menu')) { closeModelMenu(); return; }
+        var btn = document.getElementById('model-select-btn');
+        if (!btn) return;
+        var r = btn.getBoundingClientRect();
+        var menu = document.createElement('div');
+        menu.id = 'model-select-menu';
+        menu.className = 'model-menu';
+        menu.style.top = (r.bottom + 6) + 'px';
+        menu.style.left = r.left + 'px';
+        var cur = currentModel();
+        MODELS.forEach(function (m) {
+            var it = document.createElement('button');
+            it.type = 'button';
+            it.className = 'model-menu-item' + (m.id === cur ? ' active' : '');
+            it.textContent = m.label + (m.id === cur ? '  ✓' : '');
+            it.onclick = function (e) { e.stopPropagation(); chooseModel(m.id); };
+            menu.appendChild(it);
+        });
+        document.body.appendChild(menu);
+        setTimeout(function () { document.addEventListener('click', closeModelMenu); }, 0);
     }
 
     var modelSynced = false;
@@ -300,17 +341,36 @@
             }
             var tt = document.getElementById('theme-toggle');
             if (tt) tt.style.display = 'none';
-            document.querySelectorAll('svg.lucide-sun, svg.lucide-moon, svg.lucide-sun-moon')
+            // lucide 아이콘 클래스 변주까지 부분일치로 — 해/달 아이콘 품은 버튼 숨김
+            document.querySelectorAll(
+                'svg[class*="-sun"], svg[class*="-moon"], svg[class*="Sun"], svg[class*="Moon"]')
                 .forEach(function (s) {
                     var b = s.closest('button');
-                    if (b) b.style.display = 'none';
+                    if (b && b.id !== 'model-select-btn') b.style.display = 'none';
                 });
         } catch (e) { }
     }
 
     function insertLawListButton() {
         try {
-            if (document.getElementById('law-list-btn')) return;
+            // 모델 버튼까지 전부 있어야 스킵 — 일부만 있으면 나머지를 마저 삽입
+            if (document.getElementById('law-list-btn')
+                && document.getElementById('model-select-btn')) return;
+            if (document.getElementById('law-list-btn')) {
+                // 구버전 렌더 잔재: 모델 버튼만 없는 경우 — 대화 저장 뒤에 붙인다
+                var sbtn = document.getElementById('chat-save-btn');
+                if (sbtn && sbtn.parentElement && !document.getElementById('model-select-btn')) {
+                    var mbtn = document.createElement('button');
+                    mbtn.id = 'model-select-btn';
+                    mbtn.type = 'button';
+                    mbtn.className = 'law-list-btn';
+                    mbtn.onclick = toggleModelMenu;
+                    sbtn.parentElement.insertBefore(mbtn, sbtn.nextSibling);
+                    renderModelButton();
+                    syncModelOnce();
+                }
+                return;
+            }
             // 'Readme' 버튼/링크 바로 앞에 삽입 (파란 버전에서 정상 동작한 방식)
             var readme = Array.prototype.slice.call(document.querySelectorAll('button, a'))
                 .find(function (el) { return el.textContent.trim() === 'Readme'; });
@@ -338,14 +398,14 @@
             sb.className = 'law-list-btn';
             sb.onclick = downloadChat;
             readme.parentElement.insertBefore(sb, readme);
-            // 모델 토글 버튼 (대화 저장 오른쪽) — Gemini ↔ Claude 전환
+            // 모델 선택 드롭다운 (대화 저장 오른쪽) — ▾ 클릭 시 모델 리스트
             var mt = document.createElement('button');
-            mt.id = 'model-toggle-btn';
+            mt.id = 'model-select-btn';
             mt.type = 'button';
             mt.className = 'law-list-btn';
-            mt.onclick = toggleModel;
+            mt.onclick = toggleModelMenu;
             readme.parentElement.insertBefore(mt, readme);
-            renderModelToggle();
+            renderModelButton();
             syncModelOnce();
             // Readme 버튼 숨김 — 우리 버튼들의 삽입 기준점으로만 쓰고 표시하지 않는다
             // (DOM에서 제거하면 재렌더 때 기준점 탐색이 깨지므로 display만 끔.

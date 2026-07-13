@@ -241,3 +241,42 @@ a[href*="github.com/Chainlit"],
 #theme-toggle {
     display: none !important;
 }
+
+/* 다크모드 토글 숨김 강화 — 해/달 아이콘을 품은 헤더 버튼 (CSS 백업) */
+button:has(svg[class*="-sun"]),
+button:has(svg[class*="-moon"]) {
+    display: none !important;
+}
+
+/* 모델 선택 드롭다운 메뉴 */
+.model-menu {
+    position: fixed;
+    z-index: 10000;
+    background: #ffffff;
+    border: 1px solid #d5dbe3;
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(21, 34, 56, 0.14);
+    padding: 4px;
+    min-width: 132px;
+}
+
+.model-menu-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 7px 12px;
+    border: none;
+    background: none;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.model-menu-item:hover {
+    background: #eef3fa;
+}
+
+.model-menu-item.active {
+    font-weight: 600;
+}
