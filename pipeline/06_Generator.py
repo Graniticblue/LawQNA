@@ -1876,7 +1876,7 @@ class Generator:
         # 조례·모법이 섞이면 모델이 우선순위를 스스로 정하다 흔들린다(부속건축물
         # 노후도 사례) → 조례 구체 기준 우선, 침묵 시 국가 기준 보충을 지시로 고정.
         ordinance_note = ""
-        if any("조례" in getattr(d, "law_name", "") for d in uploaded_docs):
+        if query_regions and any("조례" in getattr(d, "law_name", "") for d in uploaded_docs):
             ordinance_note = (
                 "\n## 🏛️ 지역 조례 우선 적용\n"
                 "질문의 지역이 특정되어 해당 지역 조례 조문이 검색 컨텍스트에 있다.\n"

@@ -1298,15 +1298,20 @@ class HybridSearcher:
             # 조례인데 다른 대화에서 업로드된 것이면 원칙적으로 제외 (thread_id 불일치).
             # 단, 조례가 1종뿐이거나(구분 불필요) 질문·맥락에 지역명이 있으면 허용.
             if meta.get("is_ordinance") == "true":
+                # 지역이 특정되지 않은 일반 질문에는 특정 지역 조례를 싣지 않는다
+                # ('사업변경신청 일반론' 질문에 부천 조례가 '지역 조례의 적용' 절로
+                # 끼던 문제). 후속 질문은 직전 맥락의 지역이 query_regions로 잡혀
+                # 유지되고, 누적 법령(carry)의 조례는 아래 force가 계속 붙잡는다.
+                if not query_regions:
+                    continue
                 # 질문이 특정 지역을 언급했으면 다른 지역 조례는 제외 (전역 포함)
-                if query_regions:
-                    region_of = re.sub(r"\s+", "", _extract_region(meta.get("law_name", "")))
-                    if region_of and not any(
-                        region_of in re.sub(r"\s+", "", str(q)) or
-                        re.sub(r"\s+", "", str(q)) in region_of
-                        for q in query_regions
-                    ):
-                        continue
+                region_of = re.sub(r"\s+", "", _extract_region(meta.get("law_name", "")))
+                if region_of and not any(
+                    region_of in re.sub(r"\s+", "", str(q)) or
+                    re.sub(r"\s+", "", str(q)) in region_of
+                    for q in query_regions
+                ):
+                    continue
                 tid = meta.get("thread_id", "")
                 if tid and thread_id and tid != thread_id and distinct_foreign_ord > 1:
                     region = _extract_region(meta.get("law_name", ""))
