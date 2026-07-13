@@ -467,6 +467,24 @@ def _fetch_full_ordin(mst: str) -> dict[str, str]:
     return articles
 
 
+def search_ordinances(query: str, display: int = 30, page: int = 1) -> list[dict]:
+    """자치법규 제목 검색 원시 결과 — 지역 조례 스캔(미보유 지역 캐싱 버튼)용."""
+    key = _get_api_key()
+    if not key:
+        return []
+    try:
+        r = requests.get(
+            LAW_SEARCH_URL,
+            params={"OC": key, "target": "ordin", "type": "JSON",
+                    "query": query, "display": display, "page": page},
+            timeout=15,
+        )
+        laws = r.json().get("OrdinSearch", {}).get("law") or []
+        return [laws] if isinstance(laws, dict) else list(laws)
+    except Exception:
+        return []
+
+
 def fetch_ordinance(name: str, force: bool = False) -> dict[str, str] | None:
     """자치법규(조례) 전체 조문+별표 반환 + 캐시. 위임 링크는 자치법규엔 미제공.
     force=True면 캐시를 무시하고 재패치(구버전 캐시에 별표가 없을 때)."""

@@ -1241,7 +1241,8 @@ class HybridSearcher:
 
     def search_uploaded(self, session_id: str, query: str, top_k: int = 5,
                         thread_id: str = "", context: str = "",
-                        force_articles: Optional[list] = None) -> list:
+                        force_articles: Optional[list] = None,
+                        query_regions: Optional[list] = None) -> list:
         """세션 컬렉션에서 유사도 검색. RetrievedDoc 리스트 반환.
 
         조례는 원칙적으로 업로드한 대화(thread_id)에서만 노출하되, 다음 중 하나면
@@ -1250,6 +1251,10 @@ class HybridSearcher:
           (b) 질문 또는 직전 대화 맥락(context)에 그 조례의 지역명이 언급됨
         연속 질의에서 후속 질문("각 상세시설 면적은?")에 지역명이 빠져도 직전 맥락으로
         해소된다(과거에는 지역명 없는 후속 질문에서 조례가 통째로 누락됐음).
+
+        query_regions: 질문이 특정한 지역 목록(사실표·지역 매칭에서 산출). 지정되면
+        다른 지역의 조례는 전역 등록이라도 벡터 결과에서 제외한다 — 원주 질문에
+        남양주 조례가 '참고용'으로 끼어들던 교차 오염 차단. 빈 목록이면 기존 동작.
 
         force_articles: [(law_name, article_no), ...] — 앞선 답변에서 이미 활용한
         업로드 조문을 벡터 랭킹·스코프와 무관하게 강제 포함(누적 법령 세트). '시설
@@ -1293,6 +1298,15 @@ class HybridSearcher:
             # 조례인데 다른 대화에서 업로드된 것이면 원칙적으로 제외 (thread_id 불일치).
             # 단, 조례가 1종뿐이거나(구분 불필요) 질문·맥락에 지역명이 있으면 허용.
             if meta.get("is_ordinance") == "true":
+                # 질문이 특정 지역을 언급했으면 다른 지역 조례는 제외 (전역 포함)
+                if query_regions:
+                    region_of = re.sub(r"\s+", "", _extract_region(meta.get("law_name", "")))
+                    if region_of and not any(
+                        region_of in re.sub(r"\s+", "", str(q)) or
+                        re.sub(r"\s+", "", str(q)) in region_of
+                        for q in query_regions
+                    ):
+                        continue
                 tid = meta.get("thread_id", "")
                 if tid and thread_id and tid != thread_id and distinct_foreign_ord > 1:
                     region = _extract_region(meta.get("law_name", ""))
@@ -2233,10 +2247,12 @@ class Retriever:
 
     def search_uploaded(self, session_id: str, query: str, top_k: int = 5,
                         thread_id: str = "", context: str = "",
-                        force_articles: Optional[list] = None) -> list:
+                        force_articles: Optional[list] = None,
+                        query_regions: Optional[list] = None) -> list:
         # 사용자 업로드 + 내장 지역 조례 팩을 하나의 스트림으로 (업로드 우선, 중복 제거)
         res = self._searcher.search_uploaded(
-            session_id, query, top_k, thread_id, context, force_articles)
+            session_id, query, top_k, thread_id, context, force_articles,
+            query_regions=query_regions)
         have = {(d.law_name, d.article_no) for d in res}
         res += self._searcher.search_region(
             query, top_k=top_k, context=context,

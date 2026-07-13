@@ -1384,20 +1384,36 @@ class Generator:
         if session_id:
             try:
                 _retr0 = self._get_retriever()
-                matched_regions = _retr0.match_regions(f"{query}\n{extra_context}")
-                if matched_regions:
-                    _names = [d["law_name"] for d in _retr0.list_region_laws()
-                              if d.get("region") in matched_regions]
-                    if _names:
-                        pass1_query += (
-                            "\n\n## 보유 지역 조례 목록 (시스템 내장 — law_hints에 활용)\n"
-                            f"질문/맥락의 지역({', '.join(matched_regions)})에 대해 아래 자치법규 "
-                            "전문이 내장되어 있다. 질문과 관련된 것은 law_hints에 "
-                            "'조례명 제N조'(조문을 알면) 또는 '조례명' 형태로 반드시 포함하라:\n"
-                            + "\n".join(f"- {n}" for n in _names)
-                        )
-                        if verbose:
-                            print(f"→ 지역 조례 카탈로그 주입: {', '.join(matched_regions)} ({len(_names)}건)")
+                _qc = f"{query}\n{extra_context}"
+                matched_regions = _retr0.match_regions(_qc)
+                _names = [d["law_name"] for d in _retr0.list_region_laws()
+                          if d.get("region") in matched_regions]
+                _label_regions = list(matched_regions)
+                # 사용자 라이브러리(업로드) 조례도 그 지역이 언급됐으면 카탈로그에 포함
+                for d in _retr0.list_uploaded_docs(session_id):
+                    ln0 = str(d.get("law_name", ""))
+                    if "조례" not in ln0:
+                        continue
+                    m0 = re.match(
+                        r"([가-힣]{1,8}(?:특별시|광역시|특별자치시|특별자치도|시|군|구))", ln0)
+                    rg0 = m0.group(1) if m0 else ""
+                    if not rg0 or rg0 not in _qc:
+                        continue
+                    base0 = re.split(r"[(\[]", ln0)[0].strip(" -–—") or ln0
+                    if base0 not in _names:
+                        _names.append(base0)
+                    if rg0 not in _label_regions:
+                        _label_regions.append(rg0)
+                if _names:
+                    pass1_query += (
+                        "\n\n## 보유 지역 조례 목록 (시스템 내장 — law_hints에 활용)\n"
+                        f"질문/맥락의 지역({', '.join(_label_regions)})에 대해 아래 자치법규 "
+                        "전문이 내장되어 있다. 질문과 관련된 것은 law_hints에 "
+                        "'조례명 제N조'(조문을 알면) 또는 '조례명' 형태로 반드시 포함하라:\n"
+                        + "\n".join(f"- {n}" for n in _names)
+                    )
+                    if verbose:
+                        print(f"→ 지역 조례 카탈로그 주입: {', '.join(_label_regions)} ({len(_names)}건)")
             except Exception:
                 matched_regions = []
 
@@ -1492,11 +1508,21 @@ class Generator:
         # 업로드 법령 검색 (세션 컬렉션)
         # context에 이전 대화 맥락(extra_context)을 넘겨, 후속 질문에 지역명이 빠져도
         # 조례 스코프 필터가 직전 대화의 지역으로 조례를 유지하게 한다.
+        # 질문이 특정한 지역들 — 조례 교차 오염 차단(search_uploaded)과 미보유
+        # 지역 감지에 공용. 보유 팩 매칭 + pass1 사실표의 지역 값 합집합.
+        query_regions: list = list(matched_regions)
+        for _v in (session_facts or {}).values():
+            _v = str(_v).strip()
+            if re.fullmatch(r"[가-힣]{1,6}(특별시|광역시|특별자치시|특별자치도|시|군|구)", _v) \
+               and _v not in query_regions:
+                query_regions.append(_v)
+
         uploaded_docs = []
         if session_id:
             uploaded_docs = retriever.search_uploaded(
                 session_id, search_query, top_k=5, thread_id=thread_id,
-                context=extra_context, force_articles=carry_force_uploaded)
+                context=extra_context, force_articles=carry_force_uploaded,
+                query_regions=query_regions)
             if verbose and uploaded_docs:
                 print(f"→ 업로드 법령 {len(uploaded_docs)}건 검색됨"
                       + (f" (누적 강제 {len(carry_force_uploaded)}건 포함)" if carry_force_uploaded else ""))
@@ -1571,22 +1597,15 @@ class Generator:
             print(f"\n[사각지대 감지] 패치 가능 {len(blind_spots['fetchable'])}건 / 수동 확인 {len(blind_spots['manual_check'])}건")
 
         # ── 미보유 지역 감지: 지역이 특정됐는데 그 지역 조례가 내장 팩에도
-        # 업로드에도 없으면 사각지대 알림으로 안내 (조례 라이브러리 등록 유도).
-        # 지역 후보는 pass1 사실표의 값에서 추출 — 자유 텍스트 정규식보다 오탐이 적다.
-        if session_id:
+        # 업로드에도 없으면 region_scan으로 표시 → 알림 카드에 '조례 스캔·캐싱'
+        # 버튼이 떠서 그 지역 자치법규를 자동 검색·검증·등록할 수 있다.
+        if session_id and query_regions:
             try:
                 _up_norm = {re.sub(r"\s+", "", d["law_name"])
                             for d in retriever.list_uploaded_docs(session_id)}
             except Exception:
                 _up_norm = set()
-            _seen_regions: set = set()
-            for v in (session_facts or {}).values():
-                v = str(v).strip()
-                if not re.fullmatch(r"[가-힣]{1,6}(특별시|광역시|특별자치시|특별자치도|시|군|구)", v):
-                    continue
-                if v in _seen_regions:
-                    continue
-                _seen_regions.add(v)
+            for v in query_regions:
                 try:
                     if retriever.match_regions(v):        # 내장 지역 팩 보유
                         continue
@@ -1595,10 +1614,7 @@ class Generator:
                 vn = re.sub(r"\s+", "", v)
                 if any(vn in u for u in _up_norm):         # 업로드 조례 보유
                     continue
-                blind_spots.setdefault("manual_check", []).append({
-                    "hint": f"{v} 관련 조례 — 미보유 (조례 라이브러리에 등록하면 답변에 반영)",
-                    "reason": "지역조례",
-                })
+                blind_spots.setdefault("region_scan", []).append(v)
 
         test_exclusions = extract_test_exclusions(query)
         if test_exclusions:

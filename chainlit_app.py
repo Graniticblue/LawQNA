@@ -1760,7 +1760,8 @@ async def _render_blind_spot_notice(
         return
     fetchable    = blind_spots.get("fetchable", [])
     manual_check = blind_spots.get("manual_check", [])
-    if not fetchable and not manual_check:
+    region_scan  = blind_spots.get("region_scan", [])
+    if not fetchable and not manual_check and not region_scan:
         return
 
     lines: list[str] = ["📡 **사각지대 법령 감지**"]
@@ -1776,6 +1777,10 @@ async def _render_blind_spot_notice(
             tag = {"별표": "📎 별표", "과거시점": "🕰 과거시점", "미상": "❓ 미상",
                    "지역조례": "🏙️ 지역 조례"}.get(reason, reason)
             lines.append(f"  · {m['hint']} — {tag}")
+    if region_scan:
+        lines.append("\n**🏙️ 지역 조례 미보유:**")
+        for rg in region_scan:
+            lines.append(f"  · {rg} — 아래 버튼으로 관련 조례를 자동 검색·등록할 수 있습니다")
 
     # 조례도 자치법규 API(ordin)로 캐싱을 시도한다. API에서 못 찾는 자료(미등재
     # 자치법규·옛 자료·별표 등)를 위한 직접 업로드 경로 안내.
@@ -1796,6 +1801,18 @@ async def _render_blind_spot_notice(
                 "provider":   provider,
                 "model_label": model_label,
                 "fetchable":  fetchable,
+            },
+        ))
+    # 미보유 지역 조례 자동 스캔·캐싱 버튼 (지역당 1개, 최대 3개)
+    for rg in region_scan[:3]:
+        actions.append(cl.Action(
+            name="region_ordinance_scan",
+            label=f"🏙️ {rg} 조례 스캔·캐싱",
+            payload={
+                "region":     rg,
+                "query":      query,
+                "provider":   provider,
+                "model_label": model_label,
             },
         ))
     # API 패치 대신(또는 API에 없는 자료를) PDF로 직접 등록하는 선택지 — 항상 노출
@@ -1823,6 +1840,27 @@ async def _render_blind_spot_notice(
         actions=actions,
         author="사각지대 알림",
     ).send()
+
+
+def _index_ordinance_articles(retr, up_key: str, ln: str, arts: dict) -> int:
+    """패치된 조례(조문+별표 dict)를 조례 라이브러리(업로드 캐시)에 전역 인덱싱.
+    사각지대 패치·지역 스캔이 공유하는 등록 꼬리."""
+    jo_text = "\n".join(v for k, v in arts.items() if not str(k).startswith("별표"))
+    chunks = chunk_law_pdf(jo_text, ln) if jo_text else []
+    # 별표는 조문 정규식으로 못 쪼개므로 별도 청크로 (긴 별표는 길이 분할)
+    for k, v in arts.items():
+        if not str(k).startswith("별표"):
+            continue
+        for j in range(0, len(v), 4000):
+            chunks.append({
+                "law_name": ln,
+                "article_no": k if j == 0 else f"{k}({j // 4000 + 1})",
+                "content": v[j:j + 4000],
+            })
+    if not chunks:
+        return 0
+    retr.create_session_collection(up_key)
+    return retr.index_uploaded_chunks(up_key, chunks, "")  # thread_id="" → 전역
 
 
 @cl.action_callback("regenerate_with_fetch")
@@ -1969,23 +2007,7 @@ async def on_regenerate_with_fetch(action: cl.Action):
 
         def _index_ordin(ln: str) -> int:
             arts = law_api_fetcher.fetch_ordinance(ln) or {}   # 방금 캐싱분 — 즉시
-            jo_text = "\n".join(v for k, v in arts.items() if not str(k).startswith("별표"))
-            chunks = chunk_law_pdf(jo_text, ln) if jo_text else []
-            # 별표는 조문 정규식으로 못 쪼개므로 별도 청크로 (긴 별표는 길이 분할).
-            # 별표 유형별 청킹 전략은 별도 설계 예정 — 그때 전용 청커로 교체.
-            for k, v in arts.items():
-                if not str(k).startswith("별표"):
-                    continue
-                for j in range(0, len(v), 4000):
-                    chunks.append({
-                        "law_name": ln,
-                        "article_no": k if j == 0 else f"{k}({j // 4000 + 1})",
-                        "content": v[j:j + 4000],
-                    })
-            if not chunks:
-                return 0
-            retr.create_session_collection(up_key)
-            return retr.index_uploaded_chunks(up_key, chunks, "")  # thread_id="" → 전역
+            return _index_ordinance_articles(retr, up_key, ln, arts)
 
         for ln in sorted(ln for ln in ordin_names if _norm_ln(ln) not in already):
             try:
@@ -2261,6 +2283,140 @@ async def on_blind_spot_pdf_attach(action: cl.Action):
         if budget <= 0:
             break
     _stash_regen_material(query, "\n".join(blocks))
+
+
+# ── 미보유 지역 조례 자동 스캔·캐싱 ────────────────────────────
+
+# 제목검색 주제(도메인 위임 접점 계열) — 지역 팩 구축과 같은 퍼널
+_REGION_SCAN_TOPICS = ["건축 조례", "도시계획 조례", "주택 조례", "공동주택",
+                       "주차장", "도시 및 주거환경정비", "경관 조례", "도시공원"]
+# 위임 검증용 도메인 모법 — 본문에 하나도 인용되지 않으면 노이즈로 간주
+_SCAN_DOMAIN_LAWS = ["건축법", "주택법", "국토의 계획 및 이용에 관한 법률", "주차장법",
+                     "공동주택관리법", "도시 및 주거환경정비법", "경관법",
+                     "도시공원 및 녹지", "주거기본법", "도시개발법"]
+# 명칭 블록리스트 — 모법을 인용해도 기준형이 아닌 행정·운영형 조례는 제외
+# (원주 실측: 수도급수·특별회계·위원회 운영·인권 조례가 모법 인용만으로 통과했음)
+_SCAN_NAME_BLOCK = ["특별회계", "기금", "위원회", "인권", "수당", "제설", "급수",
+                    "감사", "포상", "표창"]
+
+
+@cl.action_callback("region_ordinance_scan")
+async def on_region_ordinance_scan(action: cl.Action):
+    """미보유 지역의 자치법규를 자동 스캔·검증·등록.
+
+    제목검색(도메인 주제 8종) → 해당 지자체 정확 필터 → 본문 패치 →
+    도메인 모법 인용 검증(위임 접점만 통과) → 조례 라이브러리 전역 인덱싱.
+    등록 조문 중 질문 관련 상위 조문을 재생성 자료로 적재한다."""
+    payload = action.payload or {}
+    region      = payload.get("region", "")
+    query       = payload.get("query", "")
+    provider    = payload.get("provider", "gemini")
+    model_label = payload.get("model_label", "⚡ Gemini")
+    if not region:
+        await action.remove()
+        return
+    await action.remove()
+
+    prog = cl.Message(
+        content=f"🏙️ {region} 자치법규 검색·검증 중… (수십 초 소요)",
+        author="사각지대 알림")
+    await prog.send()
+
+    from ingest import law_api_fetcher
+    up_key = cl.user_session.get("upload_key", "")
+    retr = get_generator()._get_retriever()
+
+    def _norm(s: str) -> str:
+        return re.sub(r"\s+", "", s or "")
+
+    def _scan_register():
+        rn = _norm(region)
+        already: set = set()
+        try:
+            already |= {_norm(d["law_name"]) for d in retr.list_uploaded_docs(up_key)}
+        except Exception:
+            pass
+        try:
+            already |= {_norm(d["law_name"]) for d in retr.list_region_laws()}
+        except Exception:
+            pass
+
+        cands: dict = {}
+        for kw in _REGION_SCAN_TOPICS:
+            for l in law_api_fetcher.search_ordinances(f"{region} {kw}"):
+                nm = str(l.get("자치법규명", "")).strip()
+                if not _norm(nm).startswith(rn) or _norm(nm) in already:
+                    continue
+                if any(b in nm for b in _SCAN_NAME_BLOCK):
+                    continue
+                cands.setdefault(nm, str(l.get("자치법규일련번호", "")))
+            if len(cands) >= 12:
+                break
+
+        registered = []
+        for nm, mst in list(cands.items())[:12]:
+            arts = law_api_fetcher._fetch_full_ordin(mst)
+            if not arts:
+                continue
+            body = "\n".join(str(v) for v in arts.values())
+            cited = [n for n in _SCAN_DOMAIN_LAWS if n in body]
+            if not cited:          # 도메인 모법 인용 없음 → 위임 접점 아님
+                continue
+            law_api_fetcher._save_cache(nm, arts, {})
+            n = _index_ordinance_articles(retr, up_key, nm, arts)
+            if n:
+                registered.append((nm, n, cited[:3], arts))
+        return registered
+
+    try:
+        registered = await asyncio.to_thread(_scan_register)
+    except Exception as e:
+        await prog.remove()
+        await cl.Message(content=f"지역 조례 스캔 실패: {e}", author="사각지대 알림").send()
+        return
+    await prog.remove()
+
+    if not registered:
+        await cl.Message(
+            content=f"🏙️ {region}의 도메인 관련 자치법규를 API에서 찾지 못했습니다. "
+                    "**‘📎 PDF 직접 첨부’**나 상단 **‘조례 라이브러리 → ＋PDF 파일 추가’**로 "
+                    "직접 등록해 주세요.",
+            author="사각지대 알림").send()
+        return
+
+    lines = [f"🏙️ **{region} 조례 스캔 결과 — {len(registered)}건 등록 (조례 라이브러리 · 모든 대화)**"]
+    for nm, n, cited, _ in registered:
+        lines.append(f"  · **{nm}** ({n}개 청크 · 모법: {', '.join(cited)})")
+
+    actions = []
+    if query:
+        # 질문 관련 상위 조문을 재생성 자료로 적재 (2-gram 겹침 점수)
+        def _bi(s):
+            s = re.sub(r"[^가-힣]", "", s)
+            return {s[i:i + 2] for i in range(len(s) - 1)}
+        qb = _bi(query)
+        blocks = [f"[출처: {region} 조례 자동 스캔·캐싱]"]
+        budget = 12000
+        for nm, _, _, arts in registered:
+            scored = sorted(
+                ((len(qb & _bi(str(t))), a, str(t)) for a, t in arts.items()
+                 if not str(a).startswith("별표")),
+                key=lambda x: -x[0])
+            for sc, a, t in scored[:2]:
+                if sc <= 0 or budget <= 0:
+                    break
+                piece = f"[조례원문] 「{nm}」 {a}\n{t[:3000]}"
+                blocks.append(piece)
+                budget -= len(piece)
+        _stash_regen_material(query, "\n".join(blocks))
+        lines.append("\n**‘🔄 답변 다시 생성’**을 누르면 등록된 조례가 반영된 답변을 다시 받습니다.")
+        actions.append(cl.Action(
+            name="blind_spot_regen",
+            label="🔄 답변 다시 생성",
+            payload={"query": query, "provider": provider, "model_label": model_label},
+        ))
+    await cl.Message(content="\n".join(lines), actions=actions or None,
+                     author="사각지대 알림").send()
 
 
 # on_chat_end에서 업로드 컬렉션을 삭제하지 않는다 (영속화):
