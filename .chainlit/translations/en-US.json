@@ -57,7 +57,7 @@
     },
     "chat": {
         "input": {
-            "placeholder": "건축관련 법령 질의를 입력하세요. 참고할 법령·규정이 있다면 PDF로 첨부하세요.",
+            "placeholder": "건축 관련 법령 질의를 입력하세요. 지역조례를 조례 라이브러리에 등록하면 답변 성능이 개선됩니다.",
             "actions": {
                 "send": "Send message",
                 "stop": "Stop Task",
