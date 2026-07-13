@@ -265,7 +265,7 @@
             var ub = document.createElement('button');
             ub.id = 'upload-cache-btn';
             ub.type = 'button';
-            ub.textContent = '업로드 캐시';
+            ub.textContent = '라이브러리';
             ub.className = 'law-list-btn';
             ub.onclick = showUploadModal;
             readme.parentElement.insertBefore(ub, readme);

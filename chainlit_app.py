@@ -130,7 +130,7 @@ try:
                             e["scoped"] = True
             except Exception:
                 pass
-        parts = ['<div class="law-db">', "<h2>📂 업로드 캐시</h2>"]
+        parts = ['<div class="law-db">', "<h2>📂 라이브러리</h2>"]
         if not agg:
             parts.append("<p>업로드된 자료가 없습니다. PDF를 첨부하면 여기에 저장됩니다.</p>")
         else:
@@ -1528,9 +1528,9 @@ async def _show_upload_cache():
     retriever = gen._get_retriever()
     docs = await asyncio.to_thread(retriever.list_uploaded_docs, session_id)
     if not docs:
-        await cl.Message(content="업로드 캐시가 비어 있습니다. PDF를 첨부하면 여기에 저장됩니다.").send()
+        await cl.Message(content="라이브러리가 비어 있습니다. PDF를 첨부하면 여기에 저장됩니다.").send()
         return
-    lines = ["**📂 업로드 캐시**", ""]
+    lines = ["**📂 라이브러리**", ""]
     actions = []
     for d in docs:
         tag = " · 조례(업로드한 대화 한정)" if d["is_ordinance"] else ""
@@ -1561,7 +1561,7 @@ async def on_delete_upload(action: cl.Action):
     await cl.Message(content=f"🗑 **{law_name}** 삭제 완료 ({n}개 청크).").send()
 
 
-_UPLOAD_CACHE_TRIGGERS = {"업로드 목록", "업로드 캐시", "업로드 관리", "/uploads"}
+_UPLOAD_CACHE_TRIGGERS = {"업로드 목록", "업로드 캐시", "업로드 관리", "라이브러리", "/uploads"}
 
 
 @cl.on_message
@@ -1772,7 +1772,7 @@ async def _render_blind_spot_notice(
     # 자치법규·옛 자료·별표 등)를 위한 직접 업로드 경로 안내.
     if any("조례" in f.get("law_name", "") for f in fetchable) or manual_check:
         lines.append("\n💡 API로 못 찾는 자료(미등재 자치법규·옛 자료 등)는 아래 **‘PDF 직접 첨부’** "
-                     "버튼이나 상단 **‘업로드 캐시 → ＋PDF 파일 추가’**로 등록하면 답변에 반영됩니다.")
+                     "버튼이나 상단 **‘라이브러리 → ＋PDF 파일 추가’**로 등록하면 답변에 반영됩니다.")
 
     # 자료 모으기(캐싱·첨부)와 재생성을 분리 — 여러 자료를 캐싱/첨부로 적재한 뒤
     # '답변 다시 생성' 한 번으로 전부 반영한다.
@@ -2018,7 +2018,7 @@ async def on_regenerate_with_fetch(action: cl.Action):
         if any("조례" in fa.get("law_name", "") for fa in failed):
             hint = ("\n\n💡 조례는 지자체명을 포함한 정확한 명칭이어야 자치법규 API에서 "
                     "찾습니다(예: '남양주시 주택 조례'). 그래도 못 찾으면 **‘📎 PDF 직접 "
-                    "첨부’** 버튼이나 상단 **‘업로드 캐시 → ＋PDF 파일 추가’**로 직접 "
+                    "첨부’** 버튼이나 상단 **‘라이브러리 → ＋PDF 파일 추가’**로 직접 "
                     "등록하시면 답변에 반영됩니다.")
         await cl.Message(
             content="패치 성공 자료가 없습니다." + hint,
