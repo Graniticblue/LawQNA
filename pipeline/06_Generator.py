@@ -1375,6 +1375,32 @@ class Generator:
                 "지시어나 생략된 대상은 위 이전 대화 맥락으로 해소해 도출하라. "
                 "이전 답변이 이미 특정한 법령·조례·조문은 law_hints에 그대로 포함하라."
             )
+
+        # ── 지역 조례 카탈로그: 질문·맥락에 보유 지역(자치구명 포함)이 언급되면
+        # pass1에 내장 조례 목록을 알려 law_hints를 실명 조례로 내게 한다.
+        # pass1이 보유 여부를 모르면 조례 힌트를 못 내고 벡터 유사도에만 의존하게
+        # 되는 문제의 대책. eval 등 단발 호출(session_id 없음)은 프롬프트 불변.
+        matched_regions: list = []
+        if session_id:
+            try:
+                _retr0 = self._get_retriever()
+                matched_regions = _retr0.match_regions(f"{query}\n{extra_context}")
+                if matched_regions:
+                    _names = [d["law_name"] for d in _retr0.list_region_laws()
+                              if d.get("region") in matched_regions]
+                    if _names:
+                        pass1_query += (
+                            "\n\n## 보유 지역 조례 목록 (시스템 내장 — law_hints에 활용)\n"
+                            f"질문/맥락의 지역({', '.join(matched_regions)})에 대해 아래 자치법규 "
+                            "전문이 내장되어 있다. 질문과 관련된 것은 law_hints에 "
+                            "'조례명 제N조'(조문을 알면) 또는 '조례명' 형태로 반드시 포함하라:\n"
+                            + "\n".join(f"- {n}" for n in _names)
+                        )
+                        if verbose:
+                            print(f"→ 지역 조례 카탈로그 주입: {', '.join(matched_regions)} ({len(_names)}건)")
+            except Exception:
+                matched_regions = []
+
         if verbose:
             print("\n[Pass 1] 쟁점 식별 + 관계 유형 분류 중...")
         pass1_text = _call_pass1(PASS1_SYSTEM, pass1_query)
@@ -1543,6 +1569,36 @@ class Generator:
         blind_spots = retriever.detect_blind_spots(law_hints) if law_hints else {"fetchable": [], "manual_check": []}
         if verbose and (blind_spots.get("fetchable") or blind_spots.get("manual_check")):
             print(f"\n[사각지대 감지] 패치 가능 {len(blind_spots['fetchable'])}건 / 수동 확인 {len(blind_spots['manual_check'])}건")
+
+        # ── 미보유 지역 감지: 지역이 특정됐는데 그 지역 조례가 내장 팩에도
+        # 업로드에도 없으면 사각지대 알림으로 안내 (조례 라이브러리 등록 유도).
+        # 지역 후보는 pass1 사실표의 값에서 추출 — 자유 텍스트 정규식보다 오탐이 적다.
+        if session_id:
+            try:
+                _up_norm = {re.sub(r"\s+", "", d["law_name"])
+                            for d in retriever.list_uploaded_docs(session_id)}
+            except Exception:
+                _up_norm = set()
+            _seen_regions: set = set()
+            for v in (session_facts or {}).values():
+                v = str(v).strip()
+                if not re.fullmatch(r"[가-힣]{1,6}(특별시|광역시|특별자치시|특별자치도|시|군|구)", v):
+                    continue
+                if v in _seen_regions:
+                    continue
+                _seen_regions.add(v)
+                try:
+                    if retriever.match_regions(v):        # 내장 지역 팩 보유
+                        continue
+                except Exception:
+                    pass
+                vn = re.sub(r"\s+", "", v)
+                if any(vn in u for u in _up_norm):         # 업로드 조례 보유
+                    continue
+                blind_spots.setdefault("manual_check", []).append({
+                    "hint": f"{v} 관련 조례 — 미보유 (조례 라이브러리에 등록하면 답변에 반영)",
+                    "reason": "지역조례",
+                })
 
         test_exclusions = extract_test_exclusions(query)
         if test_exclusions:
@@ -1722,6 +1778,20 @@ class Generator:
                 "미루지 마라.\n"
             )
 
+        # ── 지역 조례 우선 적용 지시 (조례 조문이 컨텍스트에 실린 턴만) ──
+        # 조례·모법이 섞이면 모델이 우선순위를 스스로 정하다 흔들린다(부속건축물
+        # 노후도 사례) → 조례 구체 기준 우선, 침묵 시 국가 기준 보충을 지시로 고정.
+        ordinance_note = ""
+        if any("조례" in getattr(d, "law_name", "") for d in uploaded_docs):
+            ordinance_note = (
+                "\n## 🏛️ 지역 조례 우선 적용\n"
+                "질문의 지역이 특정되어 해당 지역 조례 조문이 검색 컨텍스트에 있다.\n"
+                "- 조례가 구체 기준(수치·범위·강화/완화)을 정한 사항은 그 기준을 국가법령의 "
+                "일반 기준에 우선 적용하고, 어느 조례 몇 조인지 본문에 명시하라.\n"
+                "- 조례가 침묵하는 부분만 국가법령(법·영·규칙)으로 보충하고, 각 기준이 "
+                "조례 기준인지 국가법령 기준인지 문장에서 구분해 드러내라.\n"
+            )
+
         # ── 이전 도출 결론 주입 (연속 질의에서 확정 결론을 전제로 삼도록) ──
         conclusions_note = _format_conclusions_block(carry_conclusions or [])
 
@@ -1741,7 +1811,7 @@ class Generator:
 
         pass2_input = f"""## 질문
 {query}
-{mode_note}{carry_note}{conclusions_note}
+{mode_note}{carry_note}{ordinance_note}{conclusions_note}
 {ref_list}
 
 ## Pass 1 분석 결과

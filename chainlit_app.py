@@ -1773,7 +1773,8 @@ async def _render_blind_spot_notice(
         lines.append("\n**수동 확인 필요:**")
         for m in manual_check:
             reason = m.get("reason", "미상")
-            tag = {"별표": "📎 별표", "과거시점": "🕰 과거시점", "미상": "❓ 미상"}.get(reason, reason)
+            tag = {"별표": "📎 별표", "과거시점": "🕰 과거시점", "미상": "❓ 미상",
+                   "지역조례": "🏙️ 지역 조례"}.get(reason, reason)
             lines.append(f"  · {m['hint']} — {tag}")
 
     # 조례도 자치법규 API(ordin)로 캐싱을 시도한다. API에서 못 찾는 자료(미등재

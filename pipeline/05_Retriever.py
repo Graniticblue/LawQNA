@@ -1465,6 +1465,18 @@ class HybridSearcher:
         self._region_laws_cache = None   # 목록 캐시 무효화
         return len(ids)
 
+    # 자치구명 → 광역 지자체: 질문이 '강남구 재건축'처럼 구 단위로 와도 그 시의
+    # 조례 팩이 발동하게 한다. 타 광역시와 겹치는 구명(중구·강서구 등)은 오탐
+    # 방지를 위해 제외 — 그런 질문은 시명이 함께 언급될 때만 매칭된다.
+    _REGION_DISTRICTS = {
+        "서울특별시": [
+            "종로구", "용산구", "성동구", "광진구", "동대문구", "중랑구", "성북구",
+            "강북구", "도봉구", "노원구", "은평구", "서대문구", "마포구", "양천구",
+            "구로구", "금천구", "영등포구", "동작구", "관악구", "서초구", "강남구",
+            "송파구", "강동구",
+        ],
+    }
+
     @staticmethod
     def _region_aliases(region: str) -> list[str]:
         """'서울특별시' → ['서울특별시','서울시','서울'] — 질문·맥락의 지역 언급 매칭용."""
@@ -1474,6 +1486,19 @@ class HybridSearcher:
             out.add(base)
             out.add(base + "시")
         return sorted(out, key=len, reverse=True)
+
+    @classmethod
+    def _region_match_terms(cls, region: str) -> list[str]:
+        """지역 매칭 어휘 = 지역명 별칭 + 그 지역 자치구명."""
+        return cls._region_aliases(region) + cls._REGION_DISTRICTS.get(region, [])
+
+    def match_regions(self, text: str) -> list[str]:
+        """텍스트에 언급된 '보유 지역 팩' 목록 (별칭·자치구명 매칭)."""
+        if not text:
+            return []
+        regions = {d["region"] for d in self.list_region_laws() if d["region"]}
+        return sorted(r for r in regions
+                      if any(t in text for t in self._region_match_terms(r)))
 
     def search_region(self, query: str, top_k: int = 5, context: str = "",
                       force_articles: Optional[list] = None,
@@ -1493,7 +1518,7 @@ class HybridSearcher:
         regions = {d["region"] for d in self.list_region_laws() if d["region"]}
         match_text = f"{query}\n{context}"
         matched = [r for r in regions
-                   if any(a in match_text for a in self._region_aliases(r))]
+                   if any(t in match_text for t in self._region_match_terms(r))]
         if matched:
             try:
                 where = ({"region": {"$eq": matched[0]}} if len(matched) == 1
@@ -2230,6 +2255,9 @@ class Retriever:
     def get_ordinance_article_text(self, session_id: str, law_name: str,
                                    art_root: str = "제1조") -> str:
         return self._searcher.get_ordinance_article_text(session_id, law_name, art_root)
+
+    def match_regions(self, text: str) -> list[str]:
+        return self._searcher.match_regions(text)
 
     def fetch_exact_articles(self, law_hints: list[str], top_n: int = 5) -> list[RetrievedDoc]:
         """law_hints에 명시된 법령 조문을 강제로 가져오는 wrapper 메서드"""
