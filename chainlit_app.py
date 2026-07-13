@@ -151,8 +151,7 @@ try:
                     f"<tr><td>{_h.escape(ln)}{_h.escape(tag)}</td><td>{e['chunks']}</td>"
                     f"<td>{btns}</td></tr>")
             parts.append("</tbody></table>")
-            parts.append('<p class="law-db-foot">‘전역 재캐싱’: 이 대화에만 쓰이던 조례를 모든 대화에서 쓰이게 함. '
-                         '‘교체’: 최신 PDF로 덮어쓰기. 미사용 30일 후 자동 정리.</p>')
+            parts.append('<p class="law-db-foot">지역조례와 별표를 직접 라이브러리에 등록시 답변 성능이 개선됩니다.</p>')
         parts.append("</div>")
         return HTMLResponse("\n".join(parts))
 
