@@ -729,6 +729,40 @@ def _get_article_index() -> dict:
     return idx
 
 
+_LAW_CACHE_IDX: dict = {}
+
+
+def _law_cache_lookup(law_name: str, art_root: str):
+    """API 패치로 law_cache(JSON)에만 있는 국가법령 조문의 팝업 소스.
+
+    '주택건설기준 등에 관한 규정'처럼 DB 미수록이지만 사각지대 패치로 캐싱된
+    법령은 law_docs에도 전조문 인덱스에도 없어 인용 칩이 안 잡혔다 — 캐시
+    파일(법령명.json)을 공백 무시로 대조해 조문 본문을 꺼낸다."""
+    try:
+        from ingest import law_api_fetcher as laf
+
+        def norm(s):
+            return re.sub(r"[\s·ㆍ]+", "", str(s or ""))
+
+        global _LAW_CACHE_IDX
+        key = norm(law_name)
+        if key not in _LAW_CACHE_IDX:   # 미스 시 디렉터리 재스캔 (패치 직후 반영)
+            _LAW_CACHE_IDX = {norm(p.stem): p.stem
+                              for p in laf.CACHE_DIR.glob("*.json")}
+        nm = _LAW_CACHE_IDX.get(key)
+        if not nm:
+            return None
+        cached = laf._load_cache(nm)
+        if not cached:
+            return None
+        content = laf._get_article(cached.get("articles", {}), art_root)
+        if not content:
+            return None
+        return {"law_name": nm, "content": content}
+    except Exception:
+        return None
+
+
 def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
     law_docs       = result.get("law_docs",       [])
     qa_docs        = result.get("qa_docs",        [])
@@ -858,9 +892,56 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
             law_doc_map[(law, art)] = d
 
     # 조 번호 뒤에 따라붙을 수 있는 항·호·목 패턴 (모두 선택)
-    # + 뒤이은 열거("및/·/, 제N호") 까지 한 덩어리로 묶어 마킹 (예: 제3항제3호 및 제4호)
+    # + 뒤이은 열거를 한 덩어리로 묶어 마킹 — 항·호 연속("제3항제3호 및 제4호")뿐
+    #   아니라 조 단위 연속("제2조제3호, 제2조제14호")까지. 조 연속을 안 잡으면
+    #   두 번째 항목부터 칩이 끊긴다.
     ART_EXT = (r"(?:\s*제\d+항)?(?:\s*제\d+호)?(?:\s*[가-힣]목)?"
-               r"(?:\s*(?:및|·|ㆍ|,)\s*제\d+[항호](?:\s*[가-힣]목)?)*")
+               r"(?:\s*(?:및|·|ㆍ|,)\s*"
+               r"(?:제\d+조(?:의\d+)?(?:제\d+항)?(?:제\d+호)?|제\d+[항호])"
+               r"(?:\s*[가-힣]목)?)*")
+
+    idx = _get_article_index()
+
+    def _resolve_article(law: str, a2: str):
+        """조문 본문 해석 — 검색 결과 → 전조문 인덱스 → API 패치 캐시 순.
+        반환: (표시 법령명, 시행일, 본문) 또는 None."""
+        d0 = law_doc_map.get((law, a2))
+        if d0 is not None:
+            return (law, d0.metadata.get("enforcement_date", ""),
+                    clean_article_content(d0.content))
+        rec0 = idx.get((re.sub(r"[\s·ㆍ]+", "", law), a2))
+        if rec0:
+            return (rec0.get("law_name", law), rec0.get("enforcement_date", ""),
+                    clean_article_content(rec0.get("content", "")))
+        rec0 = _law_cache_lookup(law, a2)
+        if rec0:
+            return (rec0["law_name"], "", clean_article_content(rec0["content"]))
+        return None
+
+    def _emit_article_element(law: str, ref_name: str, arts_in: list):
+        """열거 인용의 모든 조를 해석해 한 칩의 콘텐츠로 조립."""
+        secs = []
+        ln_show, edate = law, ""
+        for a2 in arts_in:
+            r2 = _resolve_article(law, a2)
+            if not r2:
+                continue
+            if not edate:
+                ln_show, edate = r2[0], r2[1]
+            secs.append((a2, r2[2]))
+        if not secs:
+            return False
+        seen_names.add(ref_name)
+        header_extra = get_law_header(ln_show, edate)
+        sep = "  ·  " if header_extra else ""
+        if len(secs) == 1:
+            body = secs[0][1]
+        else:
+            body = "\n\n---\n\n".join(f"**{a2}**\n\n{b2}" for a2, b2 in secs)
+        arts_label = ", ".join(a2 for a2, _ in secs)
+        content = f"**{ln_show}  {arts_label}**{sep}{header_extra}\n\n{body}"
+        elements.append(cl.Text(name=ref_name, content=content, display="side"))
+        return True
 
     for (law, art), d in law_doc_map.items():
         is_byeolpyo = "별표" in art
@@ -881,33 +962,30 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
                     ref_name = m.group(0).strip()
                     if ref_name in seen_names:
                         continue
-                    seen_names.add(ref_name)
-                    edate = d.metadata.get("enforcement_date", "")
-                    header_extra = get_law_header(law, edate)
-                    sep = "  ·  " if header_extra else ""
-                    body = clean_article_content(d.content)
-                    # 사이드 패널 헤더에는 정식 법령명 노출
-                    content = f"**{law}  {art}**{sep}{header_extra}\n\n{body}"
-                    elements.append(cl.Text(name=ref_name, content=content, display="side"))
+                    if is_byeolpyo:
+                        seen_names.add(ref_name)
+                        edate = d.metadata.get("enforcement_date", "")
+                        header_extra = get_law_header(law, edate)
+                        sep = "  ·  " if header_extra else ""
+                        content = (f"**{law}  {art}**{sep}{header_extra}\n\n"
+                                   f"{clean_article_content(d.content)}")
+                        elements.append(cl.Text(name=ref_name, content=content,
+                                                display="side"))
+                        continue
+                    arts_in = list(dict.fromkeys(
+                        re.findall(r"제\d+조(?:의\d+)?", ref_name))) or [art]
+                    _emit_article_element(law, ref_name, arts_in)
 
-    # 3b) 검색되지 않았지만 답변에 인용된 「법령명」 조문도 마킹 (보유 법령 한정).
-    #     all_articles 전체 조문에서 조회 — 미보유 법령(예: 경관법)은 자동 스킵.
-    idx = _get_article_index()
+    # 3b) 검색되지 않았지만 답변에 인용된 「법령명」 조문도 마킹.
+    #     전조문 인덱스(내장 법령) → API 패치 캐시(law_cache) 순으로 조회 —
+    #     '주택건설기준 등에 관한 규정'처럼 패치로만 보유한 법령도 칩이 잡힌다.
     for m in re.finditer(r"「([^」]{2,40})」\s*(제\d+조(?:의\d+)?)" + ART_EXT, answer):
         ref_name = m.group(0).strip()
         if ref_name in seen_names:
             continue
-        law_raw, art = m.group(1).strip(), m.group(2)
-        rec = idx.get((re.sub(r"[\s·ㆍ]+", "", law_raw), art))
-        if not rec:
-            continue  # 보유하지 않은 법령/조문
-        seen_names.add(ref_name)
-        ln = rec.get("law_name", law_raw)
-        header_extra = get_law_header(ln, rec.get("enforcement_date", ""))
-        sep = "  ·  " if header_extra else ""
-        body = clean_article_content(rec.get("content", ""))
-        content = f"**{ln}  {art}**{sep}{header_extra}\n\n{body}"
-        elements.append(cl.Text(name=ref_name, content=content, display="side"))
+        law_raw = m.group(1).strip()
+        arts_in = list(dict.fromkeys(re.findall(r"제\d+조(?:의\d+)?", ref_name)))
+        _emit_article_element(law_raw, ref_name, arts_in)
 
     # 3-조례) 인용된 조례·업로드 법령 조문 팝업 — 내장 국가법령(3·3b)과 동급 대우.
     #    law_docs가 아니라 내장 지역 팩·업로드 캐시 컬렉션에서 직접 조회하므로,
