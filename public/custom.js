@@ -136,7 +136,7 @@
             '<label class="upload-add-btn" for="upload-add-input">＋ PDF 파일 추가</label>' +
             '<input type="file" id="upload-add-input" accept="application/pdf,.pdf" hidden />' +
             '<input type="file" id="upload-replace-input" accept="application/pdf,.pdf" hidden />' +
-            '<span id="upload-add-status" class="upload-add-status">질문 없이 자료만 등록해 둘 수 있습니다.</span>' +
+            '<span id="upload-add-status" class="upload-add-status">지역조례와 별표를 별도로 등록합니다.</span>' +
             '</div>' +
             '<div class="law-list-content">불러오는 중…</div>' +
             '</div>';
@@ -265,7 +265,7 @@
             var ub = document.createElement('button');
             ub.id = 'upload-cache-btn';
             ub.type = 'button';
-            ub.textContent = '라이브러리';
+            ub.textContent = '조례 라이브러리';
             ub.className = 'law-list-btn';
             ub.onclick = showUploadModal;
             readme.parentElement.insertBefore(ub, readme);
