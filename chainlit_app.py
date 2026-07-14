@@ -2406,7 +2406,7 @@ async def on_region_ordinance_scan(action: cl.Action):
     await action.remove()
 
     prog = cl.Message(
-        content=f"🏙️ {region} 자치법규 검색·검증 중… (수십 초 소요)",
+        content=f"🏙️ {region} 자치법규를 전량 리딩·검증 중… (조례 수에 따라 1~3분)",
         author="사각지대 알림")
     await prog.send()
 
@@ -2453,8 +2453,11 @@ async def on_region_ordinance_scan(action: cl.Action):
 
         ranked = sorted(cands.items(), key=lambda kv: _rank(kv[0]))
 
+        # 전량 리딩 원칙: 후보 조례는 모두 전문을 패치해 검증·등록한다 — 조례는
+        # 전부 읽어야만 어느 법령의 위임 내용인지 알 수 있다. 랭킹은 절단이 아니라
+        # 핵심 조례가 먼저 읽히는 순서 보장용. 상한 30은 광역 본청급 병리 케이스 가드.
         registered = []
-        for nm, mst in ranked[:12]:
+        for nm, mst in ranked[:30]:
             arts = law_api_fetcher._fetch_full_ordin(mst)
             if not arts:
                 continue
@@ -2500,21 +2503,29 @@ async def on_region_ordinance_scan(action: cl.Action):
                 key=lambda x: -x[0])
             matches[nm] = [x for x in scored[:2] if x[0] >= 3]
 
-    lines = [f"🏙️ **{region} 조례 스캔 결과 — {len(registered)}건 등록 (조례 라이브러리 · 모든 대화)**"]
-    any_match = False
-    for nm, n, cited, _ in registered:
-        rel = ""
-        if matches.get(nm):
-            any_match = True
-            heads = []
-            for _sc, a, t in matches[nm]:
-                m_t = re.match(r"(제\d+조(?:의\d+)?\([^)\n]{1,30}\))", t)
-                heads.append(m_t.group(1) if m_t else a)
-            rel = f" — **질문 관련: {', '.join(heads)}**"
-        lines.append(f"  · **{nm}** ({n}개 청크 · 모법: {', '.join(cited)}){rel}")
-    if qb and not any_match:
-        lines.append("\n⚠ 등록된 조례 중 질문 주제를 직접 규정한 조문은 탐지되지 않았습니다 — "
-                     "국가법령 기준이 적용되거나, 별표 또는 다른 명칭의 조례에 있을 수 있습니다.")
+    # 노출은 질문 관련 상위만 — 전량 리딩·등록하되 목록은 접는다.
+    matched_regs = [r for r in registered if matches.get(r[0])]
+    other_regs   = [r for r in registered if not matches.get(r[0])]
+
+    lines = [f"🏙️ **{region} 조례 스캔 결과 — {len(registered)}건 전량 검증·등록 "
+             f"(조례 라이브러리 · 모든 대화)**"]
+    for nm, n, cited, _ in matched_regs:
+        heads = []
+        for _sc, a, t in matches[nm]:
+            m_t = re.match(r"(제\d+조(?:의\d+)?\([^)\n]{1,30}\))", t)
+            heads.append(m_t.group(1) if m_t else a)
+        lines.append(f"  · **{nm}** ({n}개 청크 · 모법: {', '.join(cited)})"
+                     f" — **질문 관련: {', '.join(heads)}**")
+    if matched_regs and other_regs:
+        lines.append(f"  · 그 외 {len(other_regs)}건 등록 — 상단 ‘조례 라이브러리’에서 전체 확인")
+    elif not matched_regs:
+        for nm, n, cited, _ in other_regs[:6]:
+            lines.append(f"  · **{nm}** ({n}개 청크 · 모법: {', '.join(cited)})")
+        if len(other_regs) > 6:
+            lines.append(f"  · 외 {len(other_regs) - 6}건 등록")
+        if qb:
+            lines.append("\n⚠ 등록된 조례 중 질문 주제를 직접 규정한 조문은 탐지되지 않았습니다 — "
+                         "국가법령 기준이 적용되거나, 별표 또는 다른 명칭의 조례에 있을 수 있습니다.")
 
     actions = []
     if query:
