@@ -203,6 +203,55 @@ def index_region_packs():
         col = client.get_or_create_collection(
             "region_ordinances", metadata={"hnsw:space": "cosine"})
 
+        # ── 조례 리딩 레지스트리 동기화 (매 부팅, 인덱싱 스킵과 무관) ──
+        # 팩 조례의 메타(모법 인용·조문 목차)를 지역 태그로 병합 저장 —
+        # 스캔·패치·PDF로 읽힌 조례들과 지역 키로 합쳐져 법령체계 총괄 뷰가 된다.
+        import re as _re
+        try:
+            reg = client.get_or_create_collection(
+                "ordinance_registry", metadata={"hnsw:space": "cosine"})
+            for p in packs:
+                for ln, info in p["laws"].items():
+                    rid = "reg::" + _re.sub(r"\s+", "", f"{p['region']}::{ln}")
+                    arts0 = info.get("articles") or {}
+                    toc = []
+                    for a, t in arts0.items():
+                        if str(a).startswith("별표"):
+                            toc.append({"no": str(a), "title": "(별표)"})
+                        else:
+                            m_t = _re.match(r"제\d+조(?:의\d+)?\(([^)\n]{1,40})\)", str(t))
+                            toc.append({"no": str(a), "title": m_t.group(1) if m_t else ""})
+                    detail = {
+                        "region": p["region"], "law_name": ln,
+                        "mst": info.get("mst", ""),
+                        "cited_laws": info.get("cited_laws", []),
+                        "articles": len(arts0), "toc": toc[:120],
+                        "chars": info.get("chars", 0),
+                        "sources": ["pack"],
+                        "first_read": p.get("fetched_at", ""),
+                        "last_read": p.get("fetched_at", ""),
+                    }
+                    try:
+                        old = reg.get(ids=[rid], include=["documents"])
+                        if old.get("ids"):
+                            prev = json.loads(old["documents"][0]) if old.get("documents") else {}
+                            detail["sources"] = sorted(set(prev.get("sources", [])) | {"pack"})
+                            if prev.get("first_read"):
+                                detail["first_read"] = prev["first_read"]
+                            reg.delete(ids=[rid])
+                    except Exception:
+                        pass
+                    reg.add(ids=[rid], embeddings=[[0.0]],
+                            documents=[json.dumps(detail, ensure_ascii=False)],
+                            metadatas=[{
+                                "region": p["region"], "law_name": ln,
+                                "cited": ", ".join((info.get("cited_laws") or [])[:6]),
+                                "articles": len(arts0), "source": "pack",
+                            }])
+            print(f"[startup] 조례 레지스트리 동기화: 팩 {sum(len(p['laws']) for p in packs)}건")
+        except Exception as e:
+            print(f"[startup] 조례 레지스트리 동기화 생략(앱 계속): {e}")
+
         # 팩 시그니처(지역→법규→조문·별표 수) — 법규명이 같아도 내용(별표 추가 등)이
         # 바뀌면 재인덱싱되도록 컬렉션 메타데이터와 대조한다.
         sig_src = json.dumps(

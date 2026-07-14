@@ -1605,6 +1605,83 @@ class HybridSearcher:
                     ))
         return results
 
+    # ----------------------------------------------------------
+    # 조례 리딩 레지스트리 (ordinance_registry)
+    #   조례를 읽는 모든 경로(스캔·패치·PDF·내장 팩)가 리딩 메타데이터를
+    #   지역 태그로 영속화한다. 별도 시점에 읽힌 조례들이 지역 키로 합쳐져
+    #   그 지역 법령체계(조례 × 모법 위임)의 총괄 뷰가 된다.
+    # ----------------------------------------------------------
+
+    _REGISTRY_COL_NAME = "ordinance_registry"
+
+    def _registry_col(self):
+        try:
+            return self._chroma.get_or_create_collection(
+                name=self._REGISTRY_COL_NAME,
+                metadata={"hnsw:space": "cosine"},
+            )
+        except Exception:
+            return None
+
+    def upsert_ordinance_registry(self, region: str, law_name: str, detail: dict) -> None:
+        """조례 리딩 메타데이터 병합 저장. detail: {mst, cited_laws, articles, toc,
+        chars, sources:[scan|patch|pdf|pack]}. 같은 (지역, 조례)는 갱신하되
+        first_read·sources는 누적한다."""
+        col = self._registry_col()
+        if col is None or not law_name:
+            return
+        from datetime import datetime
+        rid = "reg::" + re.sub(r"\s+", "", f"{region}::{law_name}")
+        detail = dict(detail)
+        detail["region"] = region
+        detail["law_name"] = law_name
+        detail["last_read"] = detail.get("last_read") or datetime.now().strftime("%Y-%m-%d")
+        try:
+            old = col.get(ids=[rid], include=["documents"])
+            if old.get("ids"):
+                try:
+                    prev = json.loads(old["documents"][0])
+                except Exception:
+                    prev = {}
+                detail.setdefault("first_read", prev.get("first_read", detail["last_read"]))
+                detail["sources"] = sorted(
+                    set(prev.get("sources", [])) | set(detail.get("sources", [])))
+                col.delete(ids=[rid])
+            else:
+                detail.setdefault("first_read", detail["last_read"])
+            col.add(
+                ids=[rid],
+                embeddings=[[0.0]],   # 벡터 검색 안 함 — get 전용 레지스트리
+                documents=[json.dumps(detail, ensure_ascii=False)],
+                metadatas=[{
+                    "region": region,
+                    "law_name": law_name,
+                    "cited": ", ".join((detail.get("cited_laws") or [])[:6]),
+                    "articles": int(detail.get("articles", 0)),
+                    "source": ",".join(detail.get("sources", [])),
+                }],
+            )
+        except Exception:
+            pass
+
+    def get_ordinance_registry(self, region: str = "") -> list[dict]:
+        """지역별(또는 전체) 조례 리딩 메타데이터 — 지역 법령체계 총괄 뷰."""
+        col = self._registry_col()
+        if col is None or col.count() == 0:
+            return []
+        try:
+            where = {"region": {"$eq": region}} if region else None
+            got = col.get(where=where, include=["documents"], limit=2000)
+        except Exception:
+            return []
+        out = []
+        for doc in got.get("documents", []):
+            try:
+                out.append(json.loads(doc))
+            except Exception:
+                pass
+        return sorted(out, key=lambda d: (d.get("region", ""), d.get("law_name", "")))
+
     def get_ordinance_article_text(self, session_id: str, law_name: str,
                                    art_root: str = "제1조") -> str:
         """조례의 특정 조(모든 항)/별표(모든 조각)를 세션 업로드 → 내장 지역 팩
@@ -2279,6 +2356,12 @@ class Retriever:
 
     def match_regions(self, text: str) -> list[str]:
         return self._searcher.match_regions(text)
+
+    def upsert_ordinance_registry(self, region: str, law_name: str, detail: dict) -> None:
+        self._searcher.upsert_ordinance_registry(region, law_name, detail)
+
+    def get_ordinance_registry(self, region: str = "") -> list[dict]:
+        return self._searcher.get_ordinance_registry(region)
 
     def fetch_exact_articles(self, law_hints: list[str], top_n: int = 5) -> list[RetrievedDoc]:
         """law_hints에 명시된 법령 조문을 강제로 가져오는 wrapper 메서드"""

@@ -1473,12 +1473,27 @@ class Generator:
                     if rg0 not in _label_regions:
                         _label_regions.append(rg0)
                 if _names:
+                    # 리딩 레지스트리의 모법 정보로 목록 주석 — pass1이 위임 관계를
+                    # 보고 관련 조례를 고르게 한다
+                    _reg_map: dict = {}
+                    try:
+                        for r0 in _retr0.get_ordinance_registry():
+                            _reg_map[re.sub(r"\s+", "", r0.get("law_name", ""))] = r0
+                    except Exception:
+                        pass
+
+                    def _annot(nm0: str) -> str:
+                        base0 = re.split(r"[(\[]", nm0)[0].strip(" -–—") or nm0
+                        r0 = _reg_map.get(re.sub(r"\s+", "", base0))
+                        cited0 = ", ".join((r0 or {}).get("cited_laws", [])[:3])
+                        return f"- {nm0}" + (f" (모법: {cited0})" if cited0 else "")
+
                     pass1_query += (
                         "\n\n## 보유 지역 조례 목록 (시스템 내장 — law_hints에 활용)\n"
                         f"질문/맥락의 지역({', '.join(_label_regions)})에 대해 아래 자치법규 "
                         "전문이 내장되어 있다. 질문과 관련된 것은 law_hints에 "
                         "'조례명 제N조'(조문을 알면) 또는 '조례명' 형태로 반드시 포함하라:\n"
-                        + "\n".join(f"- {n}" for n in _names)
+                        + "\n".join(_annot(n) for n in _names)
                     )
                     if verbose:
                         print(f"→ 지역 조례 카탈로그 주입: {', '.join(_label_regions)} ({len(_names)}건)")

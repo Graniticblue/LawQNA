@@ -147,27 +147,59 @@ try:
                             e["scoped"] = True
             except Exception:
                 pass
+        # 리딩 레지스트리(지역·모법 메타) — 지역별 그룹핑과 모법 표시에 사용
+        regmap: dict = {}
+        try:
+            import chromadb as _cdb
+            _path = os.environ.get("CHROMA_DB_PATH", str(BASE_DIR / "data" / "chroma_db"))
+            _reg = _cdb.PersistentClient(path=_path).get_collection("ordinance_registry")
+            for m0 in _reg.get(include=["metadatas"], limit=2000).get("metadatas", []):
+                regmap[re.sub(r"\s+", "", m0.get("law_name", ""))] = m0
+        except Exception:
+            pass
+
         parts = ['<div class="law-db">', "<h2>📂 조례 라이브러리</h2>"]
         if not agg:
             parts.append("<p>업로드된 자료가 없습니다. PDF를 첨부하면 여기에 저장됩니다.</p>")
         else:
-            parts.append("<table><thead><tr><th>자료</th><th>청크</th><th></th></tr></thead><tbody>")
+            # 지역(최상위 태그)별 그룹핑 — 별도로 읽힌 조례들이 지역 단위로 합쳐져
+            # 그 지역 법령체계를 한눈에 보게 한다.
+            groups: dict = {}
             for ln in sorted(agg):
-                e = agg[ln]
-                if e["ord"]:
-                    tag = " · 조례(이 대화 한정)" if e["scoped"] else " · 조례(모든 대화)"
+                base = re.split(r"[(\[]", ln)[0].strip(" -–—") or ln
+                info = regmap.get(re.sub(r"\s+", "", base))
+                if info and info.get("region"):
+                    region0 = info["region"]
+                elif "조례" in ln:
+                    m0 = re.match(
+                        r"([가-힣]{1,8}(?:특별시|광역시|특별자치시|특별자치도|시|군|구))", ln)
+                    region0 = m0.group(1) if m0 else "지역 미상"
                 else:
-                    tag = ""
-                law_attr = _h.escape(ln, quote=True)
-                btns = ""
-                if e["scoped"]:   # 대화 한정 조례만 '전역 재캐싱' 노출
-                    btns += f'<button class="law-list-recache" data-law="{law_attr}">전역 재캐싱</button> '
-                btns += f'<button class="law-list-replace" data-law="{law_attr}">교체</button> '
-                btns += f'<button class="law-list-del" data-law="{law_attr}">삭제</button>'
-                parts.append(
-                    f"<tr><td>{_h.escape(ln)}{_h.escape(tag)}</td><td>{e['chunks']}</td>"
-                    f"<td>{btns}</td></tr>")
-            parts.append("</tbody></table>")
+                    region0 = "기타 자료"
+                groups.setdefault(region0, []).append((ln, info))
+
+            for region0 in sorted(groups, key=lambda r: (r in ("기타 자료", "지역 미상"), r)):
+                icon = "" if region0 in ("기타 자료", "지역 미상") else "🏙️ "
+                parts.append(f"<h3>{icon}{_h.escape(region0)}</h3>")
+                parts.append("<table><thead><tr><th>자료</th><th>청크</th><th></th></tr></thead><tbody>")
+                for ln, info in groups[region0]:
+                    e = agg[ln]
+                    if e["ord"]:
+                        tag = " · 조례(이 대화 한정)" if e["scoped"] else " · 조례(모든 대화)"
+                    else:
+                        tag = ""
+                    cited = (info or {}).get("cited", "")
+                    cited_txt = f" · 모법: {cited}" if cited else ""
+                    law_attr = _h.escape(ln, quote=True)
+                    btns = ""
+                    if e["scoped"]:   # 대화 한정 조례만 '전역 재캐싱' 노출
+                        btns += f'<button class="law-list-recache" data-law="{law_attr}">전역 재캐싱</button> '
+                    btns += f'<button class="law-list-replace" data-law="{law_attr}">교체</button> '
+                    btns += f'<button class="law-list-del" data-law="{law_attr}">삭제</button>'
+                    parts.append(
+                        f"<tr><td>{_h.escape(ln)}{_h.escape(tag)}{_h.escape(cited_txt)}</td>"
+                        f"<td>{e['chunks']}</td><td>{btns}</td></tr>")
+                parts.append("</tbody></table>")
             parts.append('<p class="law-db-foot">지역조례와 별표를 직접 라이브러리에 등록시 답변 성능이 개선됩니다.</p>')
         parts.append("</div>")
         return HTMLResponse("\n".join(parts))
@@ -255,6 +287,8 @@ try:
                 retriever = gen._get_retriever()
                 retriever.create_session_collection(key)   # _session_cols에 등록(채팅과 공유)
                 n = retriever.index_uploaded_chunks(key, chunks, "")  # thread_id="" → 전역
+                if n:
+                    _record_ordinance_reading(retriever, law_label, chunks=chunks, source="pdf")
                 return law_label, n
             finally:
                 try:
@@ -1713,6 +1747,10 @@ async def on_message(message: cl.Message):
                 gen = get_generator()
                 retriever = gen._get_retriever()
                 n = await asyncio.to_thread(retriever.index_uploaded_chunks, session_id, chunks, thread_scope)
+                if n:
+                    await asyncio.to_thread(
+                        _record_ordinance_reading, retriever, label,
+                        chunks=chunks, source="pdf")
 
                 pdf_list = cl.user_session.get("pdf_list", [])
                 if label not in pdf_list:
@@ -1920,9 +1958,59 @@ async def _render_blind_spot_notice(
     ).send()
 
 
-def _index_ordinance_articles(retr, up_key: str, ln: str, arts: dict) -> int:
+def _record_ordinance_reading(retr, ln: str, *, arts: dict = None, chunks: list = None,
+                              source: str = "", mst: str = "") -> None:
+    """조례 리딩 이벤트를 지역 레지스트리에 기록 — 지역(최상위 태그)별로 병합
+    축적되어, 별도 시점에 읽힌 조례들이 그 지역 법령체계의 총괄 뷰가 된다.
+    arts(조문 dict) 또는 chunks(청크 리스트) 중 있는 쪽에서 목차·모법을 추출."""
+    try:
+        if "조례" not in (ln or ""):
+            return
+        m = re.match(r"([가-힣]{1,8}(?:특별시|광역시|특별자치시|특별자치도|시|군|구))", ln)
+        region = m.group(1) if m else ""
+        if not region:
+            return
+        toc, body_parts = [], []
+        if arts:
+            for a, t in arts.items():
+                t = str(t)
+                if str(a).startswith("별표"):
+                    toc.append({"no": str(a), "title": "(별표)"})
+                else:
+                    m_t = re.match(r"제\d+조(?:의\d+)?\(([^)\n]{1,40})\)", t)
+                    toc.append({"no": str(a), "title": m_t.group(1) if m_t else ""})
+                body_parts.append(t)
+        elif chunks:
+            seen: dict = {}
+            for c in chunks:
+                root = re.sub(r"\s*[①-⑳㉑-㉚].*$", "", str(c.get("article_no", ""))).strip()
+                root = re.sub(r"\(\d+\)$", "", root)
+                if root and root not in seen:
+                    m_t = re.search(r"제\d+조(?:의\d+)?\(([^)\n]{1,40})\)",
+                                    str(c.get("content", ""))[:150])
+                    seen[root] = m_t.group(1) if m_t else ""
+                body_parts.append(str(c.get("content", "")))
+            toc = [{"no": k, "title": v} for k, v in seen.items()]
+        body = "\n".join(body_parts)
+        cited = [nl for nl in _SCAN_DOMAIN_LAWS if nl in body]
+        # 저장 명칭의 파일명 접미 제거 — 레지스트리는 기본 명칭으로 병합
+        base = re.split(r"[(\[]", ln)[0].strip(" -–—") or ln
+        retr.upsert_ordinance_registry(region, base, {
+            "mst": mst,
+            "cited_laws": cited,
+            "articles": len(toc),
+            "toc": toc[:120],
+            "chars": len(body),
+            "sources": [source] if source else [],
+        })
+    except Exception:
+        pass
+
+
+def _index_ordinance_articles(retr, up_key: str, ln: str, arts: dict,
+                              source: str = "patch", mst: str = "") -> int:
     """패치된 조례(조문+별표 dict)를 조례 라이브러리(업로드 캐시)에 전역 인덱싱.
-    사각지대 패치·지역 스캔이 공유하는 등록 꼬리."""
+    사각지대 패치·지역 스캔이 공유하는 등록 꼬리. 리딩 레지스트리에도 기록."""
     jo_text = "\n".join(v for k, v in arts.items() if not str(k).startswith("별표"))
     chunks = chunk_law_pdf(jo_text, ln) if jo_text else []
     # 별표는 조문 정규식으로 못 쪼개므로 별도 청크로 (긴 별표는 길이 분할)
@@ -1938,7 +2026,10 @@ def _index_ordinance_articles(retr, up_key: str, ln: str, arts: dict) -> int:
     if not chunks:
         return 0
     retr.create_session_collection(up_key)
-    return retr.index_uploaded_chunks(up_key, chunks, "")  # thread_id="" → 전역
+    n = retr.index_uploaded_chunks(up_key, chunks, "")  # thread_id="" → 전역
+    if n:
+        _record_ordinance_reading(retr, ln, arts=arts, source=source, mst=mst)
+    return n
 
 
 @cl.action_callback("regenerate_with_fetch")
@@ -2310,6 +2401,8 @@ async def on_blind_spot_pdf_attach(action: cl.Action):
         chunks = chunk_law_pdf(text, law_label)
         retriever.create_session_collection(key)
         n = retriever.index_uploaded_chunks(key, chunks, "")  # thread_id="" → 전역
+        if n:
+            _record_ordinance_reading(retriever, law_label, chunks=chunks, source="pdf")
         return law_label, n, chunks
 
     registered: list[tuple[str, int, list]] = []
@@ -2466,7 +2559,7 @@ async def on_region_ordinance_scan(action: cl.Action):
             if not cited:          # 도메인 모법 인용 없음 → 위임 접점 아님
                 continue
             law_api_fetcher._save_cache(nm, arts, {})
-            n = _index_ordinance_articles(retr, up_key, nm, arts)
+            n = _index_ordinance_articles(retr, up_key, nm, arts, source="scan", mst=mst)
             if n:
                 registered.append((nm, n, cited[:3], arts))
         return registered
