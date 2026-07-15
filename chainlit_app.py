@@ -1320,6 +1320,8 @@ def _collect_law_groups():
             return "국토계획법 계열"
         if nm.startswith("주택법"):
             return "주택법 계열"
+        if "주거환경정비" in nm:
+            return "도시정비법 계열"
         return "기타 내장 법령"
 
     def _order_key(nm: str):
