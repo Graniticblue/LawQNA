@@ -797,6 +797,30 @@ def _law_cache_lookup(law_name: str, art_root: str):
         return None
 
 
+_QA_FULL_Q_CACHE: dict = {}
+
+
+def _qa_full_question(code: str) -> str:
+    """해석례 질문 전문 — 청크 메타데이터(300~500자 절단본) 대신 원본 레코드 직독.
+
+    updates/법제처_{code}.jsonl 의 contents[0](질의요지)를 읽는다. 원본 파일이
+    없는 구세대 해석례는 빈 문자열 반환 → 호출측이 메타데이터로 폴백."""
+    if not code:
+        return ""
+    if code in _QA_FULL_Q_CACHE:
+        return _QA_FULL_Q_CACHE[code]
+    q = ""
+    try:
+        p = BASE_DIR / "data" / "qa_precedents" / "updates" / f"법제처_{code}.jsonl"
+        if p.exists():
+            rec = json.loads(p.read_text(encoding="utf-8").strip().split("\n")[0])
+            q = rec["contents"][0]["parts"][0]["text"].strip()
+    except Exception:
+        q = ""
+    _QA_FULL_Q_CACHE[code] = q
+    return q
+
+
 def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
     law_docs       = result.get("law_docs",       [])
     qa_docs        = result.get("qa_docs",        [])
@@ -858,7 +882,8 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
         doc = qa_lookup.get(code)
         if doc is None:
             continue
-        q   = doc.metadata.get("question", "")
+        # 질문 전문: 청크 메타데이터는 300~500자 절단본이라 원본 레코드를 직독
+        q   = _qa_full_question(code) or doc.metadata.get("question", "")
         ans = clean_article_content(_clean_precedent_body(doc.content or "")[:15000])
         date = doc.metadata.get("doc_date", "")
         header = f"**법제처 {code}**" + (f"  ·  {date}" if date else "")
@@ -881,7 +906,7 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
         if label not in answer:
             continue
         seen_names.add(label)
-        q   = d.metadata.get("question", "")
+        q   = _qa_full_question(d.metadata.get("doc_code", "")) or d.metadata.get("question", "")
         ans = clean_article_content(_clean_precedent_body(d.content or "")[:15000])
         ref = d.metadata.get("doc_ref", "")
         header = f"**{label}**" + (f"  ·  {ref}" if ref else "")
