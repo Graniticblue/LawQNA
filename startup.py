@@ -314,6 +314,42 @@ def index_region_packs():
         print(f"[startup] 지역 팩 인덱싱 생략(앱 계속): {e}")
 
 
+def ensure_court_cases():
+    """court_cases(판례) 컬렉션 보증 — 파일 레코드 수와 컬렉션 건수가 다르면 전량 재빌드.
+
+    02_Indexer는 law_articles·qa_precedents만 만들기 때문에, 프로덕션 최초 빌드나
+    FORCE_REINDEX 후에는 판례 컬렉션이 없다. 판례는 건수가 적어(십수 건) 전량
+    재빌드 비용이 낮고, 증분 add의 HNSW search_ef 누락 함정도 피한다.
+    """
+    cases_dir = BASE_DIR / "data" / "court_cases"
+    if not cases_dir.exists():
+        return
+    want = 0
+    for p in sorted(cases_dir.glob("*.jsonl")):
+        try:
+            with open(p, encoding="utf-8") as f:
+                want += sum(1 for line in f if line.strip())
+        except Exception:
+            pass
+    if want == 0:
+        return
+    try:
+        import chromadb
+        client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+        have = client.get_collection("court_cases").count()
+    except Exception:
+        have = -1
+    if have == want:
+        print(f"[startup] court_cases {have}건 — 동기화 확인")
+        return
+    print(f"[startup] court_cases 불일치(파일 {want}건 vs 컬렉션 {have}건) — 전량 재빌드")
+    r = subprocess.run(
+        [sys.executable, str(BASE_DIR / "ingest" / "ingest_court_cases.py")],
+        check=False,
+    )
+    print(f"[startup] court_cases 인덱싱 {'완료' if r.returncode == 0 else '실패(앱은 계속)'}")
+
+
 if __name__ == "__main__":
     ensure_chat_history_schema()
     cleanup_uploads()
@@ -386,3 +422,6 @@ if __name__ == "__main__":
 
     # 내장 지역 조례 팩 — 본 빌드 뒤에 실행 (FORCE_REINDEX로 지워져도 여기서 복구)
     index_region_packs()
+
+    # 판례(court_cases) — 02_Indexer 범위 밖이라 여기서 보증 (불일치 시 전량 재빌드)
+    ensure_court_cases()
