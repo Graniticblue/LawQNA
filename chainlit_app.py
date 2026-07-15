@@ -1849,6 +1849,9 @@ async def on_message(message: cl.Message):
         model_label=model_label,
     )
 
+    # 인용 검증 — 학습 자료 밖 판례·해석례 번호만 실존 확인 (비차단, 캐시 우선)
+    await _render_citation_verification(body, query, provider, model_label)
+
     # 히스토리 업데이트 — 결론·수치가 잘리지 않게 본문 요약으로 저장
     history.append({"q": query, "a": _history_answer(body)})
     cl.user_session.set("history", history)
@@ -2300,6 +2303,9 @@ async def _regen_with_material(query: str, provider: str, model_label: str,
         await cl.Message(content=amendment_text, author="입법요지",
                          elements=src_elements or None).send()
 
+    # 재생성 답변도 인용 검증 — 미확인 인용이 남았으면 다시 경고·제외 재생성 가능
+    await _render_citation_verification(body, query, provider, model_label)
+
     # 재생성 답변은 직전 답변을 대체하는 '완전판' — 세션 기억도 이것으로 갱신.
     # 안 하면 다음 질문의 [이전 대화 맥락]·누적 법령·결론이 불완전판 기준으로 남는다.
     history = cl.user_session.get("history", [])
@@ -2312,6 +2318,34 @@ async def _regen_with_material(query: str, provider: str, model_label: str,
                         _accumulate_used_laws(cl.user_session.get("used_laws"), result))
     cl.user_session.set("session_conclusions",
                         _accumulate_conclusions(cl.user_session.get("session_conclusions"), result))
+
+
+async def _render_citation_verification(body: str, query: str,
+                                         provider: str, model_label: str) -> None:
+    """답변 속 '학습 자료 밖' 판례·해석례 인용을 비차단 검증해 배지로 표시.
+
+    스트리밍 완료 후 실행 — 본문은 수정하지 않는다. 학습 대장·캐시로 걸러
+    잔여분만 API 확인(허위사실 판명 전용). 실존·미학습 번호는 학습 후보
+    큐(서버 전역, UI 비노출)에 적재되고, 미확인 번호는 인용 보류 경고와
+    함께 재생성 시 자동 제외 블록을 regen_material에 쌓는다."""
+    try:
+        from ingest import cite_verify
+        results = await asyncio.to_thread(cite_verify.check_answer, body, query)
+    except Exception:
+        return  # 검증 실패가 답변 흐름을 깨면 안 된다
+    if not results:
+        return  # 인용이 없거나 전부 학습 코퍼스 출신 — 배지 불필요
+    block = cite_verify.regen_block(results)
+    actions = None
+    if block:
+        _stash_regen_material(query, block)
+        actions = [cl.Action(
+            name="blind_spot_regen",
+            label="🔄 미확인 인용 제외하고 다시 생성",
+            payload={"query": query, "provider": provider, "model_label": model_label},
+        )]
+    await cl.Message(content=cite_verify.format_badge(results),
+                     author="인용 검증", actions=actions).send()
 
 
 def _stash_regen_material(query: str, block: str) -> None:
