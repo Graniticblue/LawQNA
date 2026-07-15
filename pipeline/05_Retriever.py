@@ -92,6 +92,52 @@ def _doc_is_after_cutoff(meta: dict, as_of_date: Optional[str],
         return r_key > a_key
     return False
 
+_PHRASE_RULES_PATH = DATA_DIR / "phrase_principles.json"
+_phrase_rules_cache: Optional[list] = None
+
+
+def _load_phrase_rules() -> list:
+    """문형→원칙 해석례 매핑 로딩 (data/phrase_principles.json, 1회 캐시)."""
+    global _phrase_rules_cache
+    if _phrase_rules_cache is not None:
+        return _phrase_rules_cache
+    try:
+        _phrase_rules_cache = json.loads(
+            _PHRASE_RULES_PATH.read_text(encoding="utf-8")).get("rules", [])
+    except Exception:
+        _phrase_rules_cache = []
+    return _phrase_rules_cache
+
+
+def _phrase_principle_codes(query: str, law_docs: list) -> list[str]:
+    """법정 문형 감지 → 주입할 원칙 해석례 doc_code 목록.
+
+    문형('각 호의 어느 하나'·단서·'등')의 해석 원칙은 도메인 어휘와 직교라
+    상황 서술형 질문에서 검색 순위 밖으로 밀린다. text_pattern(질문+검색
+    조문)과 query_signals(질문 — 쟁점 신호)가 함께 잡힐 때만 발화해
+    일상 질의에 대한 과주입을 막는다."""
+    rules = _load_phrase_rules()
+    if not rules or not query:
+        return []
+    law_text = " ".join(str(getattr(d, "content", ""))[:1500] for d in (law_docs or [])[:12])
+    haystack = query + "\n" + law_text
+    out: list[str] = []
+    for r in rules:
+        try:
+            sig = r.get("query_signals", "")
+            if sig and not re.search(sig, query):
+                continue
+            pat = r.get("text_pattern", "")
+            if pat and not re.search(pat, haystack):
+                continue
+        except re.error:
+            continue
+        for c in r.get("codes", []):
+            if c not in out:
+                out.append(c)
+    return out
+
+
 def _attach_cite_label(meta: dict) -> None:
     """해석례 메타에 답변 인용 표기(cite_label)를 부착한다 — 시스템 전체의 단일 생성점.
 
@@ -2175,6 +2221,33 @@ class Retriever:
             as_of_date=as_of_date, exclude_codes=exclude_doc_codes,
             as_of_code=as_of_code,
         )
+
+        # ── 문형 원칙 해석례 페어링 (결정론 훅) ────────────
+        # '각 호의 어느 하나'·단서·'등' 같은 법정 문형의 해석 원칙이 도메인
+        # 어휘 직교로 검색에서 밀리는 문제 보정(남양주 조례 사안에서 10-0306
+        # 미소환 실증). 감지 시 doc_code 직접 조회로 주입 — 컷오프·LOO 준수,
+        # 코드당 대표 2청크로 절단해 컨텍스트 비대 방지.
+        phrase_codes = _phrase_principle_codes(query, law_docs)
+        if phrase_codes:
+            have = {d.metadata.get("doc_code", "") for d in qa_docs}
+            codes = [c for c in phrase_codes
+                     if c not in have
+                     and not (exclude_doc_codes and c in exclude_doc_codes)][:3]
+            pdocs = self._searcher.fetch_qa_by_codes(codes) if codes else []
+            per: dict = {}
+            kept = []
+            for d in pdocs:
+                if _doc_is_after_cutoff(d.metadata, as_of_date, as_of_code):
+                    continue
+                c = d.metadata.get("doc_code", "")
+                if per.get(c, 0) >= 2:
+                    continue
+                d.score = 1.9
+                d.score_type = "phrase_principle"
+                kept.append(d)
+                per[c] = per.get(c, 0) + 1
+            if kept:
+                qa_docs = kept + qa_docs
 
         # ── 판례 검색 (court_cases, PLAN §4.2) ────────────
         case_docs = self._search_cases(
