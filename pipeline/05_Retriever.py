@@ -40,6 +40,7 @@ DATA_DIR        = BASE_DIR / "data"
 CHROMA_DIR      = Path(os.environ.get("CHROMA_DB_PATH", str(DATA_DIR / "chroma_db")))
 MAP_PATH        = DATA_DIR / "keyword_law_map.json"
 GRAPH_PATH      = DATA_DIR / "article_graph.json"
+DELEGATION_PATH = DATA_DIR / "delegation_graph.json"
 ARTICLE_ROLES_DIR = DATA_DIR / "article_roles"
 
 EMBED_MODEL_NAME  = "jhgan/ko-sroberta-multitask"
@@ -423,6 +424,55 @@ def _extract_crossref_hints(law_docs, max_hints: int = 10) -> list[str]:
     # 참조 빈도 내림차순 → 동률이면 최초 등장 순
     ranked = sorted(freq, key=lambda k: (-freq[k], order[k]))
     return [f"{law} {art}" for law, art in ranked[:max_hints]]
+
+
+_delegation_graph: Optional[dict] = None
+
+
+def _load_delegation_graph() -> dict:
+    """delegation_graph.json 지연 로드 (빌드타임 lsDelegated 스냅샷 — 런타임 API 접근 없음)."""
+    global _delegation_graph
+    if _delegation_graph is None:
+        try:
+            _delegation_graph = json.loads(
+                DELEGATION_PATH.read_text(encoding="utf-8")).get("edges", {})
+        except Exception:
+            _delegation_graph = {}
+    return _delegation_graph
+
+
+def _delegation_hints(law_docs, max_hints: int = 6) -> list[str]:
+    """검색된 조문이 발원인 '하향 위임'(법→영→규칙) 대상 조문을 힌트로 추출.
+
+    위임 문구('대통령령으로 정하는')에는 조번호가 없어 텍스트 crossref가
+    따라갈 수 없는 방향(16-0506: 영 제25조③7호 → 규칙 제3조 누락 실증)을
+    delegation_graph.json으로 해소한다. crossref의 노이즈 투표 교훈에 따라
+    트리거는 exact(Pass 1 특정) 문서 + 검색 상위 3건으로 제한한다."""
+    graph = _load_delegation_graph()
+    if not graph:
+        return []
+    triggers = [d for d in law_docs if d.score_type == "exact"]
+    for d in law_docs[:3]:
+        if d not in triggers:
+            triggers.append(d)
+    have = {(re.sub(r"\s+", "", d.law_name), d.article_no.replace(" ", "")) for d in law_docs}
+    hints: list[str] = []
+    seen = set()
+    for doc in triggers:
+        m = re.match(r"(제\d+조(의\d+)?)", doc.article_no.replace(" ", ""))
+        if not m:
+            continue
+        for e in graph.get(f"{doc.law_name.strip()}::{m.group(1)}", []):
+            if not e.get("in_corpus"):
+                continue
+            key = (re.sub(r"\s+", "", e["dst_law"]), e["dst_article"])
+            if key in have or key in seen:
+                continue
+            seen.add(key)
+            hints.append(f"{e['dst_law']} {e['dst_article']}")
+            if len(hints) >= max_hints:
+                return hints
+    return hints
 
 
 # ============================================================
@@ -2212,6 +2262,23 @@ class Retriever:
                     continue
                 d.score = 1.5            # exact(2.0) 아래, 일반 검색 위 — 뒤쪽 배치
                 d.score_type = "crossref"
+                law_docs.append(d)
+                existing.add(dk)
+
+        # ── 위임 체인 확장 (법→영→규칙 하향 에지) ─────────
+        # '대통령령으로 정하는' 류 위임 문구에는 조번호가 없어 위 crossref가
+        # 못 따라가는 방향. 빌드타임 lsDelegated 스냅샷(delegation_graph.json)
+        # 에서 대상 조문을 로컬 DB로만 끌어온다.
+        deleg_hints = _delegation_hints(law_docs, max_hints=6)
+        if deleg_hints:
+            deleg_docs = self._searcher.fetch_exact_articles(deleg_hints, top_n=1)
+            existing = {f"{d.law_name}::{d.article_no}" for d in law_docs}
+            for d in deleg_docs:
+                dk = f"{d.law_name}::{d.article_no}"
+                if dk in existing:
+                    continue
+                d.score = 1.6            # exact 아래, crossref(1.5) 위 — 위임은 공식 스냅샷 기반
+                d.score_type = "delegation"
                 law_docs.append(d)
                 existing.add(dk)
 

@@ -38,3 +38,4 @@ tmp/
 판례/
 *.pdf
 !data/raw_laws/*.jsonl
+data/law_cache/delegation/
