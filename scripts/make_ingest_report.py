@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-make_ingest_report.py -- 학습 검수 보고서 생성 (data/ingest_reports/)
+make_ingest_report.py -- 학습 검수 보고서 생성 (data/ingest_reports/<생성일>/)
 
 API 소싱 학습(해석례·판례)의 내용을 사람이 검수할 수 있게 레코드·문단/gist
 대조·article_roles 추가 내역·eval 결과를 마크다운 한 파일로 묶는다.
@@ -130,8 +130,9 @@ def report_expc(code: str) -> Path:
     L += _render_roles(_roles_for(code))
     L += ["## 10. eval 결과 (날짜 컷오프 + leave-one-out)"]
     L += _render_eval(code)
-    out = REPORT_DIR / f"법제처_{code}_학습보고.md"
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    out_dir = REPORT_DIR / date.today().isoformat()
+    out = out_dir / f"법제처_{code}_학습보고.md"
+    out_dir.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(L), encoding="utf-8")
     return out
 
@@ -162,8 +163,9 @@ def report_prec(case: str) -> Path:
          "## 7. 검색 태그", rec.get("search_tags", ""), "",
          "## 8. 조문 프레임(article_roles) 추가 내역"]
     L += _render_roles(_roles_for(case))
-    out = REPORT_DIR / f"{rec.get('court', '법원')}_{case}_학습보고.md"
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    out_dir = REPORT_DIR / date.today().isoformat()
+    out = out_dir / f"{rec.get('court', '법원')}_{case}_학습보고.md"
+    out_dir.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(L), encoding="utf-8")
     return out
 
