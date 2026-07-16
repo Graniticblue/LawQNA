@@ -40,3 +40,4 @@ tmp/
 !data/raw_laws/*.jsonl
 data/law_cache/delegation/
 data/law_cache/temporal/
+data/law_cache/byeolpyo/
