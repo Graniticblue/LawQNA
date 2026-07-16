@@ -163,24 +163,50 @@ def build_article_records(law: dict, law_name: str) -> list[dict]:
     return records
 
 
-def _split_byeolpyo(text: str, max_len: int = 2000) -> list[tuple[str, str]]:
-    """대형 별표를 최상위 번호 항목(1. 2. …) 경계로 묶어 max_len 이하 청크로 분할.
-    반환: [(section_title, chunk_text), ...]"""
-    parts = re.split(r"(?m)^(?=\s{0,4}\d{1,2}\.\s)", text)
-    chunks, buf = [], ""
-    for p in parts:
-        if buf and len(buf) + len(p) > max_len:
-            chunks.append(buf)
-            buf = p
+def _section_title(chunk: str) -> str:
+    """청크 첫 줄에서 섹션 제목 추출 — 괄호가 열리면 그 앞에서 자른다
+    ('1. 건축할 수 있는 건축물(경관관리 등을…' 절단 방지)."""
+    m = re.search(r"^\s*(\d{1,2}\.\s*[^\n]{2,60})", chunk.strip())
+    if not m:
+        return "전체"
+    t = m.group(1).strip()
+    if "(" in t and ")" not in t[t.index("("):]:
+        t = t[: t.index("(")].strip()
+    return t[:40].strip()
+
+
+def _split_byeolpyo(text: str, mok_threshold: int = 1200) -> list[tuple[str, str]]:
+    """별표를 호(1. 2. …) 단위 '개별' 청크로 분할하고, 호가 mok_threshold를
+    넘으면 목(가. 나. …) 경계로 하위 분할한다. 반환: [(section_title, chunk)].
+
+    구 방식(호 경계 greedy 묶음 ≤2,000자)은 임베딩(128토큰)이 묶음 앞부분만
+    보는 사각을 만들었다 — 호 단위 개별 + 인덱서의 헤더 프리픽스 조합이
+    '용도지역 × 개별 용도' 류 질의의 벡터 리콜을 살린다 (2026-07-16 컨펌)."""
+    hos = [p.strip() for p in re.split(r"(?m)^(?=\s{0,4}\d{1,2}\.\s)", text) if p.strip()]
+    if not hos:
+        return [("전체", text.strip())] if text.strip() else []
+    out: list[tuple[str, str]] = []
+    for ho in hos:
+        title = _section_title(ho)
+        if len(ho) <= mok_threshold:
+            out.append((title, ho))
+            continue
+        parts = re.split(r"(?m)^(?=\s{0,6}[가-힣]\.\s)", ho)
+        subs, buf = [], ""
+        for p in parts:
+            if buf and len(buf) + len(p) > mok_threshold:
+                subs.append(buf.strip())
+                buf = p
+            else:
+                buf += p
+        if buf.strip():
+            subs.append(buf.strip())
+        if len(subs) == 1:
+            out.append((title, subs[0]))
         else:
-            buf += p
-    if buf.strip():
-        chunks.append(buf)
-    out = []
-    for c in chunks:
-        m = re.search(r"^\s*(\d{1,2}\.\s*[^\n]{2,40})", c.strip())
-        out.append((m.group(1).strip() if m else "전체", c.strip()))
-    return out or [("전체", text)]
+            for i, s in enumerate(subs, 1):
+                out.append((f"{title} (분할 {i})", s))
+    return out
 
 
 def build_byeolpyo_records(law: dict, law_name: str) -> list[dict]:
