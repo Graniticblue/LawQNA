@@ -2359,19 +2359,47 @@ async def _render_citation_verification(body: str, query: str,
         from ingest import cite_verify
         results = await asyncio.to_thread(cite_verify.check_answer, body, query)
     except Exception:
-        return  # 검증 실패가 답변 흐름을 깨면 안 된다
-    if not results:
-        return  # 인용이 없거나 전부 학습 코퍼스 출신 — 배지 불필요
-    block = cite_verify.regen_block(results)
+        results = []  # 검증 실패가 답변 흐름을 깨면 안 된다
+
+    # 조문 문언 검증 (로컬 원문 대조 — 번호 검증과 별개 층).
+    # 스트리밍 경로에서는 generate() 내부 교정 재생성이 돌지 않으므로
+    # 여기서 불일치를 배지로 알리고, 실제 원문을 재생성 재료로 적재한다.
+    sq_bad = []
+    try:
+        from ingest import statute_quote
+        sq_findings = await asyncio.to_thread(statute_quote.verify_answer_quotes, body)
+        sq_bad = [f for f in sq_findings if f.get("status") == "mismatch"]
+    except Exception:
+        sq_bad = []
+
+    if not results and not sq_bad:
+        return  # 인용이 없거나 전부 검증 통과 — 배지 불필요
+
+    blocks = []
+    if results:
+        b = cite_verify.regen_block(results)
+        if b:
+            blocks.append(b)
+    if sq_bad:
+        try:
+            blocks.append(statute_quote.corrective_block(sq_bad))
+        except Exception:
+            pass
     actions = None
-    if block:
-        _stash_regen_material(query, block)
+    if blocks:
+        for b in blocks:
+            _stash_regen_material(query, b)
         actions = [cl.Action(
             name="blind_spot_regen",
-            label="🔄 미확인 인용 제외하고 다시 생성",
+            label="🔄 검증 결과 반영해 다시 생성",
             payload={"query": query, "provider": provider, "model_label": model_label},
         )]
-    await cl.Message(content=cite_verify.format_badge(results),
+    badge_parts = []
+    if results:
+        badge_parts.append(cite_verify.format_badge(results))
+    if sq_bad:
+        badge_parts.append(statute_quote.format_badge(sq_bad))
+    await cl.Message(content="\n\n".join(badge_parts),
                      author="인용 검증", actions=actions).send()
 
 
