@@ -1992,7 +1992,7 @@ class HybridSearcher:
         self,
         query: str,
         exclude_ids: Optional[set] = None,
-        max_hits: int = 2,
+        max_hits: int = 3,
     ) -> list[RetrievedDoc]:
         """법리(doctrine) 경로 — 판례 역할 기반 소환.
 
@@ -2540,10 +2540,11 @@ class Retriever:
         # ── 법리(doctrine) 경로: 판례 역할 기반 소환 ─────
         # 페어링·벡터는 사건 어휘가 지배해 타 도메인 법리 판례(침익 엄격해석,
         # 병존 등)가 묻힌다. doctrine_terms가 질의의 법리 어휘와 맞으면
-        # 순위 밖이어도 주입한다 (최대 2건, case_id 중복 제거).
+        # 순위 밖이어도 주입한다 (최대 3건 — 2건이면 같은 계열의 원칙 판례가
+        # 캡을 채워 한계 판례(2024두50421류)가 밀리는 편향 실측, case_id 중복 제거).
         have_ids = {c.metadata.get("case_id", "") for c in cases}
         cases.extend(self._searcher.search_cases_by_doctrine(
-            query, exclude_ids=have_ids, max_hits=2))
+            query, exclude_ids=have_ids, max_hits=3))
 
         # 시점 컷오프: 판결일이 미래인 판례 제외 (eval 전용)
         if as_of_date:
