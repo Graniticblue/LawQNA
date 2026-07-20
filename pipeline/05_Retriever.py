@@ -1942,19 +1942,6 @@ class HybridSearcher:
 
         query_emb = self._embed_text(query)
 
-        def _run_query(where_clause):
-            try:
-                kwargs = dict(
-                    query_embeddings=[query_emb],
-                    n_results=min(top_k * 2, self._case_col.count()),
-                    include=["documents", "metadatas", "distances"],
-                )
-                if where_clause:
-                    kwargs["where"] = where_clause
-                return self._case_col.query(**kwargs)
-            except Exception:
-                return None
-
         def _parse(res) -> list[RetrievedDoc]:
             if res is None:
                 return []
@@ -1974,27 +1961,97 @@ class HybridSearcher:
                 ))
             return docs
 
-        law_name = law_names[0] if law_names else ""
+        # chroma 메타데이터 where는 $contains를 지원하지 않아 종전의 필터 3단이
+        # 전부 0건 → 항상 전체 벡터 폴백으로 떨어지는 죽은 코드였다(2026-07-20
+        # 실측 — 필터/무필터 결과 동일). 넉넉히 뽑아 파이썬 후처리로 거른다.
+        n = min(max(top_k * 4, 20), self._case_col.count())
+        try:
+            res = self._case_col.query(
+                query_embeddings=[query_emb], n_results=n,
+                include=["documents", "metadatas", "distances"],
+            )
+        except Exception:
+            res = None
+        all_docs = _parse(res)
 
-        # 1차: law + relation_type 필터
-        if law_name and relation_type:
-            where = {"$and": [
-                {"cited_laws_str": {"$contains": law_name}},
-                {"relation_types":  {"$contains": relation_type}},
-            ]}
-            docs = _parse(_run_query(where))
-            if len(docs) >= 2:
-                return docs[:top_k]
+        def _law_hit(d):
+            cited = d.metadata.get("cited_laws_str", "")
+            return any(ln and ln in cited for ln in law_names)
 
-        # Fallback 1: 법규만
-        if law_name:
-            where = {"cited_laws_str": {"$contains": law_name}}
-            docs = _parse(_run_query(where))
-            if len(docs) >= 1:
-                return docs[:top_k]
+        domain = [d for d in all_docs if _law_hit(d)] if law_names else []
+        if domain and relation_type:
+            typed = [d for d in domain
+                     if relation_type in (d.metadata.get("relation_types") or "")]
+            if len(typed) >= 2:
+                return typed[:top_k]
+        if domain:
+            return domain[:top_k]
+        return all_docs[:top_k]
 
-        # Fallback 2: 전체
-        return _parse(_run_query(None))[:top_k]
+    def search_cases_by_doctrine(
+        self,
+        query: str,
+        exclude_ids: Optional[set] = None,
+        max_hits: int = 2,
+    ) -> list[RetrievedDoc]:
+        """법리(doctrine) 경로 — 판례 역할 기반 소환.
+
+        벡터 상위권은 사건 어휘가 지배해 타 도메인 법리 판례가 묻힌다
+        (2011두3388 실측: 침익 처분 질의에서 19위). 레코드의 doctrine_terms
+        (법리 어휘)가 질의에 나타나면 유사도 순위와 무관하게 주입한다.
+        score_type="doctrine". 컬렉션이 수십 건 규모라 전량 조회로 충분 —
+        수백 건 이상으로 커지면 doctrine 전용 인덱스로 분리할 것."""
+        if self._case_col is None or self._case_col.count() == 0:
+            return []
+        exclude_ids = exclude_ids or set()
+        q_norm = re.sub(r"\s+", "", query)
+        try:
+            res = self._case_col.query(
+                query_embeddings=[self._embed_text(query)],
+                n_results=self._case_col.count(),
+                include=["documents", "metadatas", "distances"],
+            )
+        except Exception:
+            return []
+        hits = []
+        for doc_text, meta, dist in zip(
+            res["documents"][0], res["metadatas"][0], res["distances"][0]
+        ):
+            cid = meta.get("case_id", "")
+            if cid in exclude_ids:
+                continue
+            # 횡단 판례 전용 — 도메인 판례는 페어링·벡터가 담당하고, 도메인
+            # 어휘가 섞인 doctrine_terms는 오발화원이 된다(91누8319 실측)
+            if meta.get("doctrine_scope") != "횡단":
+                continue
+            terms = [t for t in (meta.get("doctrine_terms") or "").split("|") if t]
+            if not any(self._doctrine_hit(t, q_norm) for t in terms):
+                continue
+            hits.append(RetrievedDoc(
+                source="court_cases",
+                law_name=meta.get("cited_laws_str", ""),
+                article_no=cid,
+                content=doc_text,
+                score=round(max(0.0, 1.0 - dist), 4),
+                score_type="doctrine",
+                metadata=dict(meta),
+            ))
+            if len(hits) >= max_hits:
+                break
+        return hits
+
+    _DOCTRINE_STOP = {"적용", "제한", "규정", "법률", "요건", "해석", "금지",
+                      "판단", "기준", "경우", "여부"}
+
+    @classmethod
+    def _doctrine_hit(cls, term: str, q_norm: str) -> bool:
+        """법리 어휘 매칭: 공백 제거 질의에 용어 토큰이 합계 4자 이상 등장하되,
+        범용 토큰만으로는 불발('제한'+'적용' 오발화 실측 — 비범용 토큰 1개 필수)."""
+        toks = [t for t in re.split(r"\s+", term.strip()) if len(t) >= 2]
+        matched = [t for t in toks if t in q_norm]
+        if not any(t not in cls._DOCTRINE_STOP for t in matched):
+            return False
+        return sum(len(t) for t in matched) >= 4
 
     def bm25_search_cases(self, query: str, top_k: int = 5) -> list[RetrievedDoc]:
         """court_cases BM25 키워드 검색"""
@@ -2479,6 +2536,14 @@ class Retriever:
 
         bm25_docs = self._searcher.bm25_search_cases(query, top_k=top_k)
         cases = merge_case_results(typed_results, bm25_docs, top_k=top_k)
+
+        # ── 법리(doctrine) 경로: 판례 역할 기반 소환 ─────
+        # 페어링·벡터는 사건 어휘가 지배해 타 도메인 법리 판례(침익 엄격해석,
+        # 병존 등)가 묻힌다. doctrine_terms가 질의의 법리 어휘와 맞으면
+        # 순위 밖이어도 주입한다 (최대 2건, case_id 중복 제거).
+        have_ids = {c.metadata.get("case_id", "") for c in cases}
+        cases.extend(self._searcher.search_cases_by_doctrine(
+            query, exclude_ids=have_ids, max_hits=2))
 
         # 시점 컷오프: 판결일이 미래인 판례 제외 (eval 전용)
         if as_of_date:

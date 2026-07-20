@@ -22,6 +22,10 @@ ingest_court_cases.py -- data/court_cases/*.jsonl → ChromaDB "court_cases" 컬
   related_cases   : 인용 판례 번호 배열
   search_tags     : 검색 태그 문자열
   tag             : 분류 태그 (예: "대법원판례")
+  doctrine        : 역할 정형 블록 (역할 기반 소환용 — 해석례_역할_프레임워크 참조)
+                    {position: R/M/A/B/X/L, series: 계열명,
+                     scope: "도메인"|"횡단", doctrine_terms: [법리 어휘...],
+                     principle_ref: "P-0XX" | null}
 """
 import argparse
 import json
@@ -144,6 +148,12 @@ def main():
             "label_summary":  rec.get("label_summary", "")[:300],
             "search_tags":    rec.get("search_tags", ""),
             "tag":            rec.get("tag", "대법원판례"),
+            # 역할 정형 필드 — chroma 메타데이터는 스칼라만 허용, 리스트는 '|' 연결
+            "doctrine_position": (rec.get("doctrine") or {}).get("position", ""),
+            "doctrine_series":   (rec.get("doctrine") or {}).get("series", ""),
+            "doctrine_scope":    (rec.get("doctrine") or {}).get("scope", ""),
+            "doctrine_terms":    "|".join((rec.get("doctrine") or {}).get("doctrine_terms", [])),
+            "doctrine_principle": (rec.get("doctrine") or {}).get("principle_ref") or "",
         })
         print(f"  인덱싱: {cid} — {rec.get('case_name', '')[:40]}")
 
