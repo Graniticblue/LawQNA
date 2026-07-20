@@ -426,6 +426,56 @@ def _extract_crossref_hints(law_docs, max_hints: int = 10) -> list[str]:
     return [f"{law} {art}" for law, art in ranked[:max_hints]]
 
 
+_QUERY_HINT_PAT = re.compile(
+    r"「([^」]{2,45})」"                                             # 명시 법령명 (last_law 갱신)
+    r"(?:\s*\([^)]{0,40}\))?"                                        # (이하 "…"이라 함) 등
+    r"\s*(제\d+조(?:의\d+)?|별표\s*\d+(?:의\d+)?)?"                  # 바로 붙은 조문·별표
+    r"|(?<![가-힣])(같은\s*법(?:\s*시행령|\s*시행규칙)?)\s*"          # 상대참조
+    r"(제\d+조(?:의\d+)?|별표\s*\d+(?:의\d+)?)"
+)
+
+
+def _explicit_query_hints(query: str, max_hints: int = 6) -> list[str]:
+    """질의문에 명시된 「법령명」 조문·별표를 결정론 추출한 폴백 힌트.
+
+    Pass 1이 law_hints를 통째로 놓치는 경우가 있다(17-0651 실측: 질의에
+    '「건축법」 제2조제1항제11호나목'이 명시돼 있었는데 힌트 0건 → 정의 원문·
+    조문 프레임 미로딩 → 가목 오포섭 오답). 질의문이 직접 거명한 조문만큼은
+    Pass 1 성패와 무관하게 exact fetch에 태운다. '같은 법 (시행령/시행규칙)'
+    상대참조는 직전 명시 법령으로 해소한다."""
+    out: list[str] = []
+    seen: set = set()
+    last_law = None
+    for m in _QUERY_HINT_PAT.finditer(query or ""):
+        if m.group(1):
+            last_law = re.sub(r"\s+", " ", m.group(1)).strip()
+            art = m.group(2)
+            law = last_law
+        else:
+            if not last_law:
+                continue
+            token = re.sub(r"\s+", "", m.group(3))
+            base = re.sub(r"\s*시행(령|규칙)$", "", last_law).strip()
+            if token.endswith("시행령"):
+                law = f"{base} 시행령"
+            elif token.endswith("시행규칙"):
+                law = f"{base} 시행규칙"
+            else:
+                law = base
+            art = m.group(4)
+        if not art:
+            continue
+        hint = f"{law} {art.replace(' ', '')}"
+        key = re.sub(r"\s+", "", hint)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(hint)
+        if len(out) >= max_hints:
+            break
+    return out
+
+
 _delegation_graph: Optional[dict] = None
 
 
@@ -2189,6 +2239,20 @@ class Retriever:
         """
         top_k_law  = top_k_law  or self.top_k_law
         top_k_case = top_k_case or self.top_k_case
+
+        # ── 질의문 명시 조문 폴백 힌트 병합 ────────────────
+        # Pass 1이 law_hints를 통째로 놓쳐도(17-0651 실측: 힌트 0건 → 명시된
+        # 건축법 제2조 원문·프레임 미로딩) 질의문이 직접 거명한 「법령명」
+        # 조문·별표는 결정론 추출해 exact fetch·검색 부스트·프레임 로딩에 태운다.
+        q_hints = _explicit_query_hints(query)
+        if q_hints:
+            merged = [h.get("law", str(h)) if isinstance(h, dict) else str(h)
+                      for h in (law_hints or [])]
+            have_h = {re.sub(r"\s+", "", h) for h in merged}
+            for h in q_hints:
+                if re.sub(r"\s+", "", h) not in have_h:
+                    merged.append(h)
+            law_hints = merged
 
         # 질문 유형에 따라 top_k 조정
         if question_type == "단일조문형":
