@@ -2514,28 +2514,29 @@ class Retriever:
 
         as_of_date: 'YYYY-MM-DD'. 지정 시 decision_date가 미래인 판례 제외(eval 전용).
         """
-        if not relation_types:
-            return []
-
         # 법령명만 추출 (조문번호 제거)
         law_names = list(dict.fromkeys(
             re.split(r'\s+제\d+', law)[0].strip()
             for law in all_laws
         ))
 
-        active = [rt for rt in relation_types if rt.get("weight", 0) >= 0.5]
-        if not active:
-            return []
-
-        typed_results = []
-        for rt in active:
-            docs = self._searcher.search_cases_by_type(
-                query, law_names, rt["type"], top_k=top_k
-            )
-            typed_results.append((docs, rt.get("weight", 1.0)))
-
-        bm25_docs = self._searcher.bm25_search_cases(query, top_k=top_k)
-        cases = merge_case_results(typed_results, bm25_docs, top_k=top_k)
+        # 페어링·BM25 경로는 Pass1의 relation_types(weight≥0.5)가 있어야 돈다.
+        # 반면 doctrine 경로는 법리 어휘 기반이라 relation_type과 무관 —
+        # 아래 active 게이트 '밖'에 두어 relation_types가 비어도 항상 실행한다
+        # (21-0186 실측: Pass1 relation_types=[]로 case 검색이 통째 early-return
+        # 되며 doctrine까지 막혀 계열 판례 94누2985가 미소환됐던 결함 수정).
+        active = ([rt for rt in relation_types if rt.get("weight", 0) >= 0.5]
+                  if relation_types else [])
+        cases = []
+        if active:
+            typed_results = []
+            for rt in active:
+                docs = self._searcher.search_cases_by_type(
+                    query, law_names, rt["type"], top_k=top_k
+                )
+                typed_results.append((docs, rt.get("weight", 1.0)))
+            bm25_docs = self._searcher.bm25_search_cases(query, top_k=top_k)
+            cases = merge_case_results(typed_results, bm25_docs, top_k=top_k)
 
         # ── 법리(doctrine) 경로: 판례 역할 기반 소환 ─────
         # 페어링·벡터는 사건 어휘가 지배해 타 도메인 법리 판례(침익 엄격해석,
