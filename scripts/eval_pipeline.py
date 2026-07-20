@@ -186,6 +186,56 @@ def _extract_json(text: str) -> dict:
         return {"error": "parse_failed", "raw_snippet": text[:300]}
 
 
+_CORPUS_CODES: set | None = None
+
+
+def _corpus_code_set() -> set:
+    """코퍼스가 보유한 해석례 코드·판례 사건번호 집합 (1회 구축 캐시)."""
+    global _CORPUS_CODES
+    if _CORPUS_CODES is not None:
+        return _CORPUS_CODES
+    codes: set = set()
+    up = BASE_DIR / "data" / "qa_precedents" / "updates"
+    if up.exists():
+        for p in up.glob("*.jsonl"):
+            m = re.search(r"(\d{2}-\d{4})", p.stem)
+            if m:
+                codes.add(m.group(1))
+    cc = BASE_DIR / "data" / "court_cases"
+    if cc.exists():
+        for p in cc.glob("*.jsonl"):
+            m = re.search(r"(\d{2,4}[다두누도허므]\d+)", p.stem)
+            if m:
+                codes.add(m.group(1))
+    base = BASE_DIR / "data" / "labeled_with_doc.jsonl"
+    if base.exists():
+        try:
+            with open(base, encoding="utf-8") as f:
+                for line in f:
+                    m = re.search(r'"doc_code"\s*:\s*"([^"]{2,20})"', line)
+                    if m:
+                        codes.add(m.group(1))
+        except OSError:
+            pass
+    _CORPUS_CODES = codes
+    return codes
+
+
+def _check_cite_existence(answer: str) -> dict:
+    """답변이 인용한 선례 번호의 코퍼스 실존 로컬 대조.
+
+    eval 부채 청산 판독용(2026-07-20) — spurious_cite(판정자 주관)와 별개의
+    결정론 대조. 코퍼스 밖 인용은 날조 단정이 아니라 cite_verify 큐 후보
+    (실존은 API로만 판명 가능 — eval 중 API 미호출 원칙)."""
+    cited = set(re.findall(r"법제처[^0-9]{0,15}(\d{2}-\d{4})", answer))
+    cited |= set(re.findall(r"(\d{2,4}[다두누도허므]\d{2,6})", answer))
+    corpus = _corpus_code_set()
+    in_corpus = sorted(c for c in cited if c in corpus)
+    out_corpus = sorted(c for c in cited if c not in corpus)
+    return {"cited": sorted(cited), "in_corpus": in_corpus,
+            "out_of_corpus_queue": out_corpus}
+
+
 def run_judge(question: str, ground_truth: str, system_answer: str,
               retrieved_qa_ids: list[str], provider: str = "gemini") -> dict:
     """LLM judge 호출. temperature=0.1로 평가 일관성 확보."""
@@ -281,6 +331,13 @@ def evaluate_case(case: dict, provider: str = "gemini",
         "retrieved_articles": retrieved_articles,
         "retrieved_qa":       retrieved_qa_ids,
         "source_info":        result.get("source_info", {}),
+        # 검증층 (eval 부채 청산 판독용, 2026-07-20 편입)
+        # statute_*: 생성 경로에서 이미 돌던 조문 인용 검증기의 결과 영속화
+        # cite_existence: 답변 인용 선례의 코퍼스 실존 로컬 대조 (API 미호출 —
+        #   코퍼스 밖 인용은 cite_verify 큐 후보로 기록만)
+        "statute_findings":   result.get("statute_findings", []),
+        "statute_regen":      result.get("statute_regen", False),
+        "cite_existence":     _check_cite_existence(result["answer"]),
         # 평가
         "scores":             judge,
     }
