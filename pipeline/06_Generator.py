@@ -46,21 +46,48 @@ _memo_bullets_cache: str = ""
 _statute_quote_mod = None
 
 
-def _strip_role_leakage(article_roles: list, code: str) -> list:
+_SRC_DATE_PAT = re.compile(r"(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})")
+
+
+def _src_after_cutoff(ref: str, as_of_date: str) -> Optional[bool]:
+    """출처 ref 문자열의 날짜가 컷오프 이후인지. 날짜 미검출 시 None(보존)."""
+    dates = _SRC_DATE_PAT.findall(ref or "")
+    if not dates or not as_of_date:
+        return None
+    latest = max(f"{y}-{int(m):02d}-{int(d):02d}" for y, m, d in dates)
+    return latest > as_of_date
+
+
+def _strip_role_leakage(article_roles: list, code: str,
+                        as_of_date: str = "") -> list:
     """LOO eval에서 평가 대상 해석례(code)가 출처인 프레임 요소를 제거한다.
 
     article_roles JSON에는 컷오프 개념이 없어, 평가 대상 자신의 결론이 프레임
     각주로 되돌아 들어오면 leave-one-out이 오염된다(17-0651 ⑥b″ 설계에서 발견).
     requirements·출처 목록은 항목 단위로, article_summary(' / ' 구분)와
     interpretation_logic('\\n\\n' 문단 구분)은 세그먼트 단위로 code 언급분만
-    덜어낸다 — 다른 출처의 각주는 보존."""
+    덜어낸다 — 다른 출처의 각주는 보존.
+
+    시간 축(2026-07-20 확장, 17-0041 R 1.0 leakage 점검에서 발견): 컷오프
+    이후 날짜의 출처(미래 해석례·개정이유)로만 뒷받침되는 항목도 제거한다.
+    날짜가 파싱되지 않는 출처(조문 등)는 보존이 기본값 — 독립 조문 앵커는
+    살아남는다(LOO 생존 설계와 정합)."""
     out = []
     for fr in article_roles:
         fr = json.loads(json.dumps(fr, ensure_ascii=False))
-        fr["requirements"] = [
-            r for r in fr.get("requirements", [])
-            if code not in json.dumps(r, ensure_ascii=False)
-        ]
+        reqs = []
+        for r in fr.get("requirements", []):
+            if code in json.dumps(r, ensure_ascii=False):
+                continue
+            srcs = r.get("role_sources") or []
+            if srcs and as_of_date:
+                flags = [_src_after_cutoff(s.get("ref", ""), as_of_date) for s in srcs]
+                kept = [s for s, f in zip(srcs, flags) if f is not True]
+                if not kept:
+                    continue          # 전 출처가 미래 — 항목째 제거
+                r["role_sources"] = kept
+            reqs.append(r)
+        fr["requirements"] = reqs
         for k in ("interpretation_sources", "role_sources", "related_cases"):
             if isinstance(fr.get(k), list):
                 fr[k] = [s for s in fr[k]
@@ -1640,8 +1667,10 @@ class Generator:
         ) if (law_hints or definition_terms) else []
 
         # LOO eval 누출 차단: 평가 대상 해석례가 출처인 프레임 요소 제거
+        # + 시간 축: 컷오프 이후 출처로만 뒷받침되는 항목 제거 (2026-07-20 확장)
         if as_of_code and article_roles:
-            article_roles = _strip_role_leakage(article_roles, as_of_code)
+            article_roles = _strip_role_leakage(
+                article_roles, as_of_code, as_of_date or "")
 
         # principles 주입: 질의 의미 기반 일반 법리 원칙 검색
         # top_k=5 — 메타 원칙(약칭 재정의 등)이 일반 쿼리와 임베딩 거리 멀어도 잡히도록
@@ -1649,11 +1678,20 @@ class Generator:
 
         # LOO eval 누출 차단: 평가 대상 해석례를 출처로 인용한 원칙 제외
         # (원칙 컬렉션에도 컷오프가 없음 — 프레임과 같은 경로의 오염)
+        # + 시간 축: 날짜가 파싱되는 전 출처가 컷오프 이후인 원칙 제외
         if as_of_code and principles_docs:
-            principles_docs = [
-                p for p in principles_docs
-                if as_of_code not in json.dumps(p, ensure_ascii=False, default=str)
-            ]
+            def _principle_ok(pdoc):
+                blob = json.dumps(pdoc, ensure_ascii=False, default=str)
+                if as_of_code in blob:
+                    return False
+                if as_of_date:
+                    flags = [_src_after_cutoff(s, as_of_date)
+                             for s in re.findall(r"(?:법제처|대법원)[^\"\\]{4,60}", blob)]
+                    dated = [f for f in flags if f is not None]
+                    if dated and all(dated):
+                        return False   # 근거 전부가 미래 — 당시엔 성립 전 원칙
+                return True
+            principles_docs = [p for p in principles_docs if _principle_ok(p)]
 
         # memo 주입: 결정론적 매칭(linked_to/태그) + 의미 검색 병용
         linked_memos   = retriever.fetch_linked_memos(law_docs, qa_docs, case_docs)
