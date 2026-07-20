@@ -2623,6 +2623,34 @@ async def on_region_ordinance_scan(action: cl.Action):
                     continue
                 cands.setdefault(nm, str(l.get("자치법규일련번호", "")))
 
+        # 법령체계도(lsStmd) 레지스트리 보강 — 내장 법령 가족에 매달린 해당 지역
+        # 조례의 공식 열거를 병합한다 (빌드타임 스냅샷: scripts/
+        # build_ordinance_registry.py — 런타임 API 추가 호출 없음). 키워드 제목
+        # 검색이 놓치는 명칭(리모델링 활성화 조례 등)을 '가족 소속'이라는 유관성
+        # 근거로 회수하며, 이후의 모법 인용 검증 퍼널은 동일하게 통과시킨다.
+        try:
+            from pathlib import Path as _P
+            _reg = json.loads((_P(__file__).parent / "data" / "ordinance_registry.json")
+                              .read_text(encoding="utf-8")).get("regions", {})
+            entries = []
+            for rk, v in _reg.items():
+                nk = _norm(rk)
+                if nk == rn or rn.startswith(nk) or nk.startswith(rn):
+                    entries = v
+                    break
+            for e in entries:
+                nm = str(e.get("name", "")).strip()
+                # 지역명 접두 필터는 키워드 경로와 동일 적용 — 광역 키(서울특별시)
+                # 아래 자치구 조례가 묶여 있어, 구 단위 스캔에 시 전체가 딸려오는
+                # 것을 막는다 (강남구 스캔 ← 서울 130건 유입 방지)
+                if not nm or not _norm(nm).startswith(rn) or _norm(nm) in already:
+                    continue
+                if any(b in nm for b in _SCAN_NAME_BLOCK):
+                    continue
+                cands.setdefault(nm, str(e.get("mst", "")))
+        except Exception:
+            pass  # 레지스트리 부재·손상이 스캔 본류를 깨면 안 된다
+
         def _rank(nm: str):
             n = _norm(nm)
             for i, core in enumerate(_SCAN_EXACT_CORE):
