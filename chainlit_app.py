@@ -2651,6 +2651,13 @@ async def on_region_ordinance_scan(action: cl.Action):
         except Exception:
             pass  # 레지스트리 부재·손상이 스캔 본류를 깨면 안 된다
 
+        # 자치구 단위 조례 제외 (2026-07-20 방침): 기준의 본체는 광역 본청
+        # 조례이고 자치구 조례는 노이즈 비중이 크다. 단, 스캔 지역 자체가
+        # 구 단위(강남구 등)로 명시된 경우에는 유지 — 명시 의도 존중.
+        if not rn.endswith(_norm("구")):
+            gu_pat = re.compile(r"^[가-힣]{2,8}(?:특별시|광역시)\s*[가-힣]{1,6}구\s")
+            cands = {nm: mst for nm, mst in cands.items() if not gu_pat.match(nm)}
+
         def _rank(nm: str):
             n = _norm(nm)
             for i, core in enumerate(_SCAN_EXACT_CORE):
