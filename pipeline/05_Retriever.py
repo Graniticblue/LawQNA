@@ -2776,6 +2776,10 @@ class Retriever:
         """law_hints + definition_terms로 조문 해석 프레임 JSON 로드."""
         return load_article_roles(law_hints, definition_terms=definition_terms)
 
+    def explicit_query_hints(self, query: str) -> list[str]:
+        """질의문 명시 「법령명」 조문·별표의 결정론 폴백 힌트 (Pass1 실패 대비)."""
+        return _explicit_query_hints(query)
+
     def detect_blind_spots(self, law_hints: list[str]) -> dict:
         """law_hints 중 DB 미수록 법령(API 패치 가능) + 수동 확인 필요 항목 식별."""
         return self._searcher.detect_blind_spots(law_hints)

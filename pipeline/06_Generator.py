@@ -46,6 +46,41 @@ _memo_bullets_cache: str = ""
 _statute_quote_mod = None
 
 
+def _strip_role_leakage(article_roles: list, code: str) -> list:
+    """LOO eval에서 평가 대상 해석례(code)가 출처인 프레임 요소를 제거한다.
+
+    article_roles JSON에는 컷오프 개념이 없어, 평가 대상 자신의 결론이 프레임
+    각주로 되돌아 들어오면 leave-one-out이 오염된다(17-0651 ⑥b″ 설계에서 발견).
+    requirements·출처 목록은 항목 단위로, article_summary(' / ' 구분)와
+    interpretation_logic('\\n\\n' 문단 구분)은 세그먼트 단위로 code 언급분만
+    덜어낸다 — 다른 출처의 각주는 보존."""
+    out = []
+    for fr in article_roles:
+        fr = json.loads(json.dumps(fr, ensure_ascii=False))
+        fr["requirements"] = [
+            r for r in fr.get("requirements", [])
+            if code not in json.dumps(r, ensure_ascii=False)
+        ]
+        for k in ("interpretation_sources", "role_sources", "related_cases"):
+            if isinstance(fr.get(k), list):
+                fr[k] = [s for s in fr[k]
+                         if code not in json.dumps(s, ensure_ascii=False)]
+        summ = fr.get("article_summary")
+        if isinstance(summ, str) and code in summ:
+            fr["article_summary"] = " / ".join(
+                seg for seg in summ.split(" / ") if code not in seg)
+        logic = fr.get("interpretation_logic")
+        if isinstance(logic, str) and code in logic:
+            fr["interpretation_logic"] = "\n\n".join(
+                seg for seg in logic.split("\n\n") if code not in seg)
+        for k, v in list(fr.items()):
+            if isinstance(v, str) and code in v:
+                fr.pop(k)          # 메타 필드(last_updated_by 등) 잔여 언급 제거
+        if fr.get("requirements") or fr.get("interpretation_logic"):
+            out.append(fr)
+    return out
+
+
 def _load_statute_quote():
     """ingest/statute_quote 로더 — sys.path 상태와 무관하게 파일 경로로 로드.
 
@@ -1571,6 +1606,16 @@ class Generator:
             print("\n[검색] 관련 조문 + 판례 검색 중...")
 
         retriever = self._get_retriever()
+
+        # ── 질의문 명시 조문 폴백 힌트 승격 ──────────────
+        # retrieve() 내부 폴백만으로는 프레임 로딩(get_article_roles)·사각지대
+        # 감지가 Pass 1 힌트 공백을 그대로 물려받는다(17-0651 ⑥b′ 실측: exact
+        # fetch는 회복됐으나 프레임 미주입). 힌트의 모든 소비자가 명시 조문을
+        # 보도록 병합을 여기로 승격한다.
+        for _h in retriever.explicit_query_hints(query):
+            if _h not in law_hints:
+                law_hints.append(_h)
+
         search_query = query
         if triggers:
             search_query += " " + " ".join(triggers[:3])
@@ -1594,9 +1639,21 @@ class Generator:
             law_hints, definition_terms=definition_terms
         ) if (law_hints or definition_terms) else []
 
+        # LOO eval 누출 차단: 평가 대상 해석례가 출처인 프레임 요소 제거
+        if as_of_code and article_roles:
+            article_roles = _strip_role_leakage(article_roles, as_of_code)
+
         # principles 주입: 질의 의미 기반 일반 법리 원칙 검색
         # top_k=5 — 메타 원칙(약칭 재정의 등)이 일반 쿼리와 임베딩 거리 멀어도 잡히도록
         principles_docs = retriever.retrieve_principles(search_query, top_k=5)
+
+        # LOO eval 누출 차단: 평가 대상 해석례를 출처로 인용한 원칙 제외
+        # (원칙 컬렉션에도 컷오프가 없음 — 프레임과 같은 경로의 오염)
+        if as_of_code and principles_docs:
+            principles_docs = [
+                p for p in principles_docs
+                if as_of_code not in json.dumps(p, ensure_ascii=False, default=str)
+            ]
 
         # memo 주입: 결정론적 매칭(linked_to/태그) + 의미 검색 병용
         linked_memos   = retriever.fetch_linked_memos(law_docs, qa_docs, case_docs)
