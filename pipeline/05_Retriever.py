@@ -174,7 +174,14 @@ def _attach_cite_label(meta: dict) -> None:
     elif re.match(r"\d{4}-\d{2}-\d{2}", date):
         date = date[:10].replace("-", ".") + "."
     if org:
-        meta["cite_label"] = f"{org} {date} 회신".replace("  ", " ").strip()
+        label = f"{org} {date} 회신".replace("  ", " ").strip()
+        # 서울시 건축조례 질의회신집 수록분은 출처집을 표기에 명기
+        # ("국토교통부 '12.07.30. 회신/서울시질의회신집" — 2026-07-21 사용자 지정).
+        # 법제처 해석례(NN-NNNN)는 위에서 조기 반환되므로 미적용.
+        src = str(meta.get("source_file", "") or "")
+        if src.startswith(("labeled_with_doc", "seoul_qa")):
+            label += "/서울시질의회신집"
+        meta["cite_label"] = label
     # org조차 없으면 라벨 없음 — 일반 표현으로만 서술됨
 
 
@@ -3082,6 +3089,10 @@ class Retriever:
                     if doc_date:
                         label += f" ({doc_date})"
                     header += f" {label}"
+                # 출처 위계 마커 — T3(중앙부처)·T4(지자체) 회신은 '실무 확인
+                # 사례'로 별도 제시 대상임을 모델에게 표시 (PASS2 출처 원칙 4번)
+                if meta.get("tier") in ("T3", "T4"):
+                    header += f" 〔실무 확인 사례·{meta['tier']}〕"
                 # 인용 표기: 모델이 본문에서 이 선례를 인용할 때 그대로 써야 하는
                 # 문자열(팝업 연결·소독기 보호가 이 표기에 걸려 있음)
                 if meta.get("cite_label"):
