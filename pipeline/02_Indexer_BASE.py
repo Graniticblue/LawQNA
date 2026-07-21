@@ -301,6 +301,9 @@ def load_qa_documents(jsonl_path: Path, source_label: str = "") -> list:
                 "tag":         truncate(tag, 50),
                 "source_file": label,
                 "record_idx":  str(i),
+                # 레코드 명시 인용 표기 — 있으면 리트리버의 자동 생성 대신 이걸 사용
+                # (T3/T4 부처·지자체 회신은 수동 지정 원칙, 2026-07-21)
+                "cite_label":  truncate(rec.get("cite_label", ""), 80),
             }
             doc_id = f"qa_{jsonl_path.stem}_{i}"
             docs.append({"id": doc_id, "text": embed_text, "meta": meta})

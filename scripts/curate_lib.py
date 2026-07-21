@@ -137,6 +137,11 @@ def validate_expc_record(rec: dict) -> list[str]:
         warns.append("search_tags 비어 있음")
     if not rec.get("logic_steps"):
         warns.append("logic_steps 비어 있음")
+    # T3/T4(부처·지자체 회신)는 인용 표기 수동 지정 원칙(2026-07-21) —
+    # 자동 생성 라벨이 비정형 doc_ref에서 깨지기 쉬움
+    if str(rec.get("tier", "")) in ("T3", "T4") and not rec.get("cite_label"):
+        warns.append("T3/T4 레코드에 cite_label 없음 — 인용 표기를 수동 지정할 것 "
+                     "(예: '국토교통부 민원회신-서울특별시 2017.11.21.')")
     return warns
 
 
