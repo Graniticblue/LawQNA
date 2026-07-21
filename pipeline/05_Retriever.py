@@ -3164,6 +3164,11 @@ class Retriever:
                 if dec_date:
                     header_parts.append(f"({dec_date} 선고)")
                 lines.append(f"\n[판례{i}] {' '.join(header_parts)}")
+                if doc.score_type == "doctrine":
+                    lines.append(
+                        "★ 법리 판례 — 질문의 논지(법리 어휘)와 맞아 주입된 판례입니다. "
+                        "해당 법리를 설시하는 단락에서 이 판례를 근거로 반드시 자연 인용하세요."
+                    )
                 if rel_names:
                     lines.append(f"  유형: {rel_names} | 법규: {cited}")
                 lines.append(doc.content)

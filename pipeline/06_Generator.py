@@ -1914,6 +1914,12 @@ class Generator:
             if verbose and (len(qa_docs), len(case_docs)) != before_cut:
                 print(f"  [시점 컷오프 {as_of_date}] 해석례·판례: {before_cut} → ({len(qa_docs)}, {len(case_docs)})")
 
+        # 법리(doctrine) 경로 판례를 목록 앞으로 — 무관 hybrid 판례 뒤 순번에
+        # 묻혀 Pass2가 인용을 생략하는 런 변동 방지 (배포 검증 실측: 2017두73693이
+        # [판례8]로 밀려 미인용, 원칙 텍스트 경유 인용만 남음)
+        case_docs = ([d for d in case_docs if d.score_type == "doctrine"]
+                     + [d for d in case_docs if d.score_type != "doctrine"])
+
         context = retriever.format_context(
             law_docs, qa_docs, case_docs,
             article_roles=article_roles if article_roles else None,
