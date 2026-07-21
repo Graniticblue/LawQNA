@@ -498,6 +498,7 @@ key-value로 정리한다 (예: 지역, 세대수, 용도, 적용 조례, 이전
   "session_facts": {"지역": "남양주시", "규모": "1230세대", "적용 조례": "남양주시 주택 조례"},
   "law_hints": ["건축법 제19조", "건축법 시행령 별표1"],
   "definition_terms": ["대수선", "저당권등"],
+  "doctrine_hints": ["한정적 열거", "비포섭 시 원칙 회귀"],
   "relation_types": [
     {"type": "SCOPE_CL", "reason": "해당 이유 1문장", "weight": 1.0},
     {"type": "REQ_INT",  "reason": "해당 이유 1문장", "weight": 0.7}
@@ -508,7 +509,11 @@ key-value로 정리한다 (예: 지역, 세대수, 용도, 적용 조례, 이전
 ## 주의사항
 - Pass 1에서는 최종 답변을 내리지 마세요
 - 검색 트리거는 구체적이고 명확하게 작성하세요
-- relation_types는 1~N개 (복수 중첩 허용), weight ≥ 0.5인 것만 포함"""
+- relation_types는 1~N개 (복수 중첩 허용), weight ≥ 0.5인 것만 포함
+- doctrine_hints: 사용자 메시지에 [법리 어휘 목록]이 제공된 경우에만 작성 —
+  질문의 사안(제도·시설명)을 벗겨냈을 때 남는 논지가 목록의 계열에 해당하면,
+  그 계열의 어휘를 목록에서 **그대로 복사**해 담는다(변형·창작 금지, 문자 매칭에
+  사용됨). 해당 계열이 없으면 빈 배열 []"""
 
 
 # ============================================================
@@ -929,6 +934,7 @@ def parse_pass1(pass1_text: str) -> dict:
         "relation_types":   [],
         "law_hints":        [],
         "definition_terms": [],
+        "doctrine_hints":   [],
         # 답변 모드 — 비대칭 기본값: 파싱 실패·미출력·오값 전부 "해석"(기존 경로).
         # "산출"은 명시적으로 그 값이 나왔을 때만 발동한다.
         "answer_mode":      "해석",
@@ -965,6 +971,11 @@ def parse_pass1(pass1_text: str) -> dict:
                 t.get("term", str(t)) if isinstance(t, dict) else str(t)
                 for t in raw_terms
             ]
+            raw_doc = data.get("doctrine_hints", [])
+            if isinstance(raw_doc, list):
+                result["doctrine_hints"] = [
+                    str(h)[:60] for h in raw_doc if str(h).strip()
+                ][:8]
             result["relation_types"]   = data.get("relation_types", [])
         except (json.JSONDecodeError, ValueError):
             pass
@@ -1598,6 +1609,26 @@ class Generator:
             except Exception:
                 matched_regions = []
 
+        # ── 법리 어휘 목록 주입 (doctrine_hints 선택지) ─────
+        # 코퍼스의 횡단 판례 doctrine_terms를 인덱스에서 도출해 제공 —
+        # 판례를 학습할 때마다 자동으로 늘어난다. Pass1이 사안어휘 질문을
+        # 논지어휘로 번역할 때 '목록에서 그대로 선택'하게 하여(자유 번역 금지)
+        # doctrine 경로의 문자 매칭이 보장되도록 한다 (남양주형 어휘 직교 해소).
+        try:
+            _vocab = retriever.doctrine_vocab_inventory()
+            if _vocab:
+                _vlines = "\n".join(
+                    f"- {series}: {', '.join(terms)}" for series, terms in _vocab)
+                pass1_query += (
+                    "\n\n## 법리 어휘 목록 (시스템 내장 — doctrine_hints에 활용)\n"
+                    "질문의 사안을 벗겨냈을 때 남는 논지가 아래 계열에 해당하면, "
+                    "해당 어휘를 doctrine_hints에 목록 그대로(변형 없이) 골라 담아라. "
+                    "사안(제도·시설)이 달라도 논지가 같으면 선택한다. 해당 없으면 []:\n"
+                    + _vlines
+                )
+        except Exception:
+            pass
+
         if verbose:
             print("\n[Pass 1] 쟁점 식별 + 관계 유형 분류 중...")
         pass1_text = _call_pass1(PASS1_SYSTEM, pass1_query)
@@ -1611,8 +1642,11 @@ class Generator:
         relation_types   = parsed["relation_types"]
         law_hints        = parsed["law_hints"]
         definition_terms = parsed["definition_terms"]
+        doctrine_hints   = parsed["doctrine_hints"]
         answer_mode      = parsed["answer_mode"]
         session_facts    = parsed["session_facts"]
+        if verbose and doctrine_hints:
+            print(f"→ 논지 힌트: {doctrine_hints}")
 
         # ── 누적 법령 세트(carry_laws): 이미 활용한 법령을 계속 붙잡는다 ──
         # DB 법령은 law_hints에 병합(fetch_exact로 강제 포함), 업로드 조례는 아래
@@ -1668,6 +1702,7 @@ class Generator:
             as_of_date=as_of_date or None,
             exclude_doc_codes=exclude_doc_codes,
             as_of_code=as_of_code or None,
+            doctrine_hints=doctrine_hints if doctrine_hints else None,
         )
 
         # 조문 해석 프레임 로드 (law_hints + definition_terms 모두 사용)

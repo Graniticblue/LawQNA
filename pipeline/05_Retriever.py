@@ -1995,11 +1995,39 @@ class HybridSearcher:
             return domain[:top_k]
         return all_docs[:top_k]
 
+    def doctrine_vocab_inventory(self) -> list[tuple[str, list[str]]]:
+        """횡단 판례의 (계열, doctrine_terms) 목록 — Pass1 doctrine_hints 선택지.
+
+        인덱스 메타데이터에서 도출하므로 판례를 학습할 때마다 자동으로 는다
+        (수동 동기화 없음). 큐레이션의 차기 사건 테스트가 어휘 위생을 담보하는
+        전제 위에서, Pass1은 이 목록에서 어휘를 '그대로' 골라 담는다
+        (문자 매칭이므로 변형하면 불발)."""
+        cached = getattr(self, "_doctrine_vocab_cache", None)
+        if cached is not None:
+            return cached
+        inv: dict[str, list[str]] = {}
+        try:
+            if self._case_col is not None and self._case_col.count() > 0:
+                res = self._case_col.get(include=["metadatas"], limit=5000)
+                for meta in res.get("metadatas", []) or []:
+                    if (meta or {}).get("doctrine_scope") != "횡단":
+                        continue
+                    series = meta.get("doctrine_series") or "기타"
+                    bucket = inv.setdefault(series, [])
+                    for t in (meta.get("doctrine_terms") or "").split("|"):
+                        if t and t not in bucket:
+                            bucket.append(t)
+        except Exception:
+            pass
+        self._doctrine_vocab_cache = sorted(inv.items())
+        return self._doctrine_vocab_cache
+
     def search_cases_by_doctrine(
         self,
         query: str,
         exclude_ids: Optional[set] = None,
         max_hits: int = 3,
+        hints_text: str = "",
     ) -> list[RetrievedDoc]:
         """법리(doctrine) 경로 — 판례 역할 기반 소환.
 
@@ -2011,7 +2039,9 @@ class HybridSearcher:
         if self._case_col is None or self._case_col.count() == 0:
             return []
         exclude_ids = exclude_ids or set()
-        q_norm = re.sub(r"\s+", "", query)
+        # 매칭 대상 = 질의문 + Pass1 논지 힌트 (사안어휘 질의→논지어휘 레코드의
+        # 직교를 잇는 다리 — 임베딩 정렬은 원문 질의 그대로 유지)
+        q_norm = re.sub(r"\s+", "", query + " " + (hints_text or ""))
         try:
             res = self._case_col.query(
                 query_embeddings=[self._embed_text(query)],
@@ -2286,6 +2316,7 @@ class Retriever:
         as_of_date: Optional[str] = None,
         exclude_doc_codes: Optional[set] = None,
         as_of_code: Optional[str] = None,
+        doctrine_hints: Optional[list[str]] = None,
     ) -> tuple[list[RetrievedDoc], list[RetrievedDoc], list[RetrievedDoc]]:
         """
         Parameters
@@ -2447,6 +2478,7 @@ class Retriever:
         # ── 판례 검색 (court_cases, PLAN §4.2) ────────────
         case_docs = self._search_cases(
             query, all_laws, relation_types, top_k_case, as_of_date=as_of_date,
+            doctrine_hints=doctrine_hints,
         )
 
         # 항(①②③) 단위 청크를 전체 조문으로 재구성 — 답변·표시에 조문 전체 제공
@@ -2514,6 +2546,7 @@ class Retriever:
         relation_types: Optional[list[dict]],
         top_k: int,
         as_of_date: Optional[str] = None,
+        doctrine_hints: Optional[list[str]] = None,
     ) -> list[RetrievedDoc]:
         """
         weight ≥ 0.5인 유형별로 (법규 × 유형) 쌍 검색 후 RRF 병합.
@@ -2552,7 +2585,8 @@ class Retriever:
         # 캡을 채워 한계 판례(2024두50421류)가 밀리는 편향 실측, case_id 중복 제거).
         have_ids = {c.metadata.get("case_id", "") for c in cases}
         cases.extend(self._searcher.search_cases_by_doctrine(
-            query, exclude_ids=have_ids, max_hits=3))
+            query, exclude_ids=have_ids, max_hits=3,
+            hints_text=" ".join(doctrine_hints or [])))
 
         # 시점 컷오프: 판결일이 미래인 판례 제외 (eval 전용)
         if as_of_date:
@@ -2584,6 +2618,10 @@ class Retriever:
                 continue
             out.append(d)
         return out
+
+    def doctrine_vocab_inventory(self) -> list[tuple[str, list[str]]]:
+        """횡단 판례 (계열, 법리 어휘) 목록 — Pass1 doctrine_hints 선택지 위임."""
+        return self._searcher.doctrine_vocab_inventory()
 
     def retrieve_memos(self, query: str, top_k: int = 3) -> list[dict]:
         """질의와 관련된 해석 원칙 메모 검색 (memos 컬렉션)."""
