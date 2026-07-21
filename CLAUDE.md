@@ -22,8 +22,10 @@
 
 ## 자주 쓰는 명령
 
-- 로컬 재인덱싱: `PYTHONIOENCODING=utf-8 REINDEX_QA=1 python startup.py` (UTF-8 없으면 조용히 실패 — tail로 완주 확인)
+- 재인덱싱 3종: `REINDEX_QA=1`(해석례·회신) / `REINDEX_AUX=1`(개정이력·메모·원칙) / `FORCE_REINDEX=1`(전량 — 법령 추가 후 필수).
+  모두 `PYTHONIOENCODING=utf-8 <플래그> python startup.py` (UTF-8 없으면 조용히 실패 — tail로 완주 확인)
 - 판례 인덱싱: `python ingest/ingest_court_cases.py`
+- 법령 추가: `python ingest/ingest_law_from_api.py --law "법령명"` (`--dry-run` 먼저) → FORCE_REINDEX
 - 스키마 self-test: `python scripts/curate_lib.py` → "신규 스키마 위반 0" 확인 후 커밋
 - 시제 게이트: `python scripts/check_temporal_drift.py --code XX-XXXX` (exit 2 = 커밋 금지)
 - 검수 보고서: `python scripts/make_ingest_report.py --code XX-XXXX` / `--case 사건번호`
