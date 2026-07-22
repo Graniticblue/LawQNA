@@ -1,11 +1,6 @@
 {
   "indexed": [
     {
-      "file": "seoul_reasoning_v9_final.jsonl",
-      "count": 1029,
-      "date": "2026-03-31"
-    },
-    {
       "file": "labeled_with_doc.jsonl",
       "count": 859,
       "date": "2026-07-22"
