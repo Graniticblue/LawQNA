@@ -3122,6 +3122,10 @@ class Retriever:
                 header = f"\n[해석례{i}]"
                 if doc_ref:
                     header += f" {doc_ref}"
+                    # 회신일 병기 — 날짜 미제공 시 모델이 인용 날짜를 창작하는
+                    # 것을 차단 (19-0240 ⑥b에서 실증, 2026-07-22 공동 결정)
+                    if doc_date:
+                        header += f" (회신 {doc_date})"
                 elif doc_agency:
                     label = doc_agency
                     if doc_date:
