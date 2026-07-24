@@ -200,7 +200,18 @@ LAW_ABBREV_MAP: dict[str, str] = {
     "주차장법":        "주차장법",
     "도시정비법":      "도시 및 주거환경정비법",
     "도시정비법시행령": "도시 및 주거환경정비법 시행령",
+    "주택공급규칙":     "주택공급에 관한 규칙",
+    "민간임대주택법":   "민간임대주택에 관한 특별법",
+    "국토계획법시행규칙": "국토의 계획 및 이용에 관한 법률 시행규칙",
 }
+
+# 풀네임(공백 제거) → 약칭 역매핑 — article_roles 프레임 파일명(약칭)과
+# Pass1이 내보내는 법령 정식 풀네임 힌트를 잇는다. 긴 정식명(시행령/시행규칙)이
+# 먼저 매칭되도록 길이 내림차순 정렬. (LAW_ABBREV_MAP 재사용 — 별도 맵 신설 금지)
+_ABBREV_BY_FULL: list[tuple[str, str]] = sorted(
+    ((v.replace(" ", ""), k) for k, v in LAW_ABBREV_MAP.items()),
+    key=lambda t: -len(t[0]),
+)
 
 # 판례-법령 관계 7가지 유형 (PLAN §1)
 RELATION_TYPES: dict[str, str] = {
@@ -539,10 +550,19 @@ def _delegation_hints(law_docs, max_hints: int = 6) -> list[str]:
 def _normalize_article_key(hint: str) -> str:
     """
     "건축법 시행령 제86조제2항" → "건축법시행령_제86조"
+    "국토의 계획 및 이용에 관한 법률 시행령 제93조" → "국토계획법시행령_제93조"
     파일명 prefix 매칭용 키로 변환.
+
+    Pass1은 법령 정식 풀네임을 내보내지만 프레임 파일명은 약칭이므로,
+    LAW_ABBREV_MAP(역방향)으로 풀네임 prefix를 약칭으로 치환한 뒤 키를 만든다.
     """
     # 공백 제거 후 첫 번째 "제XX조" 이후를 잘라냄
     key = hint.replace(" ", "").replace("「」", "")
+    # 풀네임 → 약칭 (긴 정식명 우선). 기존 LAW_ABBREV_MAP 재사용 — 별도 맵 신설 금지
+    for full_nospace, abbrev in _ABBREV_BY_FULL:
+        if key.startswith(full_nospace):
+            key = abbrev + key[len(full_nospace):]
+            break
     m = re.match(r'([가-힣]+)(제\d+조)', key)
     if m:
         return f"{m.group(1)}_{m.group(2)}"
