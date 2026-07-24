@@ -566,6 +566,10 @@ def _normalize_article_key(hint: str) -> str:
     m = re.match(r'([가-힣]+)(제\d+조)', key)
     if m:
         return f"{m.group(1)}_{m.group(2)}"
+    # 별표 프레임(예: 국토계획법시행령_별표4)도 언더스코어 키로 정규화
+    m2 = re.match(r'([가-힣]+)(별표\d+(?:의\d+)?)', key)
+    if m2:
+        return f"{m2.group(1)}_{m2.group(2)}"
     return key
 
 
