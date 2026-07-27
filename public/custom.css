@@ -359,7 +359,7 @@ button:has(svg[class*="-moon"]) {
     position: fixed;
     left: 320px;                 /* 좌측 대화 사이드바 폭(기본 20rem) */
     right: var(--usun-rb-w);     /* 우측 바 폭 */
-    top: 112px;                  /* 로고(상단 헤더) 아래 — 상단부 배치 */
+    bottom: 140px;               /* 질문창(입력창) 바로 위에 배치 */
     z-index: 15;
     display: grid;
     grid-template-columns: repeat(3, 1fr);   /* 균등 3열 */
@@ -437,11 +437,12 @@ button:has(svg[class*="-moon"]) {
     z-index: 20;
 }
 
-/* 회사 로고 — 웰컴 화면 최상단 헤더로 고정(중앙에서 빼내 카드와 겹침 제거).
-   insertLogo가 인라인 스타일을 주므로 위치 관련만 !important로 덮어쓴다. */
+/* 회사 로고 — 웰컴 화면 세로 중앙(히어로)에 고정. 카드는 질문창 위(하단)로
+   내려서 겹치지 않는다. insertLogo가 주는 인라인 스타일을 위치만 !important로 덮어씀. */
 #usun-logo-wrap {
     position: fixed !important;
-    top: 30px !important;
+    top: 50% !important;
+    transform: translateY(-50%) !important;
     left: 320px !important;
     right: var(--usun-rb-w) !important;
     width: auto !important;
