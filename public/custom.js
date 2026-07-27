@@ -22,38 +22,9 @@
     }
 
     function removeLogo() {
+        // 구버전(#usun-logo-wrap) 로고 잔재 정리용 — 현재 로고는 웰컴 오버레이 안에서 렌더
         const wrap = document.getElementById(LOGO_WRAP_ID);
         if (wrap) wrap.remove();
-    }
-
-    function insertLogo() {
-        if (document.getElementById(LOGO_WRAP_ID)) return;
-        if (hasMessages()) return;  // 메시지 있으면 삽입 안 함
-
-        const submitBtn = document.getElementById('chat-submit');
-        if (!submitBtn) return;
-
-        const inputBox = submitBtn.parentElement?.parentElement?.parentElement;
-        if (!inputBox || !inputBox.parentNode) return;
-
-        const wrap = document.createElement('div');
-        wrap.id = LOGO_WRAP_ID;
-        wrap.style.cssText = [
-            'width: 100%',
-            'max-width: ' + inputBox.getBoundingClientRect().width + 'px',
-            'margin: 0 auto 10px auto',
-            'display: flex',
-            'justify-content: center',
-        ].join(';');
-
-        const img = document.createElement('img');
-        img.id = 'usun-logo';
-        img.src = 'https://www.usun.co.kr/assets/images/logo.png';
-        img.alt = 'usun';
-        img.style.cssText = 'max-height: 52px; max-width: 200px; object-fit: contain;';
-
-        wrap.appendChild(img);
-        inputBox.parentNode.insertBefore(wrap, inputBox);
     }
 
     // ── 추천질문 → 웰컴 카드 (6개, 1/1/2/2 고정크기 그리드, 화면 중앙) ──────────
@@ -581,9 +552,9 @@
             sec('세션');
             mk('new-chat-btn', '✏️ 새 대화', newChat);
             sec('내보내기');
-            mk('export-md-btn', '⬇️ 마크다운', downloadChat);
-            mk('export-pdf-btn', '⬇️ PDF', exportPdf);
-            mk('export-txt-btn', '⬇️ TXT', downloadChatTxt);
+            mk('export-md-btn', '📝 마크다운', downloadChat);
+            mk('export-pdf-btn', '📕 PDF', exportPdf);
+            mk('export-txt-btn', '📄 TXT', downloadChatTxt);
             sec('답변');
             mk('evidence-btn', '🔎 근거 더 찾기', findMoreEvidence);
             mk('regen-btn', '♻️ 답변 재생성', regenerateAnswer);
