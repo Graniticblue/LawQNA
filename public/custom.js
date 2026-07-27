@@ -498,11 +498,16 @@
             });
             if (!picks.length) return;
             ov.style.display = 'none';
-            var msg = lastQ
-                + '\n\n(아래 판례·법령해석례를 근거로 함께 검토하여 위 질문에 다시 답변해줘. '
-                + '각 자료의 실제 판시·회답 취지를 확인해 적용하되, 관련 없으면 배제해도 좋아.)\n'
+            var evText = '[사용자가 검토를 요청한 추가 참고자료 — 판례·법령해석례]\n'
+                + '아래 자료의 실제 판시·회답 취지를 확인해 관련 있으면 근거로 반영하고, 관련 없으면 배제하라.\n'
                 + picks.map(function (p, i) { return (i + 1) + '. ' + p; }).join('\n');
-            sendPrompt(msg);
+            // 근거는 서버 세션에 숨겨 담고(화면 미노출), 메시지는 원 질문만 전송
+            fetch('/evidence-context', {
+                method: 'POST', credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: evText }),
+            }).then(function () { sendPrompt(lastQ); })
+                .catch(function () { sendPrompt(lastQ); });
         });
     }
 

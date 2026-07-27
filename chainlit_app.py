@@ -94,6 +94,10 @@ _PROVIDER_PREF: dict = {}
 # anon_id로 읽는다(_PROVIDER_PREF와 동일 패턴). 새 대화(on_chat_start) 시 초기화.
 _MONITOR_REFS: dict = {}   # {anon_id: {"law": {id:{label,n}}, "interp": {...}, "case": {...}}}
 
+# 근거 더 찾기 — 사용자가 선택한 참고자료를 다음 질의의 extra_context로 '숨겨' 주입.
+# 프런트가 화면엔 원 질문만 보내고 이 텍스트를 여기 담아두면, on_message가 꺼내 주입 후 비운다.
+_PENDING_EVIDENCE: dict = {}   # {anon_id: 참고자료 지시 블록 텍스트}
+
 
 def _record_monitor_refs(result: dict) -> None:
     """이번 답변의 검색된 출처(법령/해석례/판례)를 현재 세션 누적본에 병합."""
@@ -400,6 +404,19 @@ try:
         cands = await _asyncio.to_thread(_search, kws)
         return JSONResponse({"keywords": kws, "candidates": cands[:20]})
 
+    # 근거 더 찾기 — 선택한 참고자료를 다음 질의에 '숨겨' 주입하도록 세션에 저장(화면 미노출)
+    @_cl_server_app.post("/evidence-context")
+    async def _evidence_context(request: Request):
+        key = request.cookies.get("anon_id", "")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        text = ((body or {}).get("text", "") or "").strip()[:8000]
+        if key and text:
+            _PENDING_EVIDENCE[key] = text
+        return JSONResponse({"ok": bool(key and text)})
+
     # 업로드 캐시 조회/삭제 (헤더 버튼 모달 — anon_id 쿠키로 본인 것만)
     def _upload_col(key: str):
         import chromadb
@@ -586,7 +603,8 @@ try:
     _MY_PATHS = {"/element-files/{object_key:path}", "/law-list", "/upload-cache",
                  "/upload-cache/delete", "/upload-cache/add", "/upload-cache/recache",
                  "/provider", "/starters-meta", "/monitor",
-                 "/law-search", "/law-add", "/monitor-rescan", "/evidence-search"}
+                 "/law-search", "/law-add", "/monitor-rescan", "/evidence-search",
+                 "/evidence-context"}
     _front = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") in _MY_PATHS]
     _rest  = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") not in _MY_PATHS]
     _cl_server_app.router.routes[:] = _front + _rest
@@ -2199,6 +2217,15 @@ async def on_message(message: cl.Message):
     # 히스토리 + 세션 사실표에서 연속 질의 맥락 구성
     history = cl.user_session.get("history", [])
     extra_context = _history_context(history, cl.user_session.get("session_facts") or {})
+    # 근거 더 찾기로 선택한 참고자료를 화면 노출 없이 주입(1회용)
+    try:
+        _euser = cl.user_session.get("user")
+        _ekey = getattr(_euser, "identifier", "") if _euser else ""
+        _ev = _PENDING_EVIDENCE.pop(_ekey, None) if _ekey else None
+        if _ev:
+            extra_context = (extra_context + "\n\n" if extra_context else "") + _ev
+    except Exception:
+        pass
 
     session_id = cl.user_session.get("upload_key", "")
     # provider별 라벨 — gemma_forced 케이스에서 이미 설정된 model_label은 보존
