@@ -297,8 +297,11 @@
     function renderModelButton() {
         var btn = document.getElementById('model-select-btn');
         if (!btn) return;
-        btn.textContent = modelLabel(currentModel()) + ' ▾';
-        btn.title = '답변 모델 선택';
+        // 동일값이면 DOM을 건드리지 않는다 — 매 mutation마다 textContent를 재설정하면
+        // 그 자체가 childList 변경이라 MutationObserver→update→재설정 무한루프가 된다.
+        var txt = modelLabel(currentModel()) + ' ▾';
+        if (btn.textContent !== txt) btn.textContent = txt;
+        if (btn.title !== '답변 모델 선택') btn.title = '답변 모델 선택';
     }
 
     function pushModel(p) {
@@ -393,12 +396,15 @@
         return bar;
     }
 
-    // 기준점으로만 쓰던 'Readme' 링크는 이제 불필요 — 보이면 숨긴다
+    // 기준점으로만 쓰던 'Readme' 링크는 이제 불필요 — 보이면 숨긴다.
+    // 한 번 숨기면 종료(매 mutation마다 전체 DOM 스캔하지 않도록).
+    var _readmeHidden = false;
     function hideReadme() {
+        if (_readmeHidden) return;
         try {
             var readme = Array.prototype.slice.call(document.querySelectorAll('button, a'))
                 .find(function (el) { return el.textContent.trim() === 'Readme'; });
-            if (readme) readme.style.display = 'none';
+            if (readme) { readme.style.display = 'none'; _readmeHidden = true; }
         } catch (e) { }
     }
 
@@ -409,8 +415,7 @@
                 && document.getElementById('upload-cache-btn')
                 && document.getElementById('chat-save-btn')
                 && document.getElementById('model-select-btn')) {
-                renderModelButton();   // 라벨만 최신화
-                return;
+                return;   // 이미 다 있음 — DOM 건드리지 않는다(매 mutation마다 호출되므로)
             }
             function mk(id, text, handler) {
                 if (document.getElementById(id)) return;
