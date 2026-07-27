@@ -117,6 +117,15 @@
             ov = document.createElement('div');
             ov.id = 'usun-welcome-cards';
             ov.dataset.sig = sig;
+            // 그룹 상단: 회사 로고 (오버레이 안에 함께 두어 카드와 한 묶음으로 중앙 정렬)
+            var logo = document.createElement('img');
+            logo.className = 'usun-wc-logo';
+            logo.src = 'https://www.usun.co.kr/assets/images/logo.png';
+            logo.alt = 'usun';
+            ov.appendChild(logo);
+            // 그 아래: 카드 그리드
+            var grid = document.createElement('div');
+            grid.className = 'usun-wc-grid';
             labels.forEach(function (label) {
                 var info = meta[label] || {};
                 var t = info.type || '';
@@ -147,8 +156,9 @@
                     })[0];
                     if (tgt) tgt.click();   // 전송은 chainlit 네이티브 핸들러에 위임
                 });
-                ov.appendChild(card);
+                grid.appendChild(card);
             });
+            ov.appendChild(grid);
             document.body.appendChild(ov);   // body = React 트리 밖 → 크래시 안전
         }
         // 네이티브 스타터는 개별 버튼만 숨김(컨테이너·형제 불건드림) + 컴포저 하단 고정
@@ -573,11 +583,10 @@
         insertRightBarButtons();
         hideReadme();
         if (hasMessages()) {
-            removeLogo();
+            removeLogo();   // 혹시 남은 구버전 로고(#usun-logo-wrap) 정리
             teardownWelcomeCards();
         } else {
-            try { buildWelcomeCards(); } catch (e) { }   // 실패해도 로고·바는 살림
-            insertLogo();
+            try { buildWelcomeCards(); } catch (e) { }   // 로고+카드 묶음(오버레이) 렌더
         }
         insertSidebarResizeHandle();
         killDarkMode();
