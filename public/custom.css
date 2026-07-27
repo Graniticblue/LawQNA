@@ -348,67 +348,61 @@ button:has(svg[class*="-moon"]) {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   가운데 추천질문 카드 그리드 (6개, 1/1/2/2 · 유형 딱지 + 제목)
+   추천질문 카드 그리드 (6개, 1/1/2/2 · 유형 딱지 + 제목)
+   네이티브 스타터 버튼을 '제자리에서' 카드로 restyle (구조 변경 없음).
+   JS가 컨테이너에 .usun-starter-gridded, 각 버튼에 .usun-starter-card +
+   data-usun-type 를 부여 → 여기서 그리드·카드·딱지를 그린다.
    ═══════════════════════════════════════════════════════════════ */
-#usun-starter-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-    width: 100%;
-    max-width: 680px;
-    margin: 4px auto 18px auto;
+.usun-starter-gridded {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 12px !important;
+    width: 100% !important;
+    max-width: 680px !important;
+    margin: 0 auto !important;
+    overflow: visible !important;   /* 기존 가로스크롤 해제 */
 }
 
-/* 히어로: 처음 두 장은 가로 꽉 차게 → 세로배열 1 / 1 / 2 / 2 */
-#usun-starter-grid .usun-card:nth-child(1),
-#usun-starter-grid .usun-card:nth-child(2) {
-    grid-column: 1 / -1;
+.usun-starter-card {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    justify-content: flex-start !important;
+    gap: 8px !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-width: none !important;
+    padding: 15px 17px !important;
+    border: 1px solid #e5e9f0 !important;
+    border-radius: 14px !important;
+    text-align: left !important;
+    white-space: normal !important;
 }
 
-.usun-card {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
-    padding: 15px 17px;
-    background: #fff;
-    border: 1px solid #e5e9f0;
-    border-radius: 14px;
-    cursor: pointer;
-    text-align: left;
-    transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
+.usun-starter-card:hover {
+    border-color: #1565C0 !important;
+    box-shadow: 0 4px 16px rgba(21, 101, 192, 0.10) !important;
 }
 
-.usun-card:hover {
-    border-color: #1565C0;
-    box-shadow: 0 4px 16px rgba(21, 101, 192, 0.10);
-    transform: translateY(-1px);
+/* 카드 안 라벨(chainlit p.truncate) 말줄임 해제 → 제목 여러 줄 허용 */
+.usun-starter-card p.truncate {
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
 }
 
-.usun-card-chip {
-    display: inline-block;
+/* 유형 딱지 — data 속성값을 CSS ::before로 (DOM 삽입 없이 렌더) */
+.usun-starter-card[data-usun-type]::before {
+    content: attr(data-usun-type);
+    order: -1;
+    align-self: flex-start;
     font-size: 11px;
     font-weight: 700;
     color: #1565C0;
     background: #E9F1FB;
     border-radius: 999px;
     padding: 2px 10px;
-    letter-spacing: 0.01em;
 }
-
-/* 유형별 딱지 색 (매칭 안 되면 기본 파랑) */
-.usun-card-chip[data-type="기준·수치"] { color: #00695C; background: #E1F1EE; }
-.usun-card-chip[data-type="해석·적용"] { color: #6A1B9A; background: #F1E9F7; }
-.usun-card-chip[data-type="절차"]      { color: #B26A00; background: #FBF0DE; }
-
-.usun-card-title {
-    font-size: 14.5px;
-    font-weight: 600;
-    color: #1f2937;
-    line-height: 1.35;
-}
-
-/* 네이티브 스타터(우리 그리드로 대체)는 숨김 — 클릭 위임용으로 DOM엔 남긴다 */
-.usun-native-starters-hidden {
-    display: none !important;
-}
+.usun-starter-card[data-usun-type="기준·수치"]::before { color: #00695C; background: #E1F1EE; }
+.usun-starter-card[data-usun-type="해석·적용"]::before { color: #6A1B9A; background: #F1E9F7; }
+.usun-starter-card[data-usun-type="절차"]::before      { color: #B26A00; background: #FBF0DE; }

@@ -53,26 +53,21 @@
         img.style.cssText = 'max-height: 52px; max-width: 200px; object-fit: contain;';
 
         wrap.appendChild(img);
-        // 카드 그리드가 있으면 그 위에(로고 → 그리드 → 입력창 순), 없으면 입력창 위에
-        var anchor = document.getElementById('usun-starter-grid') || inputBox;
-        inputBox.parentNode.insertBefore(wrap, anchor);
+        inputBox.parentNode.insertBefore(wrap, inputBox);
     }
 
-    // ── 추천질문 → 가운데 카드 그리드 (6개, 1/1/2/2 · 유형 딱지 + 제목) ──────
-    // chainlit이 렌더한 네이티브 스타터 버튼은 숨기고, 그 라벨을 읽어 카드 그리드를
-    // 새로 만든다. 카드 클릭은 라벨이 일치하는 네이티브 버튼의 .click()에 위임 →
-    // 전송 동작은 chainlit 것 그대로라 안정적. 유형(딱지)은 /starters-meta에서 받는다.
+    // ── 추천질문 → 카드 그리드 (6개, 1/1/2/2 · 유형 딱지 + 제목) ──────────────
+    // React 트리를 구조적으로 건드리면(노드 삽입·컨테이너 숨김) 재조정 중 크래시로
+    // 화면이 하얗게 죽는다 → 네이티브 스타터를 '그 자리에서 스타일만' 카드로 바꾼다.
+    // 클릭은 네이티브 버튼 그대로(전송 동작 유지). 유형 딱지는 data-속성 + CSS ::before,
+    // 유형값은 /starters-meta에서 받는다. (v2에서 검증된 style-only 방식)
     var _startersMeta = null, _metaFetched = false;
     function loadStartersMeta() {
         if (_metaFetched) return;
         _metaFetched = true;
         fetch('/starters-meta')
             .then(function (r) { return r.json(); })
-            .then(function (m) {
-                _startersMeta = m || {};
-                var g = document.getElementById('usun-starter-grid');
-                if (g) g.remove();   // 딱지 포함해 다음 update에 재빌드
-            })
+            .then(function (m) { _startersMeta = m || {}; })
             .catch(function () { _startersMeta = {}; });
     }
 
@@ -88,68 +83,20 @@
         return ((p ? p.textContent : btn.textContent) || '').trim();
     }
 
-    function removeStarterGrid() {
-        var g = document.getElementById('usun-starter-grid');
-        if (g) g.remove();
-    }
-
     function layoutStarterGrid() {
         var nat = nativeStarterButtons();
-        if (nat.length < 1) { removeStarterGrid(); return; }   // 대화 시작 등 — 불필요
-
-        var labels = nat.map(starterLabel);
-        var sig = labels.join('|');
-        var grid = document.getElementById('usun-starter-grid');
-        if (grid && grid.dataset.sig === sig) {
-            // 이미 동일 구성 — 네이티브 컨테이너 숨김만 유지
-            if (nat[0].parentElement) nat[0].parentElement.classList.add('usun-native-starters-hidden');
-            return;
-        }
-        if (grid) grid.remove();
-
+        if (nat.length < 1) return;
+        var c = nat[0].parentElement;
+        if (!c) return;
+        // 컨테이너 → 그리드 (구조 변경 없이 class/style만 — React 크래시 안전)
+        c.classList.add('usun-starter-gridded');
         var meta = _startersMeta || {};
-        grid = document.createElement('div');
-        grid.id = 'usun-starter-grid';
-        grid.dataset.sig = sig;
-
-        labels.forEach(function (label) {
-            var card = document.createElement('button');
-            card.type = 'button';
-            card.className = 'usun-card';
-            var type = meta[label] || '';
-            if (type) {
-                var chip = document.createElement('span');
-                chip.className = 'usun-card-chip';
-                chip.setAttribute('data-type', type);
-                chip.textContent = type;
-                card.appendChild(chip);
-            }
-            var title = document.createElement('span');
-            title.className = 'usun-card-title';
-            title.textContent = label;
-            card.appendChild(title);
-            // 클릭 위임: 클릭 시점에 라벨로 네이티브 버튼을 재탐색해 .click()
-            card.addEventListener('click', function () {
-                var target = nativeStarterButtons().filter(function (b) {
-                    return starterLabel(b) === label;
-                })[0];
-                if (target) target.click();
-            });
-            grid.appendChild(card);
+        nat.forEach(function (b, i) {
+            b.classList.add('usun-starter-card');
+            b.style.gridColumn = (i < 2) ? '1 / -1' : '';   // 앞 2장 가로 꽉 → 1/1/2/2
+            var t = meta[starterLabel(b)];
+            if (t) b.setAttribute('data-usun-type', t);
         });
-
-        // 입력창 위(로고 아래)에 삽입
-        var submitBtn = document.getElementById('chat-submit');
-        var inputBox = submitBtn && submitBtn.parentElement
-            && submitBtn.parentElement.parentElement
-            && submitBtn.parentElement.parentElement.parentElement;
-        if (inputBox && inputBox.parentNode) {
-            inputBox.parentNode.insertBefore(grid, inputBox);
-        } else if (nat[0].parentElement && nat[0].parentElement.parentNode) {
-            nat[0].parentElement.parentNode.insertBefore(grid, nat[0].parentElement);
-        }
-        // 네이티브 스타터 컨테이너 숨김 (버튼은 .click() 위임용으로 DOM에 남김)
-        if (nat[0].parentElement) nat[0].parentElement.classList.add('usun-native-starters-hidden');
     }
 
     // ── 내장 법령 목록: 상단 헤더 버튼(Readme 옆) + 모달 팝업 ──────
@@ -565,7 +512,6 @@
         hideReadme();
         if (hasMessages()) {
             removeLogo();
-            removeStarterGrid();
         } else {
             try { layoutStarterGrid(); } catch (e) { }   // 실패해도 로고·바는 살림
             insertLogo();
