@@ -359,14 +359,13 @@ button:has(svg[class*="-moon"]) {
     position: fixed;
     left: 320px;                 /* 좌측 대화 사이드바 폭(기본 20rem) */
     right: var(--usun-rb-w);     /* 우측 바 폭 */
-    top: 46%;
-    transform: translateY(-50%);
+    top: 112px;                  /* 로고(상단 헤더) 아래 — 상단부 배치 */
     z-index: 15;
     display: grid;
     grid-template-columns: repeat(3, 1fr);   /* 균등 3열 */
-    grid-auto-rows: 150px;                     /* 2행, 박스 높이 고정 */
-    gap: 14px;
-    max-width: 940px;
+    grid-auto-rows: 104px;                     /* 2행, 박스 높이 고정(≈2/3) */
+    gap: 10px;
+    max-width: 630px;            /* ≈2/3 폭 → 카드 가로도 축소 */
     margin: 0 auto;              /* 콘텐츠 영역 안에서 그리드 가로 중앙 */
     pointer-events: none;        /* 빈 영역 클릭은 통과, 카드만 활성 */
 }
@@ -378,11 +377,11 @@ button:has(svg[class*="-moon"]) {
     flex-direction: column;
     align-items: flex-start;
     justify-content: flex-start;
-    gap: 6px;
-    padding: 13px 15px;
+    gap: 5px;
+    padding: 10px 12px;
     background: #fff;
     border: 1px solid #e5e9f0;
-    border-radius: 14px;
+    border-radius: 12px;
     cursor: pointer;
     text-align: left;
     overflow: hidden;
@@ -396,32 +395,32 @@ button:has(svg[class*="-moon"]) {
 }
 
 .usun-wc-chip {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 700;
     color: #1565C0;
     background: #E9F1FB;
     border-radius: 999px;
-    padding: 2px 10px;
+    padding: 2px 8px;
 }
 .usun-wc-chip[data-usun-type="기준·수치"] { color: #00695C; background: #E1F1EE; }
 .usun-wc-chip[data-usun-type="해석·적용"] { color: #6A1B9A; background: #F1E9F7; }
 .usun-wc-chip[data-usun-type="절차"]      { color: #B26A00; background: #FBF0DE; }
 
 .usun-wc-title {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
     color: #1f2937;
     line-height: 1.3;
 }
 
-/* 상세 질의문 (클릭 시 입력될 실제 질문) — 3줄까지, 넘치면 말줄임 */
+/* 상세 질의문 (클릭 시 입력될 실제 질문) — 2줄까지, 넘치면 말줄임 */
 .usun-wc-desc {
-    font-size: 12px;
+    font-size: 11px;
     color: #6b7280;
     line-height: 1.4;
     display: -webkit-box;
-    -webkit-line-clamp: 3;
-    line-clamp: 3;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
 }
@@ -436,4 +435,17 @@ button:has(svg[class*="-moon"]) {
     max-width: 760px !important;
     width: auto !important;
     z-index: 20;
+}
+
+/* 회사 로고 — 웰컴 화면 최상단 헤더로 고정(중앙에서 빼내 카드와 겹침 제거).
+   insertLogo가 인라인 스타일을 주므로 위치 관련만 !important로 덮어쓴다. */
+#usun-logo-wrap {
+    position: fixed !important;
+    top: 30px !important;
+    left: 320px !important;
+    right: var(--usun-rb-w) !important;
+    width: auto !important;
+    max-width: none !important;
+    margin: 0 !important;
+    z-index: 16;
 }
