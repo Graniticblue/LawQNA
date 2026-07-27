@@ -145,15 +145,17 @@ def _record_monitor_refs(result: dict) -> None:
         pass
 
 
-def _monitor_add_law(label: str) -> None:
+def _monitor_add_law(label: str, key: str = None) -> None:
     """API 캐싱·수동추가로 확보한 법령을 모니터링에 '앞으로 참고할' 항목으로 등재.
-    (모니터링은 '사용한 것'뿐 아니라 '사용할 것'까지 담는다.)"""
+    (모니터링은 '사용한 것'뿐 아니라 '사용할 것'까지 담는다.)
+    key를 직접 주면 세션 밖(엔드포인트)에서도 기록 가능(쿠키 anon_id)."""
     try:
         label = (label or "").strip()
         if not label:
             return
-        user = cl.user_session.get("user")
-        key = getattr(user, "identifier", "") if user else ""
+        if key is None:
+            user = cl.user_session.get("user")
+            key = getattr(user, "identifier", "") if user else ""
         if not key:
             return
         bucket = _MONITOR_REFS.setdefault(key, {"law": {}, "interp": {}, "case": {}})["law"]
@@ -229,6 +231,93 @@ try:
             "interp": _ser(data.get("interp", {})),
             "case":   _ser(data.get("case", {})),
         })
+
+    # 모니터링 수동추가 — 법령/조례 검색 (법제처 API, 읽기 전용)
+    @_cl_server_app.get("/law-search")
+    async def _law_search(request: Request):
+        import asyncio as _asyncio
+        q = (request.query_params.get("q", "") or "").strip()
+        if len(q) < 2:
+            return JSONResponse({"results": []})
+        from ingest import law_api_fetcher as laf
+        out: list = []
+
+        def _do():
+            res: list = []
+            try:
+                for l in (laf.search_laws(q, 15) or []):
+                    if l.get("name"):
+                        res.append({"kind": "법령", "name": l["name"]})
+            except Exception:
+                pass
+            try:
+                for o in (laf.search_ordinances(q, 15) or []):
+                    nm = (o.get("자치법규명") or o.get("자치법규명한글")
+                          or o.get("법령명") or o.get("법령명한글") or "").strip()
+                    if nm:
+                        res.append({"kind": "조례", "name": nm})
+            except Exception:
+                pass
+            return res
+
+        try:
+            out = await _asyncio.to_thread(_do)
+        except Exception:
+            out = []
+        seen, dedup = set(), []
+        for r in out:
+            k = (r["kind"], r["name"])
+            if k in seen:
+                continue
+            seen.add(k)
+            dedup.append(r)
+        return JSONResponse({"results": dedup[:30]})
+
+    # 모니터링 수동추가 — 선택 법령/조례를 API로 패치·적재하고 모니터링에 등재
+    @_cl_server_app.post("/law-add")
+    async def _law_add(request: Request):
+        import asyncio as _asyncio
+        key = request.cookies.get("anon_id", "")
+        if not key:
+            return JSONResponse({"error": "세션이 없습니다 — 새로고침하세요"}, status_code=400)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        kind = (body or {}).get("kind", "")
+        name = ((body or {}).get("name", "") or "").strip()
+        if not name:
+            return JSONResponse({"error": "법령명이 없습니다"}, status_code=400)
+        from ingest import law_api_fetcher as laf
+
+        def _do():
+            if kind == "조례" or laf._is_ordinance(name):
+                arts = laf.fetch_ordinance(name)
+                if not arts:
+                    return 0
+                retr = get_generator()._get_retriever()
+                try:
+                    retr.create_session_collection(key)
+                except Exception:
+                    pass
+                return _index_ordinance_articles(retr, key, name, arts)
+            law_id = laf._fetch_law_id(name)
+            if not law_id:
+                return 0
+            arts = laf._fetch_full_law(law_id)
+            if not arts:
+                return 0
+            laf._save_cache(name, arts, laf._fetch_delegations(law_id))
+            return len(arts)
+
+        try:
+            n = await _asyncio.to_thread(_do)
+        except Exception as e:
+            return JSONResponse({"error": f"추가 실패: {e}"}, status_code=500)
+        if not n:
+            return JSONResponse({"error": "법제처 API에서 찾지 못했습니다"}, status_code=404)
+        _monitor_add_law(name, key=key)
+        return JSONResponse({"ok": True, "name": name, "n": n})
 
     # 업로드 캐시 조회/삭제 (헤더 버튼 모달 — anon_id 쿠키로 본인 것만)
     def _upload_col(key: str):
@@ -415,7 +504,8 @@ try:
     # 커스텀 라우트들을 라우터 맨 앞으로 재배열.
     _MY_PATHS = {"/element-files/{object_key:path}", "/law-list", "/upload-cache",
                  "/upload-cache/delete", "/upload-cache/add", "/upload-cache/recache",
-                 "/provider", "/starters-meta", "/monitor"}
+                 "/provider", "/starters-meta", "/monitor",
+                 "/law-search", "/law-add"}
     _front = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") in _MY_PATHS]
     _rest  = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") not in _MY_PATHS]
     _cl_server_app.router.routes[:] = _front + _rest

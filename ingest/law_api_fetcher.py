@@ -485,6 +485,31 @@ def search_ordinances(query: str, display: int = 30, page: int = 1) -> list[dict
         return []
 
 
+def search_laws(query: str, display: int = 20) -> list[dict]:
+    """국가법령 제목 검색 — 수동 추가(검색·캐싱) 패널용. [{name, id}] 반환."""
+    key = _get_api_key()
+    if not key:
+        return []
+    try:
+        r = requests.get(
+            LAW_SEARCH_URL,
+            params={"OC": key, "target": "law", "type": "JSON",
+                    "query": query, "display": display},
+            timeout=15,
+        )
+        laws = r.json().get("LawSearch", {}).get("law") or []
+        if isinstance(laws, dict):
+            laws = [laws]
+        out = []
+        for l in laws:
+            nm = (l.get("법령명한글", "") or "").strip()
+            if nm:
+                out.append({"name": nm, "id": l.get("법령일련번호", "")})
+        return out
+    except Exception:
+        return []
+
+
 def fetch_ordinance(name: str, force: bool = False) -> dict[str, str] | None:
     """자치법규(조례) 전체 조문+별표 반환 + 캐시. 위임 링크는 자치법규엔 미제공.
     force=True면 캐시를 무시하고 재패치(구버전 캐시에 별표가 없을 때)."""

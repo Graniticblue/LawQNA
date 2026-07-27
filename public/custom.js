@@ -538,6 +538,29 @@
             .catch(function () { /* 네트워크 실패는 다음 주기에 재시도 */ });
     }
 
+    // 모니터링 수동추가 — 법령/조례 검색 결과 렌더 (추가는 결과 클릭 위임)
+    function doLawSearch(q) {
+        var box = document.getElementById('usun-law-results');
+        if (!box) return;
+        q = (q || '').trim();
+        if (q.length < 2) { box.innerHTML = '<div class="usun-law-hint">2글자 이상 입력하세요</div>'; return; }
+        box.innerHTML = '<div class="usun-law-hint">검색 중…</div>';
+        fetch('/law-search?q=' + encodeURIComponent(q), { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                var rs = (d && d.results) || [];
+                if (!rs.length) { box.innerHTML = '<div class="usun-law-hint">결과 없음</div>'; return; }
+                box.innerHTML = rs.map(function (it) {
+                    var k = (it.kind === '조례') ? 'ord' : 'law';
+                    return '<div class="usun-law-item" data-kind="' + _esc(it.kind) + '" data-name="' + _esc(it.name) + '">'
+                        + '<span class="usun-law-kind usun-law-kind-' + k + '">' + _esc(it.kind) + '</span>'
+                        + '<span class="usun-law-nm">' + _esc(it.name) + '</span>'
+                        + '<button type="button" class="usun-law-add" title="추가">＋</button></div>';
+                }).join('');
+            })
+            .catch(function () { box.innerHTML = '<div class="usun-law-hint">검색 실패</div>'; });
+    }
+
     // ── 오른쪽 고정 바: 상단 헤더에 있던 액션 버튼들을 이리로 이동 ──────────
     function ensureRightBar() {
         var bar = document.getElementById('usun-right-bar');
@@ -601,6 +624,44 @@
             renderModelButton();
             syncModelOnce();
             sec('모니터링');
+            // 수동추가: 법령·조례 검색창
+            var srch = document.createElement('div');
+            srch.className = 'usun-mon-search';
+            var qin = document.createElement('input');
+            qin.type = 'text'; qin.id = 'usun-law-q'; qin.placeholder = '법령·조례명 검색…';
+            var qgo = document.createElement('button');
+            qgo.type = 'button'; qgo.id = 'usun-law-go'; qgo.textContent = '🔎'; qgo.title = '검색';
+            srch.appendChild(qin); srch.appendChild(qgo);
+            bar.appendChild(srch);
+            var sres = document.createElement('div');
+            sres.id = 'usun-law-results'; sres.className = 'usun-law-results';
+            bar.appendChild(sres);
+            qgo.addEventListener('click', function () { doLawSearch(qin.value); });
+            qin.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') { e.preventDefault(); doLawSearch(qin.value); }
+            });
+            sres.addEventListener('click', function (e) {
+                var b = e.target.closest && e.target.closest('.usun-law-add');
+                if (!b) return;
+                var item = b.closest('.usun-law-item');
+                if (!item) return;
+                b.disabled = true; b.textContent = '…';
+                fetch('/law-add', {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        kind: item.getAttribute('data-kind'),
+                        name: item.getAttribute('data-name'),
+                    }),
+                })
+                    .then(function (r) { return r.json(); })
+                    .then(function (res) {
+                        b.textContent = (res && !res.error) ? '✓' : '✗';
+                        if (res && !res.error) refreshMonitor();   // 모니터에 즉시 반영
+                    })
+                    .catch(function () { b.textContent = '✗'; });
+            });
+            // 누적 현황
             var mon = document.createElement('div');
             mon.id = 'usun-monitor';
             mon.className = 'usun-monitor';
