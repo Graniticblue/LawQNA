@@ -319,6 +319,22 @@ try:
         _monitor_add_law(name, key=key)
         return JSONResponse({"ok": True, "name": name, "n": n})
 
+    # 인용자료 스캔 — 프런트가 보낸 지난 답변 텍스트에서 인용을 추출해 모니터링 복원
+    @_cl_server_app.post("/monitor-rescan")
+    async def _monitor_rescan(request: Request):
+        key = request.cookies.get("anon_id", "")
+        if not key:
+            return JSONResponse({"error": "세션이 없습니다"}, status_code=400)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        texts = (body or {}).get("texts", [])
+        if not isinstance(texts, list):
+            texts = []
+        added = _monitor_scan_texts([str(t) for t in texts][:200], key)
+        return JSONResponse({"added": added})
+
     # 업로드 캐시 조회/삭제 (헤더 버튼 모달 — anon_id 쿠키로 본인 것만)
     def _upload_col(key: str):
         import chromadb
@@ -505,7 +521,7 @@ try:
     _MY_PATHS = {"/element-files/{object_key:path}", "/law-list", "/upload-cache",
                  "/upload-cache/delete", "/upload-cache/add", "/upload-cache/recache",
                  "/provider", "/starters-meta", "/monitor",
-                 "/law-search", "/law-add"}
+                 "/law-search", "/law-add", "/monitor-rescan"}
     _front = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") in _MY_PATHS]
     _rest  = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") not in _MY_PATHS]
     _cl_server_app.router.routes[:] = _front + _rest
@@ -930,6 +946,65 @@ _CASE_PROSE_PAT = re.compile(
     r'(\d{2,4}[가-힣]\d{3,5}))'
     r'(?!\d)'
 )
+
+# ── 인용자료 재스캔 (지난 답변 텍스트에서 법령/해석례/판례 인용 추출 → 모니터링 복원) ──
+# 법령 인용: 「법령명」 제N조  또는  법령명(…법/시행령/규칙/조례/규정) 제N조
+# 바 형태는 공백을 허용하지 않는다(앞 단어 흡수 방지). 다어절 법령명은 「」로 잡힘.
+_SCAN_LAW = re.compile(
+    r'(?:「([^」]{2,40}?)」|(?<![가-힣「])([가-힣]{2,20}(?:법 시행령|법 시행규칙|법|규칙|조례|규정)))'
+    r'\s*(제\d+조(?:의\d+)?)'
+)
+_SCAN_LAW_BLOCK = {"이 법", "같은 법", "해당 법", "동법", "그 법",
+                   "이 규칙", "같은 규칙", "이 영", "같은 영", "이 조례", "같은 조례"}
+
+
+def _monitor_scan_texts(texts: list, key: str) -> dict:
+    """지난 답변 텍스트들에서 인용된 법령/해석례/판례를 추출해 세션 누적본에 병합.
+    재실행해도 부풀지 않도록 출현횟수를 세어 n=max(기존, 카운트)로 반영(멱등)."""
+    added = {"law": 0, "interp": 0, "case": 0}
+    try:
+        if not key:
+            return added
+        counts = {"law": {}, "interp": {}, "case": {}}   # sid -> [label, count]
+
+        def _tally(bucket: dict, sid: str, label: str):
+            sid = (sid or "").strip()
+            if not sid:
+                return
+            if sid in bucket:
+                bucket[sid][1] += 1
+            else:
+                bucket[sid] = [(label or sid).strip(), 1]
+
+        for t in texts:
+            t = t or ""
+            for m in _QA_PROSE_PAT.finditer(t):
+                code = m.group(2)
+                _tally(counts["interp"], code, "법제처 " + code)
+            for m in _CASE_PROSE_PAT.finditer(t):
+                cid = m.group(2)
+                _tally(counts["case"], cid, "대법원 " + cid)
+            for m in _SCAN_LAW.finditer(t):
+                law = (m.group(1) or m.group(2) or "").strip()
+                art = (m.group(3) or "").strip()
+                if not law or law in _SCAN_LAW_BLOCK:
+                    continue
+                if not re.search(r"(법|시행령|시행규칙|규칙|조례|규정|기준)", law):
+                    continue   # 「」 안이 법령이 아닌 경우 배제
+                _tally(counts["law"], (law + " " + art).strip(), (law + " " + art).strip())
+
+        store = _MONITOR_REFS.setdefault(key, {"law": {}, "interp": {}, "case": {}})
+        for typ, cmap in counts.items():
+            b = store[typ]
+            for sid, (label, c) in cmap.items():
+                if sid in b:
+                    b[sid]["n"] = max(b[sid].get("n", 1), c)
+                else:
+                    b[sid] = {"label": label, "n": c}
+                    added[typ] += 1
+    except Exception:
+        pass
+    return added
 
 
 _article_index: dict = {}

@@ -538,6 +538,35 @@
             .catch(function () { /* 네트워크 실패는 다음 주기에 재시도 */ });
     }
 
+    // 인용자료 스캔 — 지난 답변 텍스트에서 인용된 법령/해석례/판례를 모니터링에 복원
+    // (재배포로 서버 누적본이 비워졌을 때 이 대화 기준으로 되살리는 용도)
+    function rescanCitations() {
+        var steps = Array.prototype.slice.call(
+            document.querySelectorAll('[data-step-type="assistant_message"]'));
+        var texts = steps.map(function (el) { return (el.innerText || '').trim(); })
+            .filter(function (s) { return s; });
+        var btn = document.getElementById('rescan-btn');
+        if (!texts.length) {
+            if (btn) {
+                btn.textContent = '스캔할 답변 없음';
+                setTimeout(function () { btn.textContent = '🔃 인용자료 스캔'; }, 1500);
+            }
+            return;
+        }
+        if (btn) { btn.disabled = true; btn.textContent = '스캔 중…'; }
+        fetch('/monitor-rescan', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ texts: texts }),
+        })
+            .then(function (r) { return r.json(); })
+            .then(function () { refreshMonitor(); })
+            .catch(function () { })
+            .then(function () {
+                if (btn) { btn.disabled = false; btn.textContent = '🔃 인용자료 스캔'; }
+            });
+    }
+
     // 모니터링 수동추가 — 모달 결과창에 법령/조례 검색 결과 렌더 (추가는 클릭 위임)
     function doLawSearch(q) {
         var box = document.getElementById('law-search-results');
@@ -687,6 +716,7 @@
             syncModelOnce();
             sec('모니터링');
             mk('law-search-btn', '🔎 법령·조례 검색·추가', showLawSearchModal);   // 클릭 → 모달
+            mk('rescan-btn', '🔃 인용자료 스캔', rescanCitations);                 // 지난 답변 재스캔
             // 누적 현황
             var mon = document.createElement('div');
             mon.id = 'usun-monitor';
