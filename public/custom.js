@@ -69,7 +69,11 @@
         _metaFetched = true;
         fetch('/starters-meta')
             .then(function (r) { return r.json(); })
-            .then(function (m) { _startersMeta = m || {}; })
+            .then(function (m) {
+                _startersMeta = m || {};
+                var ov = document.getElementById('usun-welcome-cards');
+                if (ov) ov.remove();   // 메타 도착 → 유형 딱지·상세 질의 포함해 재빌드
+            })
             .catch(function () { _startersMeta = {}; });
     }
 
@@ -113,11 +117,13 @@
             ov = document.createElement('div');
             ov.id = 'usun-welcome-cards';
             ov.dataset.sig = sig;
-            labels.forEach(function (label, i) {
+            labels.forEach(function (label) {
+                var info = meta[label] || {};
+                var t = info.type || '';
+                var msg = info.message || '';
                 var card = document.createElement('button');
                 card.type = 'button';
-                card.className = 'usun-wc-card' + (i < 2 ? ' hero' : '');   // 앞 2장 = 히어로(가로 꽉)
-                var t = meta[label] || '';
+                card.className = 'usun-wc-card';
                 if (t) {
                     var chip = document.createElement('span');
                     chip.className = 'usun-wc-chip';
@@ -129,6 +135,12 @@
                 title.className = 'usun-wc-title';
                 title.textContent = label;
                 card.appendChild(title);
+                if (msg) {
+                    var desc = document.createElement('span');
+                    desc.className = 'usun-wc-desc';
+                    desc.textContent = msg;   // 클릭 시 입력될 실제 질의문
+                    card.appendChild(desc);
+                }
                 card.addEventListener('click', function () {
                     var tgt = nativeStarterButtons().filter(function (b) {
                         return starterLabel(b) === label;

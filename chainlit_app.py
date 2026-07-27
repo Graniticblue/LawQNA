@@ -131,7 +131,7 @@ try:
         try:
             for _type, _items in _STARTER_POOL.items():
                 for _s in _items:
-                    meta[_s.label] = _type
+                    meta[_s.label] = {"type": _type, "message": _s.message}
         except Exception:
             pass
         return JSONResponse(meta)
