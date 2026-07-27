@@ -341,6 +341,90 @@
         setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
     }
 
+    // ── 대화 TXT 저장 (마크다운 기호 없이 플레인) ─────────────────────
+    function downloadChatTxt() {
+        var steps = Array.prototype.slice.call(document.querySelectorAll(
+            '[data-step-type="user_message"], [data-step-type="assistant_message"]'));
+        if (!steps.length) steps = Array.prototype.slice.call(document.querySelectorAll('[data-testid="step"]'));
+        var lines = [];
+        steps.forEach(function (el) {
+            var t = (el.innerText || '').trim();
+            if (!t) return;
+            var isUser = el.getAttribute('data-step-type') === 'user_message';
+            lines.push((isUser ? '[질문]' : '[답변]') + '\n' + t);
+        });
+        if (!lines.length) { alert('저장할 대화가 없습니다.'); return; }
+        var now = new Date();
+        function p(n) { return (n < 10 ? '0' : '') + n; }
+        var stamp = now.getFullYear() + p(now.getMonth() + 1) + p(now.getDate())
+            + '_' + p(now.getHours()) + p(now.getMinutes());
+        var head = '법령 Q&A 대화 (' + now.toLocaleString('ko-KR') + ')\n\n';
+        var blob = new Blob([head + lines.join('\n\n------------------------------\n\n') + '\n'],
+            { type: 'text/plain;charset=utf-8' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'LawQNA_대화_' + stamp + '.txt';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    }
+
+    // ── PDF 내보내기 — 브라우저 인쇄창(→'PDF로 저장'). @media print에서 크롬 숨김 ──
+    function exportPdf() {
+        var steps = document.querySelectorAll('[data-step-type="user_message"], [data-step-type="assistant_message"]');
+        if (!steps.length) { alert('내보낼 대화가 없습니다.'); return; }
+        window.print();
+    }
+
+    // ── 새 대화 — chainlit 네이티브 새 채팅 버튼을 누르고, 없으면 앱 루트로 이동 ──
+    function newChat() {
+        try {
+            var btn = Array.prototype.slice.call(document.querySelectorAll('button, a')).find(function (el) {
+                var al = el.getAttribute('aria-label') || '';
+                var id = (el.id || '').toLowerCase();
+                return id.indexOf('new-chat') !== -1
+                    || /new chat|new conversation/i.test(al)
+                    || /새\s*(채팅|대화)/.test(al);
+            });
+            if (btn) { btn.click(); return; }
+        } catch (e) { }
+        window.location.assign(window.location.origin + window.location.pathname);
+    }
+
+    // ── 마지막 사용자 질문 텍스트 ────────────────────────────────────
+    function lastUserQuestion() {
+        var us = Array.prototype.slice.call(document.querySelectorAll('[data-step-type="user_message"]'));
+        return us.length ? (us[us.length - 1].innerText || '').trim() : '';
+    }
+
+    // ── 입력창에 텍스트 주입 후 전송 (React 제어 textarea) ────────────
+    function sendPrompt(text) {
+        var s = document.getElementById('chat-submit');
+        var box = s && s.parentElement && s.parentElement.parentElement
+            && s.parentElement.parentElement.parentElement;
+        var ta = box && box.querySelector('textarea');
+        if (!ta || !s) { alert('입력창을 찾지 못했습니다.'); return false; }
+        var d = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+        if (d && d.set) d.set.call(ta, text); else ta.value = text;
+        ta.dispatchEvent(new Event('input', { bubbles: true }));   // React 상태 반영
+        setTimeout(function () { s.click(); }, 40);
+        return true;
+    }
+
+    // 답변 재생성 — 직전 질문을 그대로 재전송
+    function regenerateAnswer() {
+        var q = lastUserQuestion();
+        if (!q) { alert('재생성할 이전 질문이 없습니다.'); return; }
+        sendPrompt(q);
+    }
+
+    // 근거 더 찾기 — 직전 질문에 근거 보강 요청을 덧붙여 재전송
+    function findMoreEvidence() {
+        var q = lastUserQuestion();
+        if (!q) { alert('먼저 질문을 해주세요.'); return; }
+        sendPrompt(q + '\n\n(위 질문에 대해 관련 조문·법제처 해석례·판례 근거를 더 폭넓게 찾아 다시 답변해줘.)');
+    }
+
     // ── 모델 선택 드롭다운 — 질문 시 묻지 않고 헤더에서 선택 ──────────
     // 새 모델(예: ChatGPT)은 이 배열에 항목만 추가하면 된다 (백엔드 /provider
     // 허용 목록과 06_Generator provider 분기도 함께 확장).
@@ -478,14 +562,14 @@
     function insertRightBarButtons() {
         try {
             var bar = ensureRightBar();
-            if (document.getElementById('law-list-btn')
-                && document.getElementById('upload-cache-btn')
-                && document.getElementById('chat-save-btn')
-                && document.getElementById('model-select-btn')) {
-                return;   // 이미 다 있음 — DOM 건드리지 않는다(매 mutation마다 호출되므로)
+            if (bar.dataset.built === '1') return;   // 1회만 구성(매 mutation마다 호출되므로)
+            function sec(text) {
+                var h = document.createElement('div');
+                h.className = 'usun-rb-sec';
+                h.textContent = text;
+                bar.appendChild(h);
             }
             function mk(id, text, handler) {
-                if (document.getElementById(id)) return;
                 var b = document.createElement('button');
                 b.id = id;
                 b.type = 'button';
@@ -494,12 +578,23 @@
                 b.onclick = handler;
                 bar.appendChild(b);
             }
-            mk('law-list-btn', '내장 법령 목록', showLawListModal);
-            mk('upload-cache-btn', '조례 라이브러리', showUploadModal);
-            mk('chat-save-btn', '대화 저장', downloadChat);
+            sec('세션');
+            mk('new-chat-btn', '✏️ 새 대화', newChat);
+            sec('내보내기');
+            mk('export-md-btn', '⬇️ 마크다운', downloadChat);
+            mk('export-pdf-btn', '⬇️ PDF', exportPdf);
+            mk('export-txt-btn', '⬇️ TXT', downloadChatTxt);
+            sec('답변');
+            mk('evidence-btn', '🔎 근거 더 찾기', findMoreEvidence);
+            mk('regen-btn', '♻️ 답변 재생성', regenerateAnswer);
+            sec('자료');
+            mk('law-list-btn', '📚 내장 법령 목록', showLawListModal);
+            mk('upload-cache-btn', '🗂️ 조례 라이브러리', showUploadModal);
+            sec('모델');
             mk('model-select-btn', '', toggleModelMenu);   // 라벨은 renderModelButton이 채움
             renderModelButton();
             syncModelOnce();
+            bar.dataset.built = '1';
         } catch (e) { /* DOM 변동 중 실패는 무시(다음 mutation에 재시도) */ }
     }
 

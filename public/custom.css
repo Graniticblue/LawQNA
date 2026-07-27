@@ -310,7 +310,17 @@ button:has(svg[class*="-moon"]) {
     letter-spacing: 0.04em;
     color: #64748b;
     text-transform: uppercase;
-    margin: 2px 6px 12px;
+    margin: 2px 6px 10px;
+}
+
+/* 섹션 소제목 (세션 / 내보내기 / 답변 / 자료 / 모델) */
+#usun-right-bar .usun-rb-sec {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    color: #a4adba;
+    text-transform: uppercase;
+    margin: 12px 8px 3px;
 }
 
 /* .law-list-btn 의 가로 헤더용 스타일을 세로 리스트 아이템으로 덮어씀 */
@@ -318,10 +328,10 @@ button:has(svg[class*="-moon"]) {
     display: flex;
     align-items: center;
     width: 100%;
-    margin: 0 0 4px 0;
-    padding: 10px 12px;
-    border-radius: 10px;
-    font-size: 13.5px;
+    margin: 0 0 2px 0;
+    padding: 8px 12px;
+    border-radius: 9px;
+    font-size: 13px;
     line-height: 1.3;
     color: #1f2937;
     text-align: left;
@@ -345,6 +355,19 @@ button:has(svg[class*="-moon"]) {
 #root {
     box-sizing: border-box;
     padding-right: var(--usun-rb-w) !important;
+}
+
+/* PDF 내보내기(브라우저 인쇄 → 'PDF로 저장') — 대화 본문만 남기고 크롬 숨김 */
+@media print {
+    #usun-right-bar,
+    #usun-welcome-cards,
+    .usun-welcome-input,
+    #sidebar-resize-handle,
+    #chat-submit,
+    #stop-button {
+        display: none !important;
+    }
+    #root { padding-right: 0 !important; }
 }
 
 /* ═══════════════════════════════════════════════════════════════
