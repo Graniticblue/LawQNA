@@ -353,6 +353,8 @@ button:has(svg[class*="-moon"]) {
 /* 모니터링 패널 — 이 대화에서 참조한 법령/해석례/판례 누적 */
 .usun-monitor {
     margin: 2px 0 6px;
+    max-height: 42vh;      /* 길어지면 도구 버튼을 밀지 않고 이 안에서 스크롤 */
+    overflow-y: auto;
 }
 .usun-mon-empty {
     font-size: 11.5px;

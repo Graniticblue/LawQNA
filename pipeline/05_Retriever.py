@@ -335,6 +335,13 @@ def _normalize_middot(s: str) -> str:
     return s.replace("ㆍ", "·").replace("・", "·").replace("‧", "·")
 
 
+def _norm_law_name(s: str) -> str:
+    """법령명 매칭용 정규화 — 공백·가운뎃점 변종 제거.
+    '건축법시행령'과 '건축법 시행령'을 같게 보아 사각지대 오탐(공백 차이로
+    미보유 오판)을 막는다. ChromaDB $eq는 완전일치라 이 정규화가 별도 필요."""
+    return re.sub(r"\s+", "", _normalize_middot(s or ""))
+
+
 _REGION_PAT = re.compile(
     r'^([가-힣]+(?:특별자치시|특별자치도|광역시|특별시|시|군|구|도))(?=\s|$)'
 )
@@ -1146,6 +1153,23 @@ class HybridSearcher:
             for a in (str(m.get("article_no", "")).replace(" ", "") for m in res["metadatas"])
         )
 
+    def _law_names_norm(self) -> set:
+        """law_articles의 모든 law_name을 정규화(공백·가운뎃점 제거)한 집합(1회 캐시).
+        사각지대 판정의 공백 변종 구제에 쓴다."""
+        s = getattr(self, "_law_name_norm_cache", None)
+        if s is None:
+            s = set()
+            try:
+                got = self._law_col.get(include=["metadatas"])
+                for m in got.get("metadatas", []) or []:
+                    ln = (m or {}).get("law_name", "")
+                    if ln:
+                        s.add(_norm_law_name(ln))
+            except Exception:
+                s = set()
+            self._law_name_norm_cache = s
+        return s
+
     def detect_blind_spots(self, law_hints: list[str]) -> dict:
         """
         law_hints를 분류하여 사각지대를 식별한다 (DB 조회만, API 호출 없음).
@@ -1195,6 +1219,11 @@ class HybridSearcher:
                 exists_in_db = bool(res.get("ids"))
             except Exception:
                 exists_in_db = False
+
+            # 공백·가운뎃점 변종 구제: '건축법시행령'처럼 붙여 써도 DB의
+            # '건축법 시행령'과 같게 보아 미보유 오탐을 막는다(전역 이득).
+            if not exists_in_db and _norm_law_name(law_name) in self._law_names_norm():
+                exists_in_db = True
 
             if not exists_in_db:
                 # 법령 자체 부재 → API 패치 가능

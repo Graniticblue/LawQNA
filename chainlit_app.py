@@ -144,6 +144,27 @@ def _record_monitor_refs(result: dict) -> None:
     except Exception:
         pass
 
+
+def _monitor_add_law(label: str) -> None:
+    """API 캐싱·수동추가로 확보한 법령을 모니터링에 '앞으로 참고할' 항목으로 등재.
+    (모니터링은 '사용한 것'뿐 아니라 '사용할 것'까지 담는다.)"""
+    try:
+        label = (label or "").strip()
+        if not label:
+            return
+        user = cl.user_session.get("user")
+        key = getattr(user, "identifier", "") if user else ""
+        if not key:
+            return
+        bucket = _MONITOR_REFS.setdefault(key, {"law": {}, "interp": {}, "case": {}})["law"]
+        e = bucket.get(label)
+        if e:
+            e["n"] += 1
+        else:
+            bucket[label] = {"label": label, "n": 1}
+    except Exception:
+        pass
+
 # element 파일을 서빙하는 라우트를 Chainlit FastAPI 앱에 등록 (프런트가 url로 fetch)
 try:
     from chainlit.server import app as _cl_server_app
@@ -2341,6 +2362,12 @@ async def on_regenerate_with_fetch(action: cl.Action):
                 n = 0
             if n:
                 ordin_indexed.append((ln, n))
+
+    # 모니터링: 캐싱 성공한 법령(+동반 위임 조문)을 '앞으로 참고할' 항목으로 등재
+    for _s in success:
+        _monitor_add_law((_s.get("law_name", "") + " " + _s.get("article_no", "")).strip())
+    for _d in delegated:
+        _monitor_add_law((_d.get("law_name", "") + " " + _d.get("article_no", "")).strip())
 
     # 결과 알림
     result_lines = ["📡 **패치 결과**"]
