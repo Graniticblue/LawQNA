@@ -88,6 +88,62 @@ class VolumeStorageClient(BaseStorageClient):
 # 서버 재시작 시 비워지지만 프런트(localStorage)가 페이지 로드 때 재동기화한다.
 _PROVIDER_PREF: dict = {}
 
+# ── 모니터링 패널 누적 저장소 (anon_id → 이 대화에서 참조한 출처) ──────────
+# 매 답변의 검색결과(result의 law_docs/qa_docs/case_docs)를 세션별로 누적한다.
+# on_message가 anon_id(=cl.User.identifier)로 쓰고, /monitor 엔드포인트가 쿠키의
+# anon_id로 읽는다(_PROVIDER_PREF와 동일 패턴). 새 대화(on_chat_start) 시 초기화.
+_MONITOR_REFS: dict = {}   # {anon_id: {"law": {id:{label,n}}, "interp": {...}, "case": {...}}}
+
+
+def _record_monitor_refs(result: dict) -> None:
+    """이번 답변의 검색된 출처(법령/해석례/판례)를 현재 세션 누적본에 병합."""
+    try:
+        if not isinstance(result, dict):
+            return
+        user = cl.user_session.get("user")
+        key = getattr(user, "identifier", "") if user else ""
+        if not key:
+            return
+        store = _MONITOR_REFS.setdefault(key, {"law": {}, "interp": {}, "case": {}})
+
+        def _bump(bucket: dict, sid: str, label: str):
+            sid = (sid or "").strip()
+            if not sid:
+                return
+            e = bucket.get(sid)
+            if e:
+                e["n"] += 1
+            else:
+                bucket[sid] = {"label": (label or sid).strip(), "n": 1}
+
+        def _md(d):
+            return getattr(d, "metadata", None) or {}
+
+        for d in result.get("law_docs", []) or []:
+            law = (getattr(d, "law_name", "") or _md(d).get("law_name", "") or "").strip()
+            art = (getattr(d, "article_no", "") or _md(d).get("article_no", "") or "").strip()
+            if law:
+                sid = (law + " " + art).strip()
+                _bump(store["law"], sid, sid)
+
+        for d in result.get("qa_docs", []) or []:
+            md = _md(d)
+            code = (md.get("doc_code", "") or "").strip()
+            cite = (md.get("cite_label", "") or "").strip()
+            if code:
+                _bump(store["interp"], code, "법제처 " + code)
+            elif cite:
+                _bump(store["interp"], cite, cite)
+
+        for d in result.get("case_docs", []) or []:
+            md = _md(d)
+            cid = (md.get("case_id", "") or getattr(d, "article_no", "") or "").strip()
+            court = (md.get("court", "") or "").strip()
+            if cid:
+                _bump(store["case"], cid, (court + " " + cid).strip())
+    except Exception:
+        pass
+
 # element 파일을 서빙하는 라우트를 Chainlit FastAPI 앱에 등록 (프런트가 url로 fetch)
 try:
     from chainlit.server import app as _cl_server_app
@@ -135,6 +191,23 @@ try:
         except Exception:
             pass
         return JSONResponse(meta)
+
+    # 모니터링 패널 — 이 대화에서 참조한 법령/해석례/판례 누적본 (쿠키 anon_id로 조회)
+    @_cl_server_app.get("/monitor")
+    async def _monitor(request: Request):
+        key = request.cookies.get("anon_id", "")
+        data = _MONITOR_REFS.get(key) or {}
+
+        def _ser(bucket):
+            items = list((bucket or {}).values())
+            items.sort(key=lambda e: (-e.get("n", 0), e.get("label", "")))  # 참조 많은 순
+            return [{"label": e["label"], "n": e["n"]} for e in items]
+
+        return JSONResponse({
+            "law":    _ser(data.get("law", {})),
+            "interp": _ser(data.get("interp", {})),
+            "case":   _ser(data.get("case", {})),
+        })
 
     # 업로드 캐시 조회/삭제 (헤더 버튼 모달 — anon_id 쿠키로 본인 것만)
     def _upload_col(key: str):
@@ -321,7 +394,7 @@ try:
     # 커스텀 라우트들을 라우터 맨 앞으로 재배열.
     _MY_PATHS = {"/element-files/{object_key:path}", "/law-list", "/upload-cache",
                  "/upload-cache/delete", "/upload-cache/add", "/upload-cache/recache",
-                 "/provider", "/starters-meta"}
+                 "/provider", "/starters-meta", "/monitor"}
     _front = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") in _MY_PATHS]
     _rest  = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") not in _MY_PATHS]
     _cl_server_app.router.routes[:] = _front + _rest
@@ -1673,6 +1746,13 @@ def _history_context(history: list, facts: dict | None = None) -> str:
 @cl.on_chat_start
 async def on_start():
     _init_session()
+    try:
+        _user = cl.user_session.get("user")
+        _key = getattr(_user, "identifier", "") if _user else ""
+        if _key:
+            _MONITOR_REFS.pop(_key, None)   # 새 대화 → 모니터링 패널 초기화
+    except Exception:
+        pass
 
 
 @cl.on_chat_resume
@@ -1891,6 +1971,7 @@ async def on_message(message: cl.Message):
     if result is None:
         return
 
+    _record_monitor_refs(result)   # 모니터링 패널: 이 대화의 참조 출처 누적
     raw_answer  = result.get("answer", "")
     source_info = result.get("source_info", {})
     if not isinstance(source_info, dict):
@@ -2357,6 +2438,7 @@ async def _regen_with_material(query: str, provider: str, model_label: str,
     if result is None:
         return
 
+    _record_monitor_refs(result)   # 모니터링 패널: 이 대화의 참조 출처 누적
     raw_answer  = result.get("answer", "")
     source_info = result.get("source_info", {})
     if not isinstance(source_info, dict):

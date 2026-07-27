@@ -503,6 +503,41 @@
         } catch (e) { }
     }
 
+    // ── 모니터링 패널: 이 대화에서 참조한 법령/해석례/판례 누적 표시 ──────────
+    // /monitor(서버 세션 누적본)를 주기적으로 받아 우측 바에 렌더한다.
+    function _esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+        });
+    }
+    function _monGroup(title, items) {
+        if (!items || !items.length) return '';
+        var lis = items.map(function (it) {
+            var n = (it.n > 1) ? ' <span class="usun-mon-n">×' + it.n + '</span>' : '';
+            return '<li>' + _esc(it.label) + n + '</li>';
+        }).join('');
+        return '<div class="usun-mon-grp"><div class="usun-mon-h">' + title
+            + ' <span class="usun-mon-c">' + items.length + '</span></div><ul>' + lis + '</ul></div>';
+    }
+    function refreshMonitor() {
+        var box = document.getElementById('usun-monitor');
+        if (!box) return;
+        fetch('/monitor', { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                var total = (d.law || []).length + (d.interp || []).length + (d.case || []).length;
+                if (!total) {
+                    box.innerHTML = '<div class="usun-mon-empty">아직 참조된 자료가 없습니다.<br>'
+                        + '질문하면 이 대화에서 참고한 법령·해석례·판례가 쌓입니다.</div>';
+                    return;
+                }
+                box.innerHTML = _monGroup('법령', d.law)
+                    + _monGroup('해석례', d.interp)
+                    + _monGroup('판례', d.case);
+            })
+            .catch(function () { /* 네트워크 실패는 다음 주기에 재시도 */ });
+    }
+
     // ── 오른쪽 고정 바: 상단 헤더에 있던 액션 버튼들을 이리로 이동 ──────────
     function ensureRightBar() {
         var bar = document.getElementById('usun-right-bar');
@@ -565,6 +600,12 @@
             mk('model-select-btn', '', toggleModelMenu);   // 라벨은 renderModelButton이 채움
             renderModelButton();
             syncModelOnce();
+            sec('모니터링');
+            var mon = document.createElement('div');
+            mon.id = 'usun-monitor';
+            mon.className = 'usun-monitor';
+            bar.appendChild(mon);
+            refreshMonitor();   // 초기 1회 (이후 주기 폴링)
             bar.dataset.built = '1';
         } catch (e) { /* DOM 변동 중 실패는 무시(다음 mutation에 재시도) */ }
     }
@@ -660,6 +701,11 @@
 
     const observer = new MutationObserver(update);
     observer.observe(document.documentElement, { childList: true, subtree: true });
+
+    // 모니터링 패널 주기 갱신 — 서버 세션 누적본을 4초마다 반영(작은 GET)
+    setInterval(function () {
+        if (document.getElementById('usun-monitor')) refreshMonitor();
+    }, 4000);
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', update);
