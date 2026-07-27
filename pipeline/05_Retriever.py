@@ -339,7 +339,7 @@ def _norm_law_name(s: str) -> str:
     """법령명 매칭용 정규화 — 공백·가운뎃점 변종 제거.
     '건축법시행령'과 '건축법 시행령'을 같게 보아 사각지대 오탐(공백 차이로
     미보유 오판)을 막는다. ChromaDB $eq는 완전일치라 이 정규화가 별도 필요."""
-    return re.sub(r"\s+", "", _normalize_middot(s or ""))
+    return re.sub(r"[\s「」『』]", "", _normalize_middot(s or ""))
 
 
 _REGION_PAT = re.compile(
@@ -364,7 +364,9 @@ def _parse_law_hint(hint: str) -> tuple[str, str, bool]:
     의M(가지조문)을 보존해야 사각지대 패치가 제3조의2 힌트에 제3조를(다른 조문)
     잘못 반환하지 않는다. fetch_exact_articles의 부분문자열 매칭도 더 정밀해짐.
     """
-    hint = _normalize_middot(hint.strip().strip("「」"))
+    # 「」『』는 문자열 끝뿐 아니라 가운데(예: "「건축법」 제84조" → 닫는 」)에도 붙어 오므로
+    # strip이 아니라 전부 제거해야 한다(안 그러면 law_name에 」가 남아 $eq 매칭이 깨져 사각지대 오탐).
+    hint = _normalize_middot(re.sub(r"[「」『』]", "", hint).strip())
     m = re.match(r"^(.+?)\s+(별표\s*\d+)", hint)
     if m:
         return m.group(1).strip(), m.group(2).replace(" ", ""), True
