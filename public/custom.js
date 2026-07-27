@@ -514,7 +514,8 @@
         if (!items || !items.length) return '';
         var lis = items.map(function (it) {
             var n = (it.n > 1) ? ' <span class="usun-mon-n">×' + it.n + '</span>' : '';
-            return '<li>' + _esc(it.label) + n + '</li>';
+            return '<li data-label="' + _esc(it.label) + '" title="클릭하면 인용 사이드바가 열립니다">'
+                + _esc(it.label) + n + '</li>';
         }).join('');
         return '<div class="usun-mon-grp"><div class="usun-mon-h">' + title
             + ' <span class="usun-mon-c">' + items.length + '</span></div><ul>' + lis + '</ul></div>';
@@ -536,6 +537,50 @@
                     + _monGroup('판례', d.case);
             })
             .catch(function () { /* 네트워크 실패는 다음 주기에 재시도 */ });
+    }
+
+    // 모니터 항목 라벨에서 매칭 키 추출 (해석례 코드 / 판례 사건번호 / 법령명+조)
+    function _sourceKey(label) {
+        label = (label || '').trim();
+        if (label.indexOf('법제처') === 0) {
+            var mc = label.match(/(\d{2}-\d{3,5})/);
+            if (mc) return { type: 'code', v: mc[1] };
+        }
+        var mk = label.match(/(\d{2,4}[가-힣]\d{2,6})/);   // 사건번호(2019두63515 등)
+        if (mk) return { type: 'case', v: mk[1] };
+        var ml = label.match(/^(.+?)\s*(제\d+조(?:의\d+)?)/);   // 법령명 + 조
+        if (ml) return { type: 'law', law: ml[1].trim(), art: ml[2] };
+        return { type: 'text', v: label };
+    }
+
+    // 모니터 항목 클릭 → 답변 본문의 해당 인용 링크를 찾아 대신 클릭(사이드바 오픈)
+    function openSource(label) {
+        var key = _sourceKey(label);
+        var steps = Array.prototype.slice.call(
+            document.querySelectorAll('[data-step-type="assistant_message"]'));
+        var cands = [];
+        steps.forEach(function (s) {
+            Array.prototype.push.apply(cands,
+                Array.prototype.slice.call(s.querySelectorAll('a, span, button')));
+        });
+        function hit(txt) {
+            txt = (txt || '').trim();
+            if (!txt || txt.length > 90) return false;
+            if (key.type === 'law') return txt.indexOf(key.art) !== -1 && txt.indexOf(key.law) !== -1;
+            return txt.indexOf(key.v) !== -1;
+        }
+        var matches = cands.filter(function (el) { return hit(el.textContent); });
+        if (!matches.length) return false;
+        // 링크(a) → leaf 요소 → 짧은 텍스트 순으로 가장 그럴듯한 인용 링크 선택
+        matches.sort(function (a, b) {
+            var aw = (a.tagName === 'A') ? 0 : 1, bw = (b.tagName === 'A') ? 0 : 1;
+            if (aw !== bw) return aw - bw;
+            var al = (a.childElementCount === 0) ? 0 : 1, bl = (b.childElementCount === 0) ? 0 : 1;
+            if (al !== bl) return al - bl;
+            return (a.textContent || '').length - (b.textContent || '').length;
+        });
+        matches[0].click();
+        return true;
     }
 
     // 인용자료 스캔 — 지난 답변 텍스트에서 인용된 법령/해석례/판례를 모니터링에 복원
@@ -604,7 +649,7 @@
         ov.innerHTML =
             '<div class="law-list-box">' +
             '<button class="law-list-close" aria-label="닫기">✕</button>' +
-            '<h2 style="font-size:18px;margin:0 0 4px">법령·조례 검색·추가</h2>' +
+            '<h2 style="font-size:18px;margin:0 0 4px">참고자료 추가 — 법령·조례 검색</h2>' +
             '<div class="law-db-foot" style="margin:0 0 14px">법제처 API에서 검색해 캐싱·적재합니다. 추가한 자료는 모니터링(앞으로 참고할 자료)에 등재됩니다.</div>' +
             '<div class="law-search-bar">' +
             '<input type="text" id="law-search-q" placeholder="법령·조례명을 입력하세요 (2글자 이상)" />' +
@@ -715,13 +760,17 @@
             renderModelButton();
             syncModelOnce();
             sec('모니터링');
-            mk('law-search-btn', '🔎 법령·조례 검색·추가', showLawSearchModal);   // 클릭 → 모달
-            mk('rescan-btn', '🔃 인용자료 스캔', rescanCitations);                 // 지난 답변 재스캔
+            mk('law-search-btn', '＋ 참고자료 추가', showLawSearchModal);   // 클릭 → 검색·추가 모달
+            mk('rescan-btn', '🔃 인용자료 스캔', rescanCitations);          // 지난 답변 재스캔
             // 누적 현황
             var mon = document.createElement('div');
             mon.id = 'usun-monitor';
             mon.className = 'usun-monitor';
             bar.appendChild(mon);
+            mon.addEventListener('click', function (e) {   // 항목 클릭 → 인용 사이드바 열기
+                var li = e.target.closest && e.target.closest('li[data-label]');
+                if (li) openSource(li.getAttribute('data-label'));
+            });
             refreshMonitor();   // 초기 1회 (이후 주기 폴링)
             bar.dataset.built = '1';
         } catch (e) { /* DOM 변동 중 실패는 무시(다음 mutation에 재시도) */ }

@@ -397,9 +397,11 @@ button:has(svg[class*="-moon"]) {
     border-radius: 6px;
     line-height: 1.35;
     word-break: break-all;
+    cursor: pointer;
 }
 .usun-monitor li:hover {
-    background: #f1f5f9;
+    background: #e8eef6;
+    color: #1565C0;
 }
 .usun-mon-n {
     font-size: 10px;
