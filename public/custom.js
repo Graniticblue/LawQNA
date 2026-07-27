@@ -56,11 +56,13 @@
         inputBox.parentNode.insertBefore(wrap, inputBox);
     }
 
-    // ── 추천질문 → 카드 그리드 (6개, 1/1/2/2 · 유형 딱지 + 제목) ──────────────
-    // React 트리를 구조적으로 건드리면(노드 삽입·컨테이너 숨김) 재조정 중 크래시로
-    // 화면이 하얗게 죽는다 → 네이티브 스타터를 '그 자리에서 스타일만' 카드로 바꾼다.
-    // 클릭은 네이티브 버튼 그대로(전송 동작 유지). 유형 딱지는 data-속성 + CSS ::before,
-    // 유형값은 /starters-meta에서 받는다. (v2에서 검증된 style-only 방식)
+    // ── 추천질문 → 웰컴 카드 (6개, 1/1/2/2 고정크기 그리드, 화면 중앙) ──────────
+    // 지난 실패 교훈: ①React 트리에 노드 삽입/컨테이너 숨김 → 재조정 크래시(백지)
+    //               ②매 update마다 DOM 텍스트 재설정 → MutationObserver 무한루프
+    // 그래서: 카드 그리드는 body에 fixed 오버레이(=React 밖, 크래시 안전)로 그리고,
+    // 네이티브 스타터는 '개별 버튼만' 숨긴다(컨테이너·형제 불건드림). 카드 클릭은
+    // 숨긴 네이티브 버튼의 .click()에 위임(전송 동작 유지). 컴포저는 하단 고정.
+    // 유지작업은 signature/멱등이라 옵저버 루프 없음. 유형값은 /starters-meta.
     var _startersMeta = null, _metaFetched = false;
     function loadStartersMeta() {
         if (_metaFetched) return;
@@ -83,20 +85,63 @@
         return ((p ? p.textContent : btn.textContent) || '').trim();
     }
 
-    function layoutStarterGrid() {
+    function pinComposer(on) {
+        var s = document.getElementById('chat-submit');
+        var box = s && s.parentElement && s.parentElement.parentElement
+            && s.parentElement.parentElement.parentElement;
+        if (!box) return;
+        if (on) box.classList.add('usun-welcome-input');
+        else box.classList.remove('usun-welcome-input');
+    }
+
+    function teardownWelcomeCards() {
+        var ov = document.getElementById('usun-welcome-cards');
+        if (ov) ov.remove();
+        nativeStarterButtons().forEach(function (b) { b.classList.remove('usun-starter-hidden'); });
+        pinComposer(false);
+    }
+
+    function buildWelcomeCards() {
         var nat = nativeStarterButtons();
         if (nat.length < 1) return;
-        var c = nat[0].parentElement;
-        if (!c) return;
-        // 컨테이너 → 그리드 (구조 변경 없이 class/style만 — React 크래시 안전)
-        c.classList.add('usun-starter-gridded');
-        var meta = _startersMeta || {};
-        nat.forEach(function (b, i) {
-            b.classList.add('usun-starter-card');
-            b.style.gridColumn = (i < 2) ? '1 / -1' : '';   // 앞 2장 가로 꽉 → 1/1/2/2
-            var t = meta[starterLabel(b)];
-            if (t) b.setAttribute('data-usun-type', t);
-        });
+        var labels = nat.map(starterLabel);
+        var sig = labels.join('|');
+        var ov = document.getElementById('usun-welcome-cards');
+        if (!(ov && ov.dataset.sig === sig)) {   // 구성이 바뀔 때만 재빌드(멱등 → 루프 없음)
+            if (ov) ov.remove();
+            var meta = _startersMeta || {};
+            ov = document.createElement('div');
+            ov.id = 'usun-welcome-cards';
+            ov.dataset.sig = sig;
+            labels.forEach(function (label, i) {
+                var card = document.createElement('button');
+                card.type = 'button';
+                card.className = 'usun-wc-card' + (i < 2 ? ' hero' : '');   // 앞 2장 = 히어로(가로 꽉)
+                var t = meta[label] || '';
+                if (t) {
+                    var chip = document.createElement('span');
+                    chip.className = 'usun-wc-chip';
+                    chip.setAttribute('data-usun-type', t);
+                    chip.textContent = t;
+                    card.appendChild(chip);
+                }
+                var title = document.createElement('span');
+                title.className = 'usun-wc-title';
+                title.textContent = label;
+                card.appendChild(title);
+                card.addEventListener('click', function () {
+                    var tgt = nativeStarterButtons().filter(function (b) {
+                        return starterLabel(b) === label;
+                    })[0];
+                    if (tgt) tgt.click();   // 전송은 chainlit 네이티브 핸들러에 위임
+                });
+                ov.appendChild(card);
+            });
+            document.body.appendChild(ov);   // body = React 트리 밖 → 크래시 안전
+        }
+        // 네이티브 스타터는 개별 버튼만 숨김(컨테이너·형제 불건드림) + 컴포저 하단 고정
+        nat.forEach(function (b) { b.classList.add('usun-starter-hidden'); });
+        pinComposer(true);
     }
 
     // ── 내장 법령 목록: 상단 헤더 버튼(Readme 옆) + 모달 팝업 ──────
@@ -517,8 +562,9 @@
         hideReadme();
         if (hasMessages()) {
             removeLogo();
+            teardownWelcomeCards();
         } else {
-            try { layoutStarterGrid(); } catch (e) { }   // 실패해도 로고·바는 살림
+            try { buildWelcomeCards(); } catch (e) { }   // 실패해도 로고·바는 살림
             insertLogo();
         }
         insertSidebarResizeHandle();
