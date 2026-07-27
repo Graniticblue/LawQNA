@@ -123,6 +123,19 @@ try:
             _PROVIDER_PREF[key] = p
         return JSONResponse({"provider": _PROVIDER_PREF.get(key, "gemini")})
 
+    # 스타터(추천질문) 유형 메타 — 프런트 카드 그리드가 label→유형 딱지 표시에 사용.
+    # _STARTER_POOL은 파일 하단에서 정의되지만 요청 시점엔 모듈 전역으로 존재한다.
+    @_cl_server_app.get("/starters-meta")
+    async def _starters_meta():
+        meta = {}
+        try:
+            for _type, _items in _STARTER_POOL.items():
+                for _s in _items:
+                    meta[_s.label] = _type
+        except Exception:
+            pass
+        return JSONResponse(meta)
+
     # 업로드 캐시 조회/삭제 (헤더 버튼 모달 — anon_id 쿠키로 본인 것만)
     def _upload_col(key: str):
         import chromadb
@@ -308,7 +321,7 @@ try:
     # 커스텀 라우트들을 라우터 맨 앞으로 재배열.
     _MY_PATHS = {"/element-files/{object_key:path}", "/law-list", "/upload-cache",
                  "/upload-cache/delete", "/upload-cache/add", "/upload-cache/recache",
-                 "/provider"}
+                 "/provider", "/starters-meta"}
     _front = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") in _MY_PATHS]
     _rest  = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") not in _MY_PATHS]
     _cl_server_app.router.routes[:] = _front + _rest
@@ -1458,25 +1471,57 @@ _LAW_LIST_STARTER = cl.Starter(
     label="📋 내장 법령 목록", message=_LAW_LIST_TRIGGER, icon="/public/starter_list.svg"
 )
 
-_STARTER_POOL = [
-    cl.Starter(label="🏗️ 건축허가·신고", message="건축허가와 건축신고의 대상 기준과 차이를 알려주세요."),
-    cl.Starter(label="🗺️ 용도지역 제한", message="용도지역별 건폐율·용적률 기준과 건축 제한을 알려주세요."),
-    cl.Starter(label="🔥 피난·방화 기준", message="피난계단 및 방화구획 설치 기준을 알려주세요."),
-    cl.Starter(label="👷 감리 대상·절차", message="건축 감리 대상 건축물과 감리 절차를 알려주세요."),
-    cl.Starter(label="🚗 주차장 설치기준", message="건축물 용도별 부설주차장 설치 기준을 알려주세요."),
-    cl.Starter(label="☀️ 일조권 높이제한", message="전용주거·일반주거지역의 일조권 높이 제한 기준을 알려주세요."),
-    cl.Starter(label="🛠️ 대수선 범위", message="대수선의 정의와 범위, 허가·신고 대상을 알려주세요."),
-    cl.Starter(label="📐 건폐율·용적률", message="용도지역별 건폐율과 용적률 상한 기준을 알려주세요."),
-    cl.Starter(label="🛣️ 접도의무", message="건축물 대지의 접도의무 요건과 예외를 알려주세요."),
-    cl.Starter(label="🏢 다중이용 건축물", message="다중이용 건축물의 정의와 강화되는 기준을 알려주세요."),
-    cl.Starter(label="🪜 직통계단 설치", message="직통계단 2개소 이상 설치 대상과 보행거리 기준을 알려주세요."),
-]
+# 추천질문 풀 — 질의 유형 4분면(뜻·수치·포섭·방법)으로 그룹화. 각 유형 6개.
+_STARTER_POOL = {
+    # ① 정의 — 개념·용어의 뜻("무엇인가")
+    "정의": [
+        cl.Starter(label="📖 다중이용건축물", message="다중이용건축물과 준다중이용건축물의 정의와 차이를 알려주세요."),
+        cl.Starter(label="🛠️ 대수선 범위", message="대수선의 정의와 범위(수선·변경 항목)를 알려주세요."),
+        cl.Starter(label="🏠 부속건축물", message="부속건축물과 부속용도의 정의와 구분 기준을 알려주세요."),
+        cl.Starter(label="🗺️ 도시계획시설", message="도시·군계획시설의 정의와 기반시설과의 관계를 알려주세요."),
+        cl.Starter(label="🧱 노후·불량건축물", message="도시정비법상 노후·불량건축물의 정의 기준을 알려주세요."),
+        cl.Starter(label="🏢 도시형 생활주택", message="주택법상 도시형 생활주택의 정의와 종류를 알려주세요."),
+    ],
+    # ② 기준·수치 — 조문상 구체 기준·수치 조회("얼마인가")
+    "기준·수치": [
+        cl.Starter(label="📏 인동간격", message="서울시 건축조례상 공동주택 인동간격(채광·측벽) 기준을 알려주세요."),
+        cl.Starter(label="📐 건폐율·용적률", message="제2종 일반주거지역의 건폐율·용적률 상한을 알려주세요."),
+        cl.Starter(label="☀️ 일조권 높이", message="전용주거·일반주거지역 건축물의 일조권 높이제한 기준을 알려주세요."),
+        cl.Starter(label="🚗 부설주차 대수", message="용도별 부설주차장 설치 대수 산정 기준을 알려주세요."),
+        cl.Starter(label="🔍 안전진단 등급", message="재건축 안전진단의 판정 등급과 기준을 알려주세요."),
+        cl.Starter(label="🚪 대피공간", message="공동주택 발코니 확장 시 대피공간 설치 기준을 알려주세요."),
+    ],
+    # ③ 해석·적용 — 명문이 애매한 포섭 판단("~에 해당/포함되나")
+    "해석·적용": [
+        cl.Starter(label="🧱 노후도 산정", message="부속건축물도 재건축 노후도(연면적) 산정에 포함되나요?"),
+        cl.Starter(label="🔝 높이·층수 산정", message="옥상 승강기탑·계단탑이 건축물 높이·층수 산정에 포함되나요?"),
+        cl.Starter(label="📐 용적률 연면적", message="필로티 주차장 면적이 용적률 산정 연면적에 포함되나요?"),
+        cl.Starter(label="⚠️ 위반건축물", message="무단 증축된 위반건축물도 노후·불량건축물로 볼 수 있나요?"),
+        cl.Starter(label="🅿️ 대지 안의 공지", message="대지 안의 공지에 부설주차 구획을 설치할 수 있나요?"),
+        cl.Starter(label="🏘️ 다세대·다가구", message="다세대주택과 다가구주택을 가르는 경계는 어디인가요?"),
+    ],
+    # ④ 절차 — 인허가·신고·심의 절차("어떻게 하나")
+    "절차": [
+        cl.Starter(label="🏗️ 허가 vs 신고", message="건축허가와 건축신고의 대상 구분과 절차 차이를 알려주세요."),
+        cl.Starter(label="🔄 경미한 변경", message="사업계획승인을 받은 공동주택의 경미한 변경 절차를 알려주세요."),
+        cl.Starter(label="🤝 조합설립인가", message="정비사업 조합설립인가의 동의 요건과 절차를 알려주세요."),
+        cl.Starter(label="🏛️ 건축위 심의", message="건축위원회 심의 대상과 심의를 생략할 수 있는 경우를 알려주세요."),
+        cl.Starter(label="🔧 용도변경", message="용도변경의 허가·신고·건축물대장 기재변경 구분을 알려주세요."),
+        cl.Starter(label="🌱 개발행위허가", message="개발행위허가의 대상과 협의·절차를 알려주세요."),
+    ],
+}
 
 
 @cl.set_starters
 async def set_starters():
-    # 내장 법령 목록은 상단 헤더 버튼(custom.js)으로 옮김. 여기선 추천질문만 4개 로테이션.
-    return random.sample(_STARTER_POOL, k=min(4, len(_STARTER_POOL)))
+    # 추천질문 카드 그리드(프런트 custom.js가 6개·1/1/2/2 배열로 렌더).
+    # 4개 유형(정의·기준수치·해석적용·절차)을 모두 담되 매 세션 변주:
+    # 유형별 1개(4) + 임의 2개 = 6개, 순서 셔플로 히어로(맨 위 2장) 유형도 다양하게.
+    picked = [random.choice(group) for group in _STARTER_POOL.values()]  # 유형별 1개 = 4
+    rest = [s for group in _STARTER_POOL.values() for s in group if s not in picked]
+    picked += random.sample(rest, k=min(2, len(rest)))                  # +2 = 6
+    random.shuffle(picked)
+    return picked
 
 
 def _thread_scope() -> str:

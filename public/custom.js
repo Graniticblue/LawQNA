@@ -53,23 +53,103 @@
         img.style.cssText = 'max-height: 52px; max-width: 200px; object-fit: contain;';
 
         wrap.appendChild(img);
-        inputBox.parentNode.insertBefore(wrap, inputBox);
+        // 카드 그리드가 있으면 그 위에(로고 → 그리드 → 입력창 순), 없으면 입력창 위에
+        var anchor = document.getElementById('usun-starter-grid') || inputBox;
+        inputBox.parentNode.insertBefore(wrap, anchor);
     }
 
-    // 추천질문(starters)을 한 줄에 가로 배치 (기본은 두 줄로 wrap됨)
-    function layoutStarters() {
-        const btns = Array.prototype.slice.call(document.querySelectorAll('button'))
+    // ── 추천질문 → 가운데 카드 그리드 (6개, 1/1/2/2 · 유형 딱지 + 제목) ──────
+    // chainlit이 렌더한 네이티브 스타터 버튼은 숨기고, 그 라벨을 읽어 카드 그리드를
+    // 새로 만든다. 카드 클릭은 라벨이 일치하는 네이티브 버튼의 .click()에 위임 →
+    // 전송 동작은 chainlit 것 그대로라 안정적. 유형(딱지)은 /starters-meta에서 받는다.
+    var _startersMeta = null, _metaFetched = false;
+    function loadStartersMeta() {
+        if (_metaFetched) return;
+        _metaFetched = true;
+        fetch('/starters-meta')
+            .then(function (r) { return r.json(); })
+            .then(function (m) {
+                _startersMeta = m || {};
+                var g = document.getElementById('usun-starter-grid');
+                if (g) g.remove();   // 딱지 포함해 다음 update에 재빌드
+            })
+            .catch(function () { _startersMeta = {}; });
+    }
+
+    function nativeStarterButtons() {
+        return Array.prototype.slice.call(document.querySelectorAll('button'))
             .filter(function (b) {
                 return b.className.indexOf('rounded-3xl') !== -1 && b.querySelector('p.truncate');
             });
-        if (btns.length >= 2 && btns[0].parentElement) {
-            const c = btns[0].parentElement;
-            c.style.flexWrap = 'nowrap';
-            c.style.overflowX = 'auto';
-            c.style.justifyContent = 'flex-start';
-            // 버튼이 줄어들어 라벨이 잘리지 않도록 가로스크롤 허용
-            btns.forEach(function (b) { b.style.flexShrink = '0'; });
+    }
+
+    function starterLabel(btn) {
+        var p = btn.querySelector('p.truncate');
+        return ((p ? p.textContent : btn.textContent) || '').trim();
+    }
+
+    function removeStarterGrid() {
+        var g = document.getElementById('usun-starter-grid');
+        if (g) g.remove();
+    }
+
+    function layoutStarterGrid() {
+        var nat = nativeStarterButtons();
+        if (nat.length < 1) { removeStarterGrid(); return; }   // 대화 시작 등 — 불필요
+
+        var labels = nat.map(starterLabel);
+        var sig = labels.join('|');
+        var grid = document.getElementById('usun-starter-grid');
+        if (grid && grid.dataset.sig === sig) {
+            // 이미 동일 구성 — 네이티브 컨테이너 숨김만 유지
+            if (nat[0].parentElement) nat[0].parentElement.classList.add('usun-native-starters-hidden');
+            return;
         }
+        if (grid) grid.remove();
+
+        var meta = _startersMeta || {};
+        grid = document.createElement('div');
+        grid.id = 'usun-starter-grid';
+        grid.dataset.sig = sig;
+
+        labels.forEach(function (label) {
+            var card = document.createElement('button');
+            card.type = 'button';
+            card.className = 'usun-card';
+            var type = meta[label] || '';
+            if (type) {
+                var chip = document.createElement('span');
+                chip.className = 'usun-card-chip';
+                chip.setAttribute('data-type', type);
+                chip.textContent = type;
+                card.appendChild(chip);
+            }
+            var title = document.createElement('span');
+            title.className = 'usun-card-title';
+            title.textContent = label;
+            card.appendChild(title);
+            // 클릭 위임: 클릭 시점에 라벨로 네이티브 버튼을 재탐색해 .click()
+            card.addEventListener('click', function () {
+                var target = nativeStarterButtons().filter(function (b) {
+                    return starterLabel(b) === label;
+                })[0];
+                if (target) target.click();
+            });
+            grid.appendChild(card);
+        });
+
+        // 입력창 위(로고 아래)에 삽입
+        var submitBtn = document.getElementById('chat-submit');
+        var inputBox = submitBtn && submitBtn.parentElement
+            && submitBtn.parentElement.parentElement
+            && submitBtn.parentElement.parentElement.parentElement;
+        if (inputBox && inputBox.parentNode) {
+            inputBox.parentNode.insertBefore(grid, inputBox);
+        } else if (nat[0].parentElement && nat[0].parentElement.parentNode) {
+            nat[0].parentElement.parentNode.insertBefore(grid, nat[0].parentElement);
+        }
+        // 네이티브 스타터 컨테이너 숨김 (버튼은 .click() 위임용으로 DOM에 남김)
+        if (nat[0].parentElement) nat[0].parentElement.classList.add('usun-native-starters-hidden');
     }
 
     // ── 내장 법령 목록: 상단 헤더 버튼(Readme 옆) + 모달 팝업 ──────
@@ -351,66 +431,56 @@
         } catch (e) { }
     }
 
-    function insertLawListButton() {
+    // ── 오른쪽 고정 바: 상단 헤더에 있던 액션 버튼들을 이리로 이동 ──────────
+    function ensureRightBar() {
+        var bar = document.getElementById('usun-right-bar');
+        if (!bar) {
+            bar = document.createElement('div');
+            bar.id = 'usun-right-bar';
+            var title = document.createElement('div');
+            title.className = 'usun-rb-title';
+            title.textContent = '도구';
+            bar.appendChild(title);
+            document.body.appendChild(bar);
+        }
+        return bar;
+    }
+
+    // 기준점으로만 쓰던 'Readme' 링크는 이제 불필요 — 보이면 숨긴다
+    function hideReadme() {
         try {
-            // 모델 버튼까지 전부 있어야 스킵 — 일부만 있으면 나머지를 마저 삽입
-            if (document.getElementById('law-list-btn')
-                && document.getElementById('model-select-btn')) return;
-            if (document.getElementById('law-list-btn')) {
-                // 구버전 렌더 잔재: 모델 버튼만 없는 경우 — 대화 저장 뒤에 붙인다
-                var sbtn = document.getElementById('chat-save-btn');
-                if (sbtn && sbtn.parentElement && !document.getElementById('model-select-btn')) {
-                    var mbtn = document.createElement('button');
-                    mbtn.id = 'model-select-btn';
-                    mbtn.type = 'button';
-                    mbtn.className = 'law-list-btn';
-                    mbtn.onclick = toggleModelMenu;
-                    sbtn.parentElement.insertBefore(mbtn, sbtn.nextSibling);
-                    renderModelButton();
-                    syncModelOnce();
-                }
-                return;
-            }
-            // 'Readme' 버튼/링크 바로 앞에 삽입 (파란 버전에서 정상 동작한 방식)
             var readme = Array.prototype.slice.call(document.querySelectorAll('button, a'))
                 .find(function (el) { return el.textContent.trim() === 'Readme'; });
-            if (!readme || !readme.parentElement) return;  // 헤더 준비 전이면 다음 mutation에 재시도
-            var btn = document.createElement('button');
-            btn.id = 'law-list-btn';
-            btn.type = 'button';
-            btn.textContent = '내장 법령 목록';
-            btn.className = 'law-list-btn';
-            btn.onclick = showLawListModal;
-            readme.parentElement.insertBefore(btn, readme);
-            // 업로드 자료 버튼 (내장 법령 목록과 Readme 사이)
-            var ub = document.createElement('button');
-            ub.id = 'upload-cache-btn';
-            ub.type = 'button';
-            ub.textContent = '조례 라이브러리';
-            ub.className = 'law-list-btn';
-            ub.onclick = showUploadModal;
-            readme.parentElement.insertBefore(ub, readme);
-            // 대화 저장 버튼 (업로드 캐시와 Readme 사이)
-            var sb = document.createElement('button');
-            sb.id = 'chat-save-btn';
-            sb.type = 'button';
-            sb.textContent = '대화 저장';
-            sb.className = 'law-list-btn';
-            sb.onclick = downloadChat;
-            readme.parentElement.insertBefore(sb, readme);
-            // 모델 선택 드롭다운 (대화 저장 오른쪽) — ▾ 클릭 시 모델 리스트
-            var mt = document.createElement('button');
-            mt.id = 'model-select-btn';
-            mt.type = 'button';
-            mt.className = 'law-list-btn';
-            mt.onclick = toggleModelMenu;
-            readme.parentElement.insertBefore(mt, readme);
+            if (readme) readme.style.display = 'none';
+        } catch (e) { }
+    }
+
+    function insertRightBarButtons() {
+        try {
+            var bar = ensureRightBar();
+            if (document.getElementById('law-list-btn')
+                && document.getElementById('upload-cache-btn')
+                && document.getElementById('chat-save-btn')
+                && document.getElementById('model-select-btn')) {
+                renderModelButton();   // 라벨만 최신화
+                return;
+            }
+            function mk(id, text, handler) {
+                if (document.getElementById(id)) return;
+                var b = document.createElement('button');
+                b.id = id;
+                b.type = 'button';
+                b.className = 'law-list-btn';
+                if (text) b.textContent = text;
+                b.onclick = handler;
+                bar.appendChild(b);
+            }
+            mk('law-list-btn', '내장 법령 목록', showLawListModal);
+            mk('upload-cache-btn', '조례 라이브러리', showUploadModal);
+            mk('chat-save-btn', '대화 저장', downloadChat);
+            mk('model-select-btn', '', toggleModelMenu);   // 라벨은 renderModelButton이 채움
             renderModelButton();
             syncModelOnce();
-            // Readme 버튼 숨김 — 우리 버튼들의 삽입 기준점으로만 쓰고 표시하지 않는다
-            // (DOM에서 제거하면 재렌더 때 기준점 탐색이 깨지므로 display만 끔.
-            //  Readme 기준 등간격 측정 코드는 숨김과 함께 제거됨)
-            readme.style.display = 'none';
         } catch (e) { /* DOM 변동 중 실패는 무시(다음 mutation에 재시도) */ }
     }
 
@@ -490,13 +560,16 @@
     }
 
     function update() {
+        loadStartersMeta();
+        insertRightBarButtons();
+        hideReadme();
         if (hasMessages()) {
             removeLogo();
+            removeStarterGrid();
         } else {
+            try { layoutStarterGrid(); } catch (e) { }   // 실패해도 로고·바는 살림
             insertLogo();
         }
-        layoutStarters();
-        insertLawListButton();
         insertSidebarResizeHandle();
         killDarkMode();
     }
