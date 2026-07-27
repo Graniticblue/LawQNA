@@ -368,17 +368,52 @@
         return us.length ? (us[us.length - 1].innerText || '').trim() : '';
     }
 
-    // ── 입력창에 텍스트 주입 후 전송 (React 제어 textarea) ────────────
-    function sendPrompt(text) {
+    // ── 입력창(컴포저) 탐색 — 위치·형태 방어 ────────────────────────
+    // #chat-submit 에서 위로 훑어 textarea/contenteditable를 품은 컨테이너를 찾고,
+    // 못 찾으면 문서 전체(우측바·모달 제외)에서 폴백.
+    function _findComposer() {
         var s = document.getElementById('chat-submit');
-        var box = s && s.parentElement && s.parentElement.parentElement
-            && s.parentElement.parentElement.parentElement;
-        var ta = box && box.querySelector('textarea');
-        if (!ta || !s) { alert('입력창을 찾지 못했습니다.'); return false; }
-        var d = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
-        if (d && d.set) d.set.call(ta, text); else ta.value = text;
-        ta.dispatchEvent(new Event('input', { bubbles: true }));   // React 상태 반영
-        setTimeout(function () { s.click(); }, 40);
+        if (s) {
+            var el = s;
+            for (var i = 0; i < 6 && el; i++) {
+                var ta = el.querySelector && el.querySelector('textarea, [contenteditable="true"]');
+                if (ta) return { ta: ta, submit: s };
+                el = el.parentElement;
+            }
+        }
+        var all = Array.prototype.slice.call(
+            document.querySelectorAll('textarea, [contenteditable="true"]')
+        ).filter(function (t) {
+            return !(t.closest && t.closest(
+                '#usun-right-bar, #law-search-modal, #law-list-modal, #upload-cache-modal'));
+        });
+        if (all.length) return { ta: all[all.length - 1], submit: s };
+        return null;
+    }
+
+    // ── 입력창에 텍스트 주입 후 전송 ────────────────────────────────
+    function sendPrompt(text) {
+        var c = _findComposer();
+        if (!c || !c.ta) { alert('입력창을 찾지 못했습니다.'); return false; }
+        var ta = c.ta;
+        ta.focus();
+        if (ta.tagName === 'TEXTAREA') {
+            var d = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+            if (d && d.set) d.set.call(ta, text); else ta.value = text;
+            ta.dispatchEvent(new Event('input', { bubbles: true }));   // React 상태 반영
+        } else {   // contenteditable
+            ta.textContent = text;
+            ta.dispatchEvent(new InputEvent('input', { bubbles: true }));
+        }
+        setTimeout(function () {
+            var s = c.submit || document.getElementById('chat-submit');
+            if (s && !s.disabled) { s.click(); return; }
+            ['keydown', 'keypress', 'keyup'].forEach(function (type) {   // 폴백: Enter 전송
+                ta.dispatchEvent(new KeyboardEvent(type, {
+                    key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true
+                }));
+            });
+        }, 90);
         return true;
     }
 
