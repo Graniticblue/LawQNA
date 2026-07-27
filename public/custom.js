@@ -538,9 +538,9 @@
             .catch(function () { /* 네트워크 실패는 다음 주기에 재시도 */ });
     }
 
-    // 모니터링 수동추가 — 법령/조례 검색 결과 렌더 (추가는 결과 클릭 위임)
+    // 모니터링 수동추가 — 모달 결과창에 법령/조례 검색 결과 렌더 (추가는 클릭 위임)
     function doLawSearch(q) {
-        var box = document.getElementById('usun-law-results');
+        var box = document.getElementById('law-search-results');
         if (!box) return;
         q = (q || '').trim();
         if (q.length < 2) { box.innerHTML = '<div class="usun-law-hint">2글자 이상 입력하세요</div>'; return; }
@@ -555,10 +555,72 @@
                     return '<div class="usun-law-item" data-kind="' + _esc(it.kind) + '" data-name="' + _esc(it.name) + '">'
                         + '<span class="usun-law-kind usun-law-kind-' + k + '">' + _esc(it.kind) + '</span>'
                         + '<span class="usun-law-nm">' + _esc(it.name) + '</span>'
-                        + '<button type="button" class="usun-law-add" title="추가">＋</button></div>';
+                        + '<button type="button" class="usun-law-add">추가</button></div>';
                 }).join('');
             })
             .catch(function () { box.innerHTML = '<div class="usun-law-hint">검색 실패</div>'; });
+    }
+
+    // 법령·조례 검색·추가 모달 (우측 바 버튼 → 새 창). 내장 법령 목록 모달과 같은 껍데기 사용.
+    function showLawSearchModal() {
+        var ov = document.getElementById('law-search-modal');
+        if (ov) {
+            ov.style.display = 'flex';
+            var q0 = ov.querySelector('#law-search-q');
+            if (q0) setTimeout(function () { q0.focus(); }, 30);
+            return;
+        }
+        ov = document.createElement('div');
+        ov.id = 'law-search-modal';
+        ov.innerHTML =
+            '<div class="law-list-box">' +
+            '<button class="law-list-close" aria-label="닫기">✕</button>' +
+            '<h2 style="font-size:18px;margin:0 0 4px">법령·조례 검색·추가</h2>' +
+            '<div class="law-db-foot" style="margin:0 0 14px">법제처 API에서 검색해 캐싱·적재합니다. 추가한 자료는 모니터링(앞으로 참고할 자료)에 등재됩니다.</div>' +
+            '<div class="law-search-bar">' +
+            '<input type="text" id="law-search-q" placeholder="법령·조례명을 입력하세요 (2글자 이상)" />' +
+            '<button type="button" id="law-search-go">🔎 검색</button>' +
+            '</div>' +
+            '<div id="law-search-results" class="law-search-results"></div>' +
+            '</div>';
+        ov.addEventListener('click', function (e) { if (e.target === ov) ov.style.display = 'none'; });
+        ov.querySelector('.law-list-close').onclick = function () { ov.style.display = 'none'; };
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') { var m = document.getElementById('law-search-modal'); if (m) m.style.display = 'none'; }
+        });
+        var qin = ov.querySelector('#law-search-q');
+        var qgo = ov.querySelector('#law-search-go');
+        var res = ov.querySelector('#law-search-results');
+        qgo.addEventListener('click', function () { doLawSearch(qin.value); });
+        qin.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') { e.preventDefault(); doLawSearch(qin.value); }
+        });
+        // 백스페이스 등으로 입력을 비우면 결과도 지운다
+        qin.addEventListener('input', function () { if (!qin.value.trim()) res.innerHTML = ''; });
+        res.addEventListener('click', function (e) {
+            var b = e.target.closest && e.target.closest('.usun-law-add');
+            if (!b) return;
+            var item = b.closest('.usun-law-item');
+            if (!item) return;
+            b.disabled = true; b.textContent = '…';
+            fetch('/law-add', {
+                method: 'POST', credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    kind: item.getAttribute('data-kind'),
+                    name: item.getAttribute('data-name'),
+                }),
+            })
+                .then(function (r) { return r.json(); })
+                .then(function (res2) {
+                    b.textContent = (res2 && !res2.error) ? '✓ 추가됨' : '✗';
+                    if (res2 && !res2.error) { item.classList.add('added'); refreshMonitor(); }
+                })
+                .catch(function () { b.textContent = '✗'; });
+        });
+        document.body.appendChild(ov);
+        ov.style.display = 'flex';
+        setTimeout(function () { qin.focus(); }, 30);
     }
 
     // ── 오른쪽 고정 바: 상단 헤더에 있던 액션 버튼들을 이리로 이동 ──────────
@@ -624,43 +686,7 @@
             renderModelButton();
             syncModelOnce();
             sec('모니터링');
-            // 수동추가: 법령·조례 검색창
-            var srch = document.createElement('div');
-            srch.className = 'usun-mon-search';
-            var qin = document.createElement('input');
-            qin.type = 'text'; qin.id = 'usun-law-q'; qin.placeholder = '법령·조례명 검색…';
-            var qgo = document.createElement('button');
-            qgo.type = 'button'; qgo.id = 'usun-law-go'; qgo.textContent = '🔎'; qgo.title = '검색';
-            srch.appendChild(qin); srch.appendChild(qgo);
-            bar.appendChild(srch);
-            var sres = document.createElement('div');
-            sres.id = 'usun-law-results'; sres.className = 'usun-law-results';
-            bar.appendChild(sres);
-            qgo.addEventListener('click', function () { doLawSearch(qin.value); });
-            qin.addEventListener('keydown', function (e) {
-                if (e.key === 'Enter') { e.preventDefault(); doLawSearch(qin.value); }
-            });
-            sres.addEventListener('click', function (e) {
-                var b = e.target.closest && e.target.closest('.usun-law-add');
-                if (!b) return;
-                var item = b.closest('.usun-law-item');
-                if (!item) return;
-                b.disabled = true; b.textContent = '…';
-                fetch('/law-add', {
-                    method: 'POST', credentials: 'same-origin',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        kind: item.getAttribute('data-kind'),
-                        name: item.getAttribute('data-name'),
-                    }),
-                })
-                    .then(function (r) { return r.json(); })
-                    .then(function (res) {
-                        b.textContent = (res && !res.error) ? '✓' : '✗';
-                        if (res && !res.error) refreshMonitor();   // 모니터에 즉시 반영
-                    })
-                    .catch(function () { b.textContent = '✗'; });
-            });
+            mk('law-search-btn', '🔎 법령·조례 검색·추가', showLawSearchModal);   // 클릭 → 모달
             // 누적 현황
             var mon = document.createElement('div');
             mon.id = 'usun-monitor';
