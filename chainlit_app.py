@@ -335,6 +335,71 @@ try:
         added = _monitor_scan_texts([str(t) for t in texts][:200], key)
         return JSONResponse({"added": added})
 
+    # 근거 더 찾기 — 대화 맥락에서 LLM으로 키워드 도출 → 판례·해석례 API 검색 → 후보 제안
+    @_cl_server_app.get("/evidence-search")
+    async def _evidence_search_g():
+        return JSONResponse({"keywords": [], "candidates": []})
+
+    @_cl_server_app.post("/evidence-search")
+    async def _evidence_search(request: Request):
+        import asyncio as _asyncio
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        ctx = ((body or {}).get("context", "") or "")[:6000]
+        if not ctx.strip():
+            return JSONResponse({"keywords": [], "candidates": []})
+
+        def _keywords():
+            kws = []
+            try:
+                from google import genai
+                gkey = os.environ.get("GOOGLE_API_KEY", "")
+                if gkey:
+                    client = genai.Client(api_key=gkey)
+                    prompt = ("다음 법률 상담에서 판례·법령해석례를 검색하기 위한 핵심 검색어를 "
+                              "3~5개만 뽑아 쉼표로 답하라(설명·번호 금지). 건축·국토·주택 법률 용어 위주.\n\n"
+                              + ctx)
+                    resp = client.models.generate_content(
+                        model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"), contents=prompt)
+                    txt = (getattr(resp, "text", "") or "").strip()
+                    kws = [w.strip() for w in re.split(r"[,\n·]", txt) if w.strip()][:5]
+            except Exception:
+                kws = []
+            if not kws:   # 폴백: 한글 명사류 빈도
+                import collections
+                stop = {"경우", "해당", "관한", "위하", "때문", "판단", "해석", "규정", "조항",
+                        "내용", "질문", "답변", "대하", "이러", "그러", "따라", "대해"}
+                c = collections.Counter(
+                    w for w in re.findall(r"[가-힣]{2,8}", ctx) if w not in stop)
+                kws = [w for w, _ in c.most_common(5)]
+            return kws
+
+        def _search(kws):
+            from ingest import law_api_fetcher as laf
+            q = " ".join(kws[:3]) if kws else ""
+            cands = []
+            if q:
+                try:
+                    for p in (laf.search_precedents(q, 8) or []):
+                        cands.append({"kind": "판례", "id": p.get("id", ""),
+                                      "title": p.get("name", "") or p.get("caseno", ""),
+                                      "sub": " · ".join(x for x in [p.get("court", ""),
+                                             p.get("caseno", ""), p.get("date", "")] if x)})
+                    for e in (laf.search_interpretations(q, 8) or []):
+                        cands.append({"kind": "해석례", "id": e.get("id", ""),
+                                      "title": e.get("name", "") or e.get("caseno", ""),
+                                      "sub": " · ".join(x for x in [e.get("org", ""),
+                                             e.get("caseno", ""), e.get("date", "")] if x)})
+                except Exception:
+                    pass
+            return cands
+
+        kws = await _asyncio.to_thread(_keywords)
+        cands = await _asyncio.to_thread(_search, kws)
+        return JSONResponse({"keywords": kws, "candidates": cands[:20]})
+
     # 업로드 캐시 조회/삭제 (헤더 버튼 모달 — anon_id 쿠키로 본인 것만)
     def _upload_col(key: str):
         import chromadb
@@ -521,7 +586,7 @@ try:
     _MY_PATHS = {"/element-files/{object_key:path}", "/law-list", "/upload-cache",
                  "/upload-cache/delete", "/upload-cache/add", "/upload-cache/recache",
                  "/provider", "/starters-meta", "/monitor",
-                 "/law-search", "/law-add", "/monitor-rescan"}
+                 "/law-search", "/law-add", "/monitor-rescan", "/evidence-search"}
     _front = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") in _MY_PATHS]
     _rest  = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") not in _MY_PATHS]
     _cl_server_app.router.routes[:] = _front + _rest

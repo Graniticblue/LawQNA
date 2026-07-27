@@ -107,7 +107,8 @@ a[href*="github.com/Chainlit"],
 
 #law-list-modal,
 #upload-cache-modal,
-#law-search-modal {
+#law-search-modal,
+#evidence-modal {
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.45);
@@ -482,6 +483,28 @@ button:has(svg[class*="-moon"]) {
 }
 .usun-law-add:hover { background: #E3F2FD; }
 .usun-law-add:disabled { opacity: .7; cursor: default; }
+
+/* 근거 더 찾기 — 제안 모달 */
+.ev-keywords { margin: 0 0 10px; font-size: 12.5px; line-height: 1.7; }
+.ev-kw-l { font-weight: 700; color: #64748b; margin-right: 4px; }
+.ev-kw {
+    display: inline-block; background: #eef3fa; color: #1565C0;
+    border-radius: 999px; padding: 2px 9px; font-size: 11.5px; font-weight: 600; margin: 2px;
+}
+.ev-item { cursor: pointer; }
+.ev-item .ev-ck {
+    flex: 0 0 auto; width: 16px; height: 16px; margin: 0; accent-color: #1565C0; cursor: pointer;
+}
+.ev-kind-case { color: #B26A00; background: #FBF0DE; }
+.ev-kind-expc { color: #6A1B9A; background: #F1E9F7; }
+.ev-sub { font-size: 11px; color: #94a3b8; }
+.ev-actions { margin-top: 14px; text-align: right; }
+.ev-actions button {
+    background: #1565C0; color: #fff; border: none; border-radius: 8px;
+    padding: 9px 18px; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.ev-actions button:disabled { opacity: .5; cursor: default; }
+.ev-actions button:hover:not(:disabled) { background: #0D47A1; }
 
 /* 오른쪽 바 폭만큼 본문 우측 확보 (content가 flow면 밀리고, fixed면 겹칠 수
    있음 — 겹치면 스크린샷 주면 push 대상 셀렉터를 조정한다) */

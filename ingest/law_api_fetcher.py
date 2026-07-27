@@ -510,6 +510,78 @@ def search_laws(query: str, display: int = 20) -> list[dict]:
         return []
 
 
+def _g(item: dict, *keys):
+    for k in keys:
+        v = item.get(k)
+        if v not in (None, ""):
+            return str(v).strip()
+    return ""
+
+
+def search_precedents(query: str, display: int = 12) -> list[dict]:
+    """판례 검색 (target=prec) — 근거 더 찾기용. [{id, name, caseno, court, date}]."""
+    key = _get_api_key()
+    if not key or not (query or "").strip():
+        return []
+    try:
+        r = requests.get(
+            LAW_SEARCH_URL,
+            params={"OC": key, "target": "prec", "type": "JSON",
+                    "query": query, "display": display},
+            timeout=15,
+        )
+        data = r.json()
+        cont = data.get("PrecSearch") or data.get("precSearch") or data.get("Prec") or {}
+        items = cont.get("prec") or []
+        if isinstance(items, dict):
+            items = [items]
+        out = []
+        for it in items:
+            out.append({
+                "id":     _g(it, "판례일련번호", "판례정보일련번호", "id"),
+                "name":   _g(it, "사건명", "판례명"),
+                "caseno": _g(it, "사건번호"),
+                "court":  _g(it, "법원명"),
+                "date":   _g(it, "선고일자", "판결일자"),
+            })
+        return [o for o in out if o.get("name") or o.get("caseno")]
+    except Exception:
+        return []
+
+
+def search_interpretations(query: str, display: int = 12) -> list[dict]:
+    """법령해석례 검색 (target=expc) — 근거 더 찾기용. [{id, name, caseno, org, date}]."""
+    key = _get_api_key()
+    if not key or not (query or "").strip():
+        return []
+    try:
+        r = requests.get(
+            LAW_SEARCH_URL,
+            params={"OC": key, "target": "expc", "type": "JSON",
+                    "query": query, "display": display},
+            timeout=15,
+        )
+        data = r.json()
+        cont = (data.get("Expc") or data.get("ExpcSearch")
+                or data.get("expcSearch") or data.get("expc") or {})
+        items = cont.get("expc") if isinstance(cont, dict) else cont
+        items = items or []
+        if isinstance(items, dict):
+            items = [items]
+        out = []
+        for it in items:
+            out.append({
+                "id":     _g(it, "법령해석례일련번호", "해석례일련번호", "id"),
+                "name":   _g(it, "안건명", "해석명", "제목"),
+                "caseno": _g(it, "안건번호"),
+                "org":    _g(it, "회신기관명", "해석기관명", "질의기관명", "안건번호기관"),
+                "date":   _g(it, "회신일자", "해석일자", "등록일시"),
+            })
+        return [o for o in out if o.get("name") or o.get("caseno")]
+    except Exception:
+        return []
+
+
 def fetch_ordinance(name: str, force: bool = False) -> dict[str, str] | None:
     """자치법규(조례) 전체 조문+별표 반환 + 캐시. 위임 링크는 자치법규엔 미제공.
     force=True면 캐시를 무시하고 재패치(구버전 캐시에 별표가 없을 때)."""

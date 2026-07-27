@@ -424,11 +424,86 @@
         sendPrompt(q);
     }
 
-    // 근거 더 찾기 — 직전 질문에 근거 보강 요청을 덧붙여 재전송
+    // 근거 더 찾기 — 대화 맥락에서 키워드 도출 → API로 판례·해석례 검색·제안 → 선택 후 재생성
     function findMoreEvidence() {
         var q = lastUserQuestion();
         if (!q) { alert('먼저 질문을 해주세요.'); return; }
-        sendPrompt(q + '\n\n(위 질문에 대해 관련 조문·법제처 해석례·판례 근거를 더 폭넓게 찾아 다시 답변해줘.)');
+        var ans = document.querySelectorAll('[data-step-type="assistant_message"]');
+        var lastA = ans.length ? (ans[ans.length - 1].innerText || '').trim() : '';
+        showEvidenceModal(q + '\n\n' + lastA, q);
+    }
+
+    function showEvidenceModal(ctx, lastQ) {
+        var ov = document.getElementById('evidence-modal');
+        if (ov) ov.remove();
+        ov = document.createElement('div');
+        ov.id = 'evidence-modal';
+        ov.innerHTML =
+            '<div class="law-list-box">' +
+            '<button class="law-list-close" aria-label="닫기">✕</button>' +
+            '<h2 style="font-size:18px;margin:0 0 4px">근거 더 찾기 — 판례·해석례 제안</h2>' +
+            '<div class="law-db-foot" style="margin:0 0 10px">대화에서 키워드를 뽑아 법제처 API로 판례·법령해석례를 검색합니다. 참고할 자료를 선택해 답변을 다시 생성하세요.</div>' +
+            '<div id="ev-keywords" class="ev-keywords"></div>' +
+            '<div id="ev-results" class="law-search-results"><div class="usun-law-hint">키워드 도출·검색 중… (몇 초 걸립니다)</div></div>' +
+            '<div class="ev-actions"><button type="button" id="ev-gen" disabled>선택한 근거로 다시 답변</button></div>' +
+            '</div>';
+        ov.addEventListener('click', function (e) { if (e.target === ov) ov.style.display = 'none'; });
+        ov.querySelector('.law-list-close').onclick = function () { ov.style.display = 'none'; };
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') { var m = document.getElementById('evidence-modal'); if (m) m.style.display = 'none'; }
+        });
+        document.body.appendChild(ov);
+        ov.style.display = 'flex';
+
+        fetch('/evidence-search', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ context: ctx }),
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                var kws = d.keywords || [];
+                ov.querySelector('#ev-keywords').innerHTML = kws.length
+                    ? ('<span class="ev-kw-l">키워드</span> ' + kws.map(function (k) {
+                        return '<span class="ev-kw">' + _esc(k) + '</span>';
+                    }).join(' ')) : '';
+                var res = ov.querySelector('#ev-results');
+                var cs = d.candidates || [];
+                if (!cs.length) {
+                    res.innerHTML = '<div class="usun-law-hint">관련 판례·해석례를 찾지 못했습니다. (‘＋ 참고자료 추가’로 직접 검색해 보세요)</div>';
+                    return;
+                }
+                res.innerHTML = cs.map(function (it) {
+                    var kc = (it.kind === '판례') ? 'case' : 'expc';
+                    return '<label class="usun-law-item ev-item">'
+                        + '<input type="checkbox" class="ev-ck" data-kind="' + _esc(it.kind)
+                        + '" data-title="' + _esc(it.title) + '" data-sub="' + _esc(it.sub || '') + '">'
+                        + '<span class="usun-law-kind ev-kind-' + kc + '">' + _esc(it.kind) + '</span>'
+                        + '<span class="usun-law-nm">' + _esc(it.title)
+                        + (it.sub ? (' <span class="ev-sub">' + _esc(it.sub) + '</span>') : '')
+                        + '</span></label>';
+                }).join('');
+                ov.querySelector('#ev-gen').disabled = false;
+            })
+            .catch(function () {
+                ov.querySelector('#ev-results').innerHTML =
+                    '<div class="usun-law-hint">검색 실패 (네트워크 또는 API 키 확인)</div>';
+            });
+
+        ov.querySelector('#ev-gen').addEventListener('click', function () {
+            var picks = Array.prototype.slice.call(ov.querySelectorAll('.ev-ck:checked')).map(function (c) {
+                var sub = c.getAttribute('data-sub');
+                return c.getAttribute('data-kind') + ' ' + c.getAttribute('data-title')
+                    + (sub ? (' (' + sub + ')') : '');
+            });
+            if (!picks.length) return;
+            ov.style.display = 'none';
+            var msg = lastQ
+                + '\n\n(아래 판례·법령해석례를 근거로 함께 검토하여 위 질문에 다시 답변해줘. '
+                + '각 자료의 실제 판시·회답 취지를 확인해 적용하되, 관련 없으면 배제해도 좋아.)\n'
+                + picks.map(function (p, i) { return (i + 1) + '. ' + p; }).join('\n');
+            sendPrompt(msg);
+        });
     }
 
     // ── 모델 선택 드롭다운 — 질문 시 묻지 않고 헤더에서 선택 ──────────
