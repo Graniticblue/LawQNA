@@ -340,11 +340,46 @@
         setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
     }
 
-    // ── PDF 내보내기 — 브라우저 인쇄창(→'PDF로 저장'). @media print에서 크롬 숨김 ──
+    // ── PDF 내보내기 — 전체 대화를 새 창에 통째로 조립 후 인쇄(→'PDF로 저장') ──
+    // 라이브 페이지 window.print()는 스크롤 컨테이너의 보이는 부분(1페이지)만 찍혀서,
+    // 대화 전체를 새 문서로 만들어 인쇄한다. 표·목록·굵게 등 서식 유지, 액션 버튼 제거.
     function exportPdf() {
-        var steps = document.querySelectorAll('[data-step-type="user_message"], [data-step-type="assistant_message"]');
+        var steps = Array.prototype.slice.call(document.querySelectorAll(
+            '[data-step-type="user_message"], [data-step-type="assistant_message"]'));
+        if (!steps.length) {
+            steps = Array.prototype.slice.call(document.querySelectorAll('[data-testid="step"]'));
+        }
         if (!steps.length) { alert('내보낼 대화가 없습니다.'); return; }
-        window.print();
+        var parts = steps.map(function (el) {
+            var isUser = el.getAttribute('data-step-type') === 'user_message';
+            return '<div class="msg ' + (isUser ? 'user' : 'assistant') + '">'
+                + '<div class="role">' + (isUser ? '질문' : '답변') + '</div>'
+                + '<div class="body">' + el.innerHTML + '</div></div>';
+        }).join('');
+        var w = window.open('', '_blank');
+        if (!w) { alert('팝업이 차단되어 PDF 창을 열 수 없습니다. 팝업을 허용한 뒤 다시 시도하세요.'); return; }
+        var now = new Date();
+        var css =
+            'body{font-family:"Malgun Gothic","맑은 고딕",sans-serif;font-size:11pt;line-height:1.65;color:#1a1a1a;max-width:820px;margin:24px auto;padding:0 18px}'
+            + 'h1{font-size:15pt;border-bottom:2px solid #333;padding-bottom:8px;margin:0 0 16px}'
+            + '.msg{margin:12px 0 18px}'
+            + '.role{font-weight:700;font-size:9.5pt;letter-spacing:.02em;color:#1565C0;margin-bottom:5px}'
+            + '.msg.user .role{color:#555}'
+            + '.msg.user .body{background:#f4f6f9;border-radius:8px;padding:10px 14px}'
+            + '.body{word-break:break-word}'
+            + '.body button,.body svg,.body [role="button"]{display:none!important}'
+            + '.body table{border-collapse:collapse;width:100%;margin:8px 0;font-size:10pt}'
+            + '.body td,.body th{border:1px solid #bbb;padding:5px 8px;text-align:left;vertical-align:top}'
+            + '.body th{background:#eef1f5}'
+            + '.body pre{white-space:pre-wrap;background:#f6f8fa;padding:8px;border-radius:6px}'
+            + '.body img{max-width:100%}'
+            + '@media print{body{margin:0;max-width:none}a{color:inherit;text-decoration:none}.msg{page-break-inside:auto}}';
+        w.document.write('<!doctype html><html lang="ko"><head><meta charset="utf-8">'
+            + '<title>법령 Q&A 대화</title><style>' + css + '</style></head><body>'
+            + '<h1>법령 Q&A 대화 — ' + now.toLocaleString('ko-KR') + '</h1>'
+            + parts + '</body></html>');
+        w.document.close();
+        setTimeout(function () { try { w.focus(); w.print(); } catch (e) { } }, 500);
     }
 
     // ── 새 대화 — chainlit 네이티브 새 채팅 버튼을 누르고, 없으면 앱 루트로 이동 ──
