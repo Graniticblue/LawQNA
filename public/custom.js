@@ -476,8 +476,8 @@
         ov.innerHTML =
             '<div class="law-list-box">' +
             '<button class="law-list-close" aria-label="닫기">✕</button>' +
-            '<h2 style="font-size:18px;margin:0 0 4px">근거 더 찾기 — 판례·해석례 제안</h2>' +
-            '<div class="law-db-foot" style="margin:0 0 10px">대화에서 키워드를 뽑아 법제처 API로 판례·법령해석례를 검색합니다. 참고할 자료를 선택해 답변을 다시 생성하세요.</div>' +
+            '<h2 style="font-size:18px;margin:0 0 4px">근거 더 찾기 — 법령·판례·해석례 제안</h2>' +
+            '<div class="law-db-foot" style="margin:0 0 10px">대화에서 키워드를 뽑아 법제처 API로 법령·판례·법령해석례를 검색합니다. 선택해 다시 생성하면, <b>법령은 실제로 캐싱</b>되어 본문까지 반영되고 판례·해석례는 근거로 검토됩니다.</div>' +
             '<div id="ev-keywords" class="ev-keywords"></div>' +
             '<div id="ev-results" class="law-search-results"><div class="usun-law-hint">키워드 도출·검색 중… (몇 초 걸립니다)</div></div>' +
             '<div class="ev-actions"><button type="button" id="ev-gen" disabled>선택한 근거로 다시 답변</button></div>' +
@@ -505,11 +505,11 @@
                 var res = ov.querySelector('#ev-results');
                 var cs = d.candidates || [];
                 if (!cs.length) {
-                    res.innerHTML = '<div class="usun-law-hint">관련 판례·해석례를 찾지 못했습니다. (‘＋ 참고자료 추가’로 직접 검색해 보세요)</div>';
+                    res.innerHTML = '<div class="usun-law-hint">관련 법령·판례·해석례를 찾지 못했습니다. (‘＋ 참고자료 추가’로 직접 검색해 보세요)</div>';
                     return;
                 }
                 res.innerHTML = cs.map(function (it) {
-                    var kc = (it.kind === '판례') ? 'case' : 'expc';
+                    var kc = (it.kind === '판례') ? 'case' : (it.kind === '법령') ? 'law' : 'expc';
                     return '<label class="usun-law-item ev-item">'
                         + '<input type="checkbox" class="ev-ck" data-kind="' + _esc(it.kind)
                         + '" data-title="' + _esc(it.title) + '" data-sub="' + _esc(it.sub || '') + '">'
@@ -526,21 +526,33 @@
             });
 
         ov.querySelector('#ev-gen').addEventListener('click', function () {
-            var picks = Array.prototype.slice.call(ov.querySelectorAll('.ev-ck:checked')).map(function (c) {
+            var checked = Array.prototype.slice.call(ov.querySelectorAll('.ev-ck:checked'));
+            if (!checked.length) return;
+            ov.style.display = 'none';
+            var picks = checked.map(function (c) {
                 var sub = c.getAttribute('data-sub');
                 return c.getAttribute('data-kind') + ' ' + c.getAttribute('data-title')
                     + (sub ? (' (' + sub + ')') : '');
             });
-            if (!picks.length) return;
-            ov.style.display = 'none';
-            var evText = '[사용자가 검토를 요청한 추가 참고자료 — 판례·법령해석례]\n'
-                + '아래 자료의 실제 판시·회답 취지를 확인해 관련 있으면 근거로 반영하고, 관련 없으면 배제하라.\n'
+            // 선택한 '법령'은 실제 캐싱(사각지대 연동) — 본문까지 끌어와 검색에 반영되게
+            var lawAdds = checked.filter(function (c) { return c.getAttribute('data-kind') === '법령'; })
+                .map(function (c) {
+                    return fetch('/law-add', {
+                        method: 'POST', credentials: 'same-origin',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ kind: '법령', name: c.getAttribute('data-title') }),
+                    }).catch(function () { });
+                });
+            var evText = '[사용자가 검토를 요청한 추가 참고자료 — 법령·판례·법령해석례]\n'
+                + '아래 자료의 실제 조문·판시·회답 취지를 확인해 관련 있으면 근거로 반영하고, 관련 없으면 배제하라.\n'
                 + picks.map(function (p, i) { return (i + 1) + '. ' + p; }).join('\n');
-            // 근거는 서버 세션에 숨겨 담고(화면 미노출), 메시지는 원 질문만 전송
-            fetch('/evidence-context', {
-                method: 'POST', credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: evText }),
+            // 법령 캐싱 완료 후 → 근거를 세션에 숨겨 담고 → 원 질문만 재전송
+            Promise.all(lawAdds).then(function () {
+                return fetch('/evidence-context', {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: evText }),
+                });
             }).then(function () { sendPrompt(lastQ); })
                 .catch(function () { sendPrompt(lastQ); });
         });

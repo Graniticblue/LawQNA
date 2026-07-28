@@ -514,6 +514,7 @@ button:has(svg[class*="-moon"]) {
 .ev-item .ev-ck {
     flex: 0 0 auto; width: 16px; height: 16px; margin: 0; accent-color: #1565C0; cursor: pointer;
 }
+.ev-kind-law { color: #1565C0; background: #E9F1FB; }
 .ev-kind-case { color: #B26A00; background: #FBF0DE; }
 .ev-kind-expc { color: #6A1B9A; background: #F1E9F7; }
 .ev-sub { font-size: 11px; color: #94a3b8; }

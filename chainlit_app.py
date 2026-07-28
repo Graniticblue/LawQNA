@@ -393,6 +393,10 @@ try:
             cands = []
             if q:
                 try:
+                    for l in (laf.search_laws(q, 8) or []):   # 법령(사각지대와 연동: 선택 시 캐싱)
+                        if l.get("name"):
+                            cands.append({"kind": "법령", "id": l.get("id", ""),
+                                          "title": l["name"], "sub": ""})
                     for p in (laf.search_precedents(q, 8) or []):
                         cands.append({"kind": "판례", "id": p.get("id", ""),
                                       "title": p.get("name", "") or p.get("caseno", ""),
