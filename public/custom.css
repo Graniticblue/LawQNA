@@ -409,6 +409,25 @@ button:has(svg[class*="-moon"]) {
     font-weight: 700;
     color: #94a3b8;
 }
+/* 수동추가(참고자료 추가/캐싱) 항목 — 인용분과 구분(회색·'추가' 딱지) */
+.usun-monitor li.usun-mon-add {
+    color: #8a94a3;
+    cursor: default;
+}
+.usun-monitor li.usun-mon-add:hover {
+    background: #f1f5f9;
+    color: #8a94a3;
+}
+.usun-mon-tag {
+    font-size: 9px;
+    font-weight: 700;
+    color: #6a7686;
+    background: #e7ebf1;
+    border-radius: 999px;
+    padding: 0 5px;
+    margin-left: 3px;
+    vertical-align: middle;
+}
 
 /* 법령·조례 검색·추가 모달 (우측 바 '🔎 법령·조례 검색·추가' → 새 창) */
 .law-search-bar {

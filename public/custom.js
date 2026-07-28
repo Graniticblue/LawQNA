@@ -664,8 +664,11 @@
         if (!items || !items.length) return '';
         var lis = items.map(function (it) {
             var n = (it.n > 1) ? ' <span class="usun-mon-n">×' + it.n + '</span>' : '';
-            return '<li data-label="' + _esc(it.label) + '" title="클릭하면 인용 사이드바가 열립니다">'
-                + _esc(it.label) + n + '</li>';
+            var isAdd = (it.src === 'add');
+            var tag = isAdd ? ' <span class="usun-mon-tag">추가</span>' : '';
+            return '<li class="' + (isAdd ? 'usun-mon-add' : '') + '" data-label="' + _esc(it.label)
+                + '" title="' + (isAdd ? '직접 추가한 자료(검색·인용 대기)' : '클릭하면 인용 사이드바가 열립니다') + '">'
+                + _esc(it.label) + tag + n + '</li>';
         }).join('');
         return '<div class="usun-mon-grp"><div class="usun-mon-h">' + title
             + ' <span class="usun-mon-c">' + items.length + '</span></div><ul>' + lis + '</ul></div>';
@@ -738,8 +741,11 @@
     function rescanCitations(fresh, silent) {
         var steps = Array.prototype.slice.call(
             document.querySelectorAll('[data-step-type="assistant_message"]'));
+        // 사각지대 알림·패치결과·입법요지 등 보조 메시지는 실제 인용이 아니므로 스캔에서 제외
+        // (여기 나오는 '「법령」 제N조'는 'API 패치 가능' 후보일 뿐, 답변 본문 인용이 아님)
+        var NOTICE = /사각지대 법령 감지|API 패치 가능|패치 결과|캐싱 성공|캐싱 완료|위임 조문 동반|지역 조례 미보유|PDF 직접 첨부/;
         var texts = steps.map(function (el) { return (el.innerText || '').trim(); })
-            .filter(function (s) { return s; });
+            .filter(function (s) { return s && !NOTICE.test(s); });
         var btn = silent ? null : document.getElementById('rescan-btn');
         if (!texts.length) {
             if (btn) {
@@ -911,7 +917,7 @@
             syncModelOnce();
             sec('모니터링');
             mk('law-search-btn', '＋ 참고자료 추가', showLawSearchModal);   // 클릭 → 검색·추가 모달
-            mk('rescan-btn', '🔃 인용자료 스캔', function () { rescanCitations(false, false); });   // 수동=병합
+            mk('rescan-btn', '🔃 인용자료 스캔', function () { rescanCitations(true, false); });   // 수동=fresh 재구성
             // 누적 현황
             var mon = document.createElement('div');
             mon.id = 'usun-monitor';
@@ -1039,9 +1045,9 @@
             if (switched) { rescanCitations(true, true); _lastAnsSig = _ansSig(); return; }
         }
         var asig = _ansSig();
-        if (asig !== _lastAnsSig) {   // 답변 생성/스트리밍 변화 → 자동 병합 스캔(수동 클릭 불필요)
+        if (asig !== _lastAnsSig) {   // 답변 생성/스트리밍 변화 → fresh 재스캔(허수 누적 방지, 수동추가분 보존)
             _lastAnsSig = asig;
-            rescanCitations(false, true);
+            rescanCitations(true, true);
             return;
         }
         refreshMonitor();

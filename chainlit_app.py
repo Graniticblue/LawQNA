@@ -166,8 +166,9 @@ def _monitor_add_law(label: str, key: str = None) -> None:
         e = bucket.get(label)
         if e:
             e["n"] += 1
+            e["src"] = "add"
         else:
-            bucket[label] = {"label": label, "n": 1}
+            bucket[label] = {"label": label, "n": 1, "src": "add"}
     except Exception:
         pass
 
@@ -228,7 +229,7 @@ try:
         def _ser(bucket):
             items = list((bucket or {}).values())
             items.sort(key=lambda e: (-e.get("n", 0), e.get("label", "")))  # 참조 많은 순
-            return [{"label": e["label"], "n": e["n"]} for e in items]
+            return [{"label": e["label"], "n": e["n"], "src": e.get("src", "")} for e in items]
 
         return JSONResponse({
             "law":    _ser(data.get("law", {})),
@@ -337,7 +338,11 @@ try:
         if not isinstance(texts, list):
             texts = []
         if (body or {}).get("fresh"):
-            _MONITOR_REFS.pop(key, None)   # 대화 전환 — 이 대화 기준으로 재구성
+            # 인용 스캔분만 비우고 수동추가(src=add)는 보존 → 허수 제거하되 '추가한 자료'는 유지
+            _store = _MONITOR_REFS.get(key)
+            if _store:
+                for _typ in _store:
+                    _store[_typ] = {k: v for k, v in _store[_typ].items() if v.get("src") == "add"}
         added = _monitor_scan_texts([str(t) for t in texts][:200], key)
         return JSONResponse({"added": added})
 
@@ -2251,7 +2256,7 @@ async def on_message(message: cl.Message):
     if result is None:
         return
 
-    _record_monitor_refs(result)   # 모니터링 패널: 이 대화의 참조 출처 누적
+    # (모니터링은 프런트 인용 스캔 기반으로 전환 — 검색되었으나 인용 안 된 허수 방지)
     raw_answer  = result.get("answer", "")
     source_info = result.get("source_info", {})
     if not isinstance(source_info, dict):
@@ -2724,7 +2729,7 @@ async def _regen_with_material(query: str, provider: str, model_label: str,
     if result is None:
         return
 
-    _record_monitor_refs(result)   # 모니터링 패널: 이 대화의 참조 출처 누적
+    # (모니터링은 프런트 인용 스캔 기반으로 전환 — 검색되었으나 인용 안 된 허수 방지)
     raw_answer  = result.get("answer", "")
     source_info = result.get("source_info", {})
     if not isinstance(source_info, dict):
