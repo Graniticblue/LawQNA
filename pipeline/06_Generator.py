@@ -1852,6 +1852,29 @@ class Generator:
         # ── 사각지대 감지 (DB 미수록 법령 식별, API 호출 없음) ──
         # 결과는 Chainlit이 사용자에게 알림 카드로 표시. 패치는 사용자 동의 시에만.
         blind_spots = retriever.detect_blind_spots(law_hints) if law_hints else {"fetchable": [], "manual_check": []}
+        # 검색으로 실제 찾은 조문은 사각지대(미수록)에서 제외 — DB의 law_name 표기가
+        # 힌트 파싱값과 어긋나(예: API 재구축분) $eq만 빗나가는 오탐 방지.
+        try:
+            def _nl(s):
+                return re.sub(r"[\s·ㆍ「」『』]", "", s or "")
+            _ret_pairs = set()
+            for _d in law_docs:
+                _rl = _nl(getattr(_d, "law_name", ""))
+                _ra = re.sub(r"\s+", "", getattr(_d, "article_no", "") or "")
+                if _rl and _ra:
+                    _ret_pairs.add((_rl, _ra))
+
+            def _still_missing(f):
+                _fl, _fa = _nl(f.get("law_name", "")), re.sub(r"\s+", "", f.get("article_no", "") or "")
+                # 같은 조번호가, 힌트 법령명으로 시작하는 법령에서 검색됐으면 보유로 본다
+                if _fa and any(_ra == _fa and _rl.startswith(_fl) for (_rl, _ra) in _ret_pairs):
+                    return False
+                return True
+
+            if blind_spots.get("fetchable"):
+                blind_spots["fetchable"] = [f for f in blind_spots["fetchable"] if _still_missing(f)]
+        except Exception:
+            pass
         if verbose and (blind_spots.get("fetchable") or blind_spots.get("manual_check")):
             print(f"\n[사각지대 감지] 패치 가능 {len(blind_spots['fetchable'])}건 / 수동 확인 {len(blind_spots['manual_check'])}건")
 

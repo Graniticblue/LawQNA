@@ -983,20 +983,31 @@
     const observer = new MutationObserver(update);
     observer.observe(document.documentElement, { childList: true, subtree: true });
 
-    // 대화 전환 감지용 시그니처(첫 사용자 메시지)
-    var _lastConvSig = '';
+    // 대화 전환 감지(첫 사용자 메시지) + 답변 변화 감지(어시스턴트 수·마지막 길이)
+    var _lastConvSig = '', _lastAnsSig = '';
     function _convSig() {
         var u = document.querySelector('[data-step-type="user_message"]');
         return u ? (u.innerText || '').trim().slice(0, 80) : '';
     }
-    // 모니터링 패널 주기 갱신 + 대화 전환 시 그 대화 기준으로 자동 재스캔(fresh)
+    function _ansSig() {
+        var a = document.querySelectorAll('[data-step-type="assistant_message"]');
+        var last = a.length ? (a[a.length - 1].innerText || '') : '';
+        return a.length + '|' + last.length;
+    }
+    // 4초 폴링: ①대화 전환→fresh 재스캔 ②새 답변/스트리밍 변화→병합 재스캔(자동) ③그 외 갱신
     setInterval(function () {
         if (!document.getElementById('usun-monitor')) return;
         var sig = _convSig();
         if (sig !== _lastConvSig) {
             var switched = (_lastConvSig && sig);   // A→B (둘 다 비어있지 않음 = 실제 전환)
             _lastConvSig = sig;
-            if (switched) { rescanCitations(true, true); return; }   // 전환 → 이 대화 기준 복원(조용히)
+            if (switched) { rescanCitations(true, true); _lastAnsSig = _ansSig(); return; }
+        }
+        var asig = _ansSig();
+        if (asig !== _lastAnsSig) {   // 답변 생성/스트리밍 변화 → 자동 병합 스캔(수동 클릭 불필요)
+            _lastAnsSig = asig;
+            rescanCitations(false, true);
+            return;
         }
         refreshMonitor();
     }, 4000);
