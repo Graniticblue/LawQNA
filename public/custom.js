@@ -700,12 +700,12 @@
 
     // 인용자료 스캔 — 지난 답변 텍스트에서 인용된 법령/해석례/판례를 모니터링에 복원
     // (재배포로 서버 누적본이 비워졌을 때 이 대화 기준으로 되살리는 용도)
-    function rescanCitations() {
+    function rescanCitations(fresh, silent) {
         var steps = Array.prototype.slice.call(
             document.querySelectorAll('[data-step-type="assistant_message"]'));
         var texts = steps.map(function (el) { return (el.innerText || '').trim(); })
             .filter(function (s) { return s; });
-        var btn = document.getElementById('rescan-btn');
+        var btn = silent ? null : document.getElementById('rescan-btn');
         if (!texts.length) {
             if (btn) {
                 btn.textContent = '스캔할 답변 없음';
@@ -717,7 +717,7 @@
         fetch('/monitor-rescan', {
             method: 'POST', credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ texts: texts }),
+            body: JSON.stringify({ texts: texts, fresh: !!fresh }),
         })
             .then(function (r) { return r.json(); })
             .then(function () { refreshMonitor(); })
@@ -876,7 +876,7 @@
             syncModelOnce();
             sec('모니터링');
             mk('law-search-btn', '＋ 참고자료 추가', showLawSearchModal);   // 클릭 → 검색·추가 모달
-            mk('rescan-btn', '🔃 인용자료 스캔', rescanCitations);          // 지난 답변 재스캔
+            mk('rescan-btn', '🔃 인용자료 스캔', function () { rescanCitations(false, false); });   // 수동=병합
             // 누적 현황
             var mon = document.createElement('div');
             mon.id = 'usun-monitor';
@@ -983,9 +983,22 @@
     const observer = new MutationObserver(update);
     observer.observe(document.documentElement, { childList: true, subtree: true });
 
-    // 모니터링 패널 주기 갱신 — 서버 세션 누적본을 4초마다 반영(작은 GET)
+    // 대화 전환 감지용 시그니처(첫 사용자 메시지)
+    var _lastConvSig = '';
+    function _convSig() {
+        var u = document.querySelector('[data-step-type="user_message"]');
+        return u ? (u.innerText || '').trim().slice(0, 80) : '';
+    }
+    // 모니터링 패널 주기 갱신 + 대화 전환 시 그 대화 기준으로 자동 재스캔(fresh)
     setInterval(function () {
-        if (document.getElementById('usun-monitor')) refreshMonitor();
+        if (!document.getElementById('usun-monitor')) return;
+        var sig = _convSig();
+        if (sig !== _lastConvSig) {
+            var switched = (_lastConvSig && sig);   // A→B (둘 다 비어있지 않음 = 실제 전환)
+            _lastConvSig = sig;
+            if (switched) { rescanCitations(true, true); return; }   // 전환 → 이 대화 기준 복원(조용히)
+        }
+        refreshMonitor();
     }, 4000);
 
     if (document.readyState === 'loading') {

@@ -336,6 +336,8 @@ try:
         texts = (body or {}).get("texts", [])
         if not isinstance(texts, list):
             texts = []
+        if (body or {}).get("fresh"):
+            _MONITOR_REFS.pop(key, None)   # 대화 전환 — 이 대화 기준으로 재구성
         added = _monitor_scan_texts([str(t) for t in texts][:200], key)
         return JSONResponse({"added": added})
 
