@@ -366,6 +366,11 @@ if __name__ == "__main__":
     # --reset 전량 재빌드라 HNSW search_ef 누락 함정도 없다.
     # updates/ 폴더에 새 질의회신 jsonl을 추가했을 때 사용. 완료 후 변수 제거.
     qa_only = os.environ.get("REINDEX_QA", "").strip().lower() in ("1", "true", "yes")
+    # REINDEX_LAW=1 이면 law_articles(법령 조문·별표)만 전량 재빌드한다(--reset).
+    # qa_precedents(해석례)·판례·업로드 조례·개정이력 등 나머지는 그대로 둔다.
+    # 법령 컬렉션이 부분 손실됐을 때(예: 이전 빌드 중단으로 일부 법령 누락) FORCE_REINDEX
+    # (전량, 해석례까지 재빌드) 없이 법령만 소스(all_articles.jsonl)에서 되살린다. 완료 후 변수 제거.
+    law_only = os.environ.get("REINDEX_LAW", "").strip().lower() in ("1", "true", "yes")
 
     def _index_aux():
         # 02_Indexer는 law_articles·qa_precedents만 만든다. 개정이력·메모·원칙은 별도 스크립트.
@@ -417,6 +422,14 @@ if __name__ == "__main__":
             check=False,
         )
         print(f"[startup] qa_precedents 재빌드 {'완료' if r.returncode == 0 else '실패(앱은 계속)'}")
+    elif law_only:
+        print("[startup] REINDEX_LAW 설정됨 — 나머지 유지, law_articles만 전량 재빌드")
+        r = subprocess.run(
+            [sys.executable, str(BASE_DIR / "pipeline" / "02_Indexer_BASE.py"),
+             "--collection", "laws", "--reset"],
+            check=False,
+        )
+        print(f"[startup] law_articles 재빌드 {'완료' if r.returncode == 0 else '실패(앱은 계속)'}")
     else:
         print(f"[startup] ChromaDB 존재 확인 ({CHROMA_DIR}) — 빌드 스킵")
 
