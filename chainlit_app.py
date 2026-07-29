@@ -92,6 +92,19 @@ _PROVIDER_PREF: dict = {}
 # True면 pass2 답변 생성에 웹 검색(Gemini google_search 그라운딩 / Claude 웹검색 툴)을 붙인다.
 _WEBSEARCH_PREF: dict = {}
 
+# 적용 지역(추가 설정) — anon_id별 자유 입력 문자열(예: "시흥시"). 검색 UI가 아니라
+# 답변 생성 시 extra_context에 [적용 지역] 블록으로 주입해 해당 지자체를 반영하게 한다.
+_REGION_PREF: dict = {}
+
+
+def _region_context(key: str) -> str:
+    """설정된 지역이 있으면 답변 생성에 주입할 [적용 지역] 블록을 만든다(없으면 빈 문자열)."""
+    r = (_REGION_PREF.get(key, "") or "").strip()
+    if not r:
+        return ""
+    return (f"[적용 지역] 이 질의는 '{r}' 관련 사안이다. 해당 지자체의 조례·지구단위계획 등 "
+            f"지역 규정을 우선 고려하되, 상위 법령과 함께 적용하라.")
+
 # ── 모니터링 패널 누적 저장소 (anon_id → 이 대화에서 참조한 출처) ──────────
 # 매 답변의 검색결과(result의 law_docs/qa_docs/case_docs)를 세션별로 누적한다.
 # on_message가 anon_id(=cl.User.identifier)로 쓰고, /monitor 엔드포인트가 쿠키의
@@ -223,6 +236,22 @@ try:
         if key:
             _WEBSEARCH_PREF[key] = on
         return JSONResponse({"enabled": _WEBSEARCH_PREF.get(key, False)})
+
+    # 적용 지역 설정(추가 설정) — 프런트가 입력·페이지 로드 시 POST로 동기화
+    @_cl_server_app.post("/region")
+    async def _set_region(request: Request):
+        key = request.cookies.get("anon_id", "")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        region = ((body or {}).get("region", "") or "").strip()[:60]
+        if key:
+            if region:
+                _REGION_PREF[key] = region
+            else:
+                _REGION_PREF.pop(key, None)
+        return JSONResponse({"region": _REGION_PREF.get(key, "")})
 
     # 스타터(추천질문) 유형 메타 — 프런트 카드 그리드가 label→유형 딱지 표시에 사용.
     # _STARTER_POOL은 파일 하단에서 정의되지만 요청 시점엔 모듈 전역으로 존재한다.
@@ -630,7 +659,7 @@ try:
     # 커스텀 라우트들을 라우터 맨 앞으로 재배열.
     _MY_PATHS = {"/element-files/{object_key:path}", "/law-list", "/upload-cache",
                  "/upload-cache/delete", "/upload-cache/add", "/upload-cache/recache",
-                 "/provider", "/websearch", "/starters-meta", "/monitor",
+                 "/provider", "/websearch", "/region", "/starters-meta", "/monitor",
                  "/law-search", "/law-add", "/monitor-rescan", "/evidence-search",
                  "/evidence-context"}
     _front = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") in _MY_PATHS]
@@ -2260,6 +2289,10 @@ async def on_message(message: cl.Message):
             extra_context = (extra_context + "\n\n" if extra_context else "") + _ev
     except Exception:
         pass
+    # 적용 지역(추가 설정) — 설정돼 있으면 매 질문에 [적용 지역] 블록으로 주입(지속)
+    _rc = _region_context(cl.user_session.get("upload_key", ""))
+    if _rc:
+        extra_context = (extra_context + "\n\n" if extra_context else "") + _rc
 
     session_id = cl.user_session.get("upload_key", "")
     # provider별 라벨 — gemma_forced 케이스에서 이미 설정된 model_label은 보존
@@ -2740,6 +2773,9 @@ async def _regen_with_material(query: str, provider: str, model_label: str,
     hist_block = _history_context(cl.user_session.get("history", []),
                                   cl.user_session.get("session_facts") or {})
     extra_context = ((hist_block + "\n\n") if hist_block else "") + material
+    _rc = _region_context(cl.user_session.get("upload_key", ""))
+    if _rc:
+        extra_context = extra_context + "\n\n" + _rc
 
     gen = get_generator()
     session_id = cl.user_session.get("upload_key", "")

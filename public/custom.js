@@ -137,7 +137,7 @@
         steps.className = 'usun-setup-steps';
         steps.appendChild(setupStep('1', '자료 검색', '법령·판례·해석례를 찾아 추가', 'search', showLawSearchModal));
         steps.appendChild(setupStep('2', '파일 첨부', '지구단위계획·운영기준 등 파일 추가', 'attach', showUploadModal));
-        steps.appendChild(setupStep('3', '추가 설정', '지역 조례 · 웹 검색', 'setup', showSetupModal));
+        steps.appendChild(setupStep('3', '추가 설정', '모델 · 지역 · 웹 검색', 'setup', showSetupModal));
         wrap.appendChild(steps);
         refreshSetupBadges();
     }
@@ -164,52 +164,77 @@
         ov = document.createElement('div');
         ov.id = 'setup-modal';
         var webOn = webSearchOn();
+        var curM = currentModel();
+        var modelBtns = MODELS.map(function (m) {
+            return '<button type="button" class="setup-model-btn' + (m.id === curM ? ' active' : '')
+                + '" data-model="' + m.id + '">' + _esc(m.label) + (m.id === curM ? ' ✓' : '') + '</button>';
+        }).join('');
         ov.innerHTML =
             '<div class="law-list-box" style="max-width:560px">' +
             '<button class="law-list-close" aria-label="닫기">✕</button>' +
             '<h2 style="font-size:18px;margin:0 0 4px">추가 설정</h2>' +
-            '<div class="law-db-foot" style="margin:0 0 16px">둘 다 선택 사항입니다.</div>' +
-            '<div class="setup-sec-h">지역 설정 <span style="font-weight:400;color:#94a3b8">(→ 조례 자동 검색)</span></div>' +
-            '<div class="law-db-foot" style="margin:0 0 8px">지역을 입력하면 그 지역의 조례를 찾아 추가합니다. (예: 남양주시, 서울특별시 강남구) 키워드를 덧붙여 좁힐 수 있습니다.</div>' +
+            '<div class="law-db-foot" style="margin:0 0 16px">모두 선택 사항입니다.</div>' +
+            '<div class="setup-sec-h">답변 모델</div>' +
+            '<div class="setup-models">' + modelBtns + '</div>' +
+            '<div class="setup-sec-h" style="margin-top:20px">지역 설정</div>' +
+            '<div class="law-db-foot" style="margin:0 0 8px">지역명을 입력·저장하면 답변 생성 시 해당 지자체를 반영합니다. 저장하면 이 지역 조례 캐싱을 제안합니다. (예: 시흥시)</div>' +
             '<div class="law-search-bar">' +
-            '<input type="text" id="setup-region" placeholder="지역명 (+키워드)" />' +
-            '<button type="button" id="setup-region-go">🔎 조례 찾기</button>' +
+            '<input type="text" id="setup-region" placeholder="지역명 (예: 시흥시)" value="' + _esc(getRegion()) + '" />' +
+            '<button type="button" id="setup-region-save">저장</button>' +
             '</div>' +
             '<div id="setup-region-results" class="law-search-results"></div>' +
             '<div class="setup-sec-h" style="margin-top:20px">웹 검색</div>' +
-            '<div class="law-db-foot" style="margin:0 0 8px">켜면 답변 생성 시 웹 검색으로 최신 정보를 함께 참고합니다. 법령·판례·해석례는 내장 DB가 우선이며, 법률 자문 특성상 <b>기본은 꺼짐</b>입니다.</div>' +
             '<label class="setup-toggle"><input type="checkbox" id="setup-web"' + (webOn ? ' checked' : '') + '><span class="setup-toggle-tx">웹 검색 허용</span></label>' +
+            '<div class="law-db-foot" style="margin:8px 0 0">답변 생성 시 웹 검색으로 최신 정보를 함께 참고합니다. 답변생성범위는 넓어지나, <b>허위자료가 포함될 수 있습니다.</b></div>' +
             '</div>';
         ov.addEventListener('click', function (e) { if (e.target === ov) ov.remove(); });
         ov.querySelector('.law-list-close').onclick = function () { ov.remove(); };
         document.addEventListener('keydown', function (e) {
             if (e.key === 'Escape') { var m = document.getElementById('setup-modal'); if (m) m.remove(); }
         });
-        // 지역 조례 검색 — /law-search 결과 중 조례만 추려 추가(law-add, 실제 캐싱)
+        // 답변 모델 선택 (우측 바 모델 버튼과 동일 — /provider + localStorage)
+        ov.querySelector('.setup-models').addEventListener('click', function (e) {
+            var b = e.target.closest && e.target.closest('.setup-model-btn');
+            if (!b) return;
+            var id = b.getAttribute('data-model');
+            chooseModel(id);
+            Array.prototype.slice.call(ov.querySelectorAll('.setup-model-btn')).forEach(function (x) {
+                var xid = x.getAttribute('data-model'), on = xid === id;
+                x.classList.toggle('active', on);
+                var m = MODELS.find(function (mm) { return mm.id === xid; });
+                x.textContent = (m ? m.label : xid) + (on ? ' ✓' : '');
+            });
+        });
+        // 지역 설정 — 저장(컨텍스트 주입) + 그 지역 조례 캐싱 제안(law-search→법령 아님, 조례만)
         var rin = ov.querySelector('#setup-region');
-        var rgo = ov.querySelector('#setup-region-go');
+        var rsave = ov.querySelector('#setup-region-save');
         var rbox = ov.querySelector('#setup-region-results');
-        function runRegion() {
-            var q = (rin.value || '').trim();
-            if (q.length < 2) { rbox.innerHTML = '<div class="usun-law-hint">지역명을 2글자 이상 입력하세요</div>'; return; }
-            rbox.innerHTML = '<div class="usun-law-hint">조례 검색 중…</div>';
-            fetch('/law-search?q=' + encodeURIComponent(q), { credentials: 'same-origin' })
+        function proposeOrdinances(region) {
+            rbox.innerHTML = '<div class="usun-law-hint">이 지역 조례 검색 중…</div>';
+            fetch('/law-search?q=' + encodeURIComponent(region), { credentials: 'same-origin' })
                 .then(function (r) { return r.json(); })
                 .then(function (d) {
                     var rs = ((d && d.results) || []).filter(function (it) { return it.kind === '조례'; });
-                    if (!rs.length) { rbox.innerHTML = '<div class="usun-law-hint">해당 지역 조례를 찾지 못했습니다</div>'; return; }
-                    rbox.innerHTML = rs.map(function (it) {
-                        return '<div class="usun-law-item" data-kind="조례" data-name="' + _esc(it.name) + '">'
-                            + '<span class="usun-law-kind usun-law-kind-ord">조례</span>'
-                            + '<span class="usun-law-nm">' + _esc(it.name) + '</span>'
-                            + '<button type="button" class="usun-law-add">추가</button></div>';
-                    }).join('');
+                    if (!rs.length) { rbox.innerHTML = '<div class="usun-law-hint">캐싱을 제안할 조례를 찾지 못했습니다 (지역명 확인)</div>'; return; }
+                    rbox.innerHTML = '<div class="usun-law-hint">이 지역 조례 — 캐싱하면 조문까지 반영됩니다(선택):</div>'
+                        + rs.map(function (it) {
+                            return '<div class="usun-law-item" data-kind="조례" data-name="' + _esc(it.name) + '">'
+                                + '<span class="usun-law-kind usun-law-kind-ord">조례</span>'
+                                + '<span class="usun-law-nm">' + _esc(it.name) + '</span>'
+                                + '<button type="button" class="usun-law-add">캐싱</button></div>';
+                        }).join('');
                 })
                 .catch(function () { rbox.innerHTML = '<div class="usun-law-hint">검색 실패</div>'; });
         }
-        rgo.addEventListener('click', runRegion);
-        rin.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); runRegion(); } });
-        rin.addEventListener('input', function () { if (!rin.value.trim()) rbox.innerHTML = ''; });
+        function saveRegion() {
+            var v = (rin.value || '').trim();
+            setRegion(v);
+            if (!v) { rbox.innerHTML = ''; _toast('지역 설정을 해제했습니다.'); return; }
+            _toast("지역 '" + v + "' 설정 — 답변에 반영됩니다.");
+            proposeOrdinances(v);
+        }
+        rsave.addEventListener('click', saveRegion);
+        rin.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); saveRegion(); } });
         rbox.addEventListener('click', function (e) {
             var b = e.target.closest && e.target.closest('.usun-law-add');
             if (!b) return;
@@ -844,6 +869,30 @@
         pushWebSearch(webSearchOn());
     }
 
+    // ── 적용 지역(추가 설정) — 자유 입력. localStorage + 서버(/region) 동기화 ──────
+    var REGION_KEY = 'region_pref';
+    function getRegion() { try { return localStorage.getItem(REGION_KEY) || ''; } catch (e) { return ''; } }
+    function pushRegion(r) {
+        try {
+            fetch('/region', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin', body: JSON.stringify({ region: r || '' })
+            });
+        } catch (e) { }
+    }
+    function setRegion(r) {
+        r = (r || '').trim();
+        try { localStorage.setItem(REGION_KEY, r); } catch (e) { }
+        pushRegion(r);
+    }
+    var regionSynced = false;
+    function syncRegionOnce() {
+        if (regionSynced) return;
+        regionSynced = true;
+        var r = getRegion();
+        if (r) pushRegion(r);
+    }
+
     // ── 다크모드 제거: 테마 토글 숨김 + 라이트 강제 ──────────────────
     function killDarkMode() {
         try {
@@ -1138,6 +1187,7 @@
             renderModelButton();
             syncModelOnce();
             syncWebSearchOnce();   // 웹 검색 허용 선호도 서버 재동기화
+            syncRegionOnce();      // 적용 지역 선호도 서버 재동기화
             sec('모니터링');
             mk('law-search-btn', '＋ 참고자료 추가', showLawSearchModal);   // 클릭 → 검색·추가 모달
             mk('rescan-btn', '🔃 인용자료 스캔', function () { rescanCitations(true, false); });   // 수동=fresh 재구성
