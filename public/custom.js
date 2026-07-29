@@ -76,6 +76,157 @@
         pinComposer(false);
     }
 
+    // ── 웰컴 '초기 세팅 스트립'(①자료검색 ②PDF첨부 ③추가설정) ─────────────
+    // 로고 아래·예시 카드 위. 전부 선택 사항. 접기(1회)·다시 보지 않기(영구) 지원.
+    var SETUP_HIDE_KEY = 'usun_hide_setup';
+    var _setupCollapsed = false;
+    function isSetupPermHidden() {
+        try { return localStorage.getItem(SETUP_HIDE_KEY) === '1'; } catch (e) { return false; }
+    }
+
+    function setupStep(num, title, sub, id, handler) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'usun-setup-step';
+        b.dataset.step = id;
+        b.innerHTML =
+            '<span class="usun-setup-num">' + num + '</span>'
+            + '<span class="usun-setup-tx">'
+            + '<span class="usun-setup-st">' + _esc(title)
+            + '<span class="usun-setup-badge" style="display:none"></span></span>'
+            + '<span class="usun-setup-sd">' + _esc(sub) + '</span></span>';
+        b.addEventListener('click', function () { try { handler(); } catch (e) { } });
+        return b;
+    }
+
+    function renderSetupInto(wrap) {
+        wrap.innerHTML = '';
+        if (isSetupPermHidden()) return;              // 영구 숨김
+        if (_setupCollapsed) {                          // 접힘 → 미니 바
+            var mini = document.createElement('button');
+            mini.type = 'button';
+            mini.className = 'usun-setup-mini';
+            mini.textContent = '＋ 질문 전에 자료 갖추기';
+            mini.addEventListener('click', function () { _setupCollapsed = false; renderSetupInto(wrap); });
+            wrap.appendChild(mini);
+            return;
+        }
+        // 펼침 → 헤더(라벨 + 접기·다시안보기) + ①②③
+        var head = document.createElement('div');
+        head.className = 'usun-setup-head';
+        var t = document.createElement('span');
+        t.className = 'usun-setup-title';
+        t.textContent = '질문 전에, 자료를 갖춰보세요 (선택)';
+        head.appendChild(t);
+        var tg = document.createElement('span');
+        tg.className = 'usun-setup-toggles';
+        var b1 = document.createElement('button');
+        b1.type = 'button'; b1.className = 'usun-setup-tg'; b1.textContent = '접기';
+        b1.addEventListener('click', function () { _setupCollapsed = true; renderSetupInto(wrap); });
+        var b2 = document.createElement('button');
+        b2.type = 'button'; b2.className = 'usun-setup-tg'; b2.textContent = '다시 보지 않기';
+        b2.addEventListener('click', function () {
+            try { localStorage.setItem(SETUP_HIDE_KEY, '1'); } catch (e) { }
+            renderSetupInto(wrap);
+        });
+        tg.appendChild(b1); tg.appendChild(b2);
+        head.appendChild(tg);
+        wrap.appendChild(head);
+
+        var steps = document.createElement('div');
+        steps.className = 'usun-setup-steps';
+        steps.appendChild(setupStep('1', '자료 검색', '법령·판례·해석례를 찾아 추가', 'search', showLawSearchModal));
+        steps.appendChild(setupStep('2', 'PDF 첨부', '설명서·조례 등 파일 추가', 'attach', triggerAttach));
+        steps.appendChild(setupStep('3', '추가 설정', '근거 미리 찾기 · 답변 모델', 'setup', showSetupModal));
+        wrap.appendChild(steps);
+        refreshSetupBadges();
+    }
+
+    // ① 자료 검색 배지 = 이 대화에 '추가'한 자료 수 (/monitor의 src==='add')
+    function refreshSetupBadges() {
+        var el = document.querySelector('.usun-setup-step[data-step="search"] .usun-setup-badge');
+        if (!el) return;
+        fetch('/monitor', { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                function addc(a) { return (a || []).filter(function (x) { return x.src === 'add'; }).length; }
+                var n = addc(d.law) + addc(d.interp) + addc(d.case);
+                if (n > 0) { el.textContent = n; el.style.display = ''; }
+                else { el.style.display = 'none'; }
+            })
+            .catch(function () { });
+    }
+
+    // ② PDF 첨부 — chainlit 네이티브 첨부(숨김 file input)를 트리거. 못 찾으면 캐시 모달.
+    function triggerAttach() {
+        var inp = Array.prototype.slice.call(document.querySelectorAll('input[type="file"]'))
+            .filter(function (i) {
+                return !(i.closest && i.closest(
+                    '#upload-cache-modal, #usun-right-bar, #usun-welcome-cards, #law-search-modal, #evidence-modal, #setup-modal'));
+            })[0];
+        if (inp) { inp.click(); return; }
+        var btn = Array.prototype.slice.call(document.querySelectorAll('button')).find(function (b) {
+            var a = ((b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('title') || '')).toLowerCase();
+            return /attach|upload|paperclip|첨부|파일/.test(a);
+        });
+        if (btn) { btn.click(); return; }
+        showUploadModal();   // 폴백: 조례 라이브러리(캐시) 모달
+    }
+
+    // ③ 추가 설정 — 답변 모델 선택 + 근거 미리 찾기(질문 초안 → 프리셋)
+    function showSetupModal() {
+        var ov = document.getElementById('setup-modal');
+        if (ov) ov.remove();
+        ov = document.createElement('div');
+        ov.id = 'setup-modal';
+        var cur = currentModel();
+        var modelBtns = MODELS.map(function (m) {
+            return '<button type="button" class="setup-model-btn' + (m.id === cur ? ' active' : '')
+                + '" data-model="' + m.id + '">' + _esc(m.label) + (m.id === cur ? ' ✓' : '') + '</button>';
+        }).join('');
+        var draft = '';
+        try { var c = _findComposer(); if (c && c.ta) draft = (c.ta.value || c.ta.textContent || '').trim(); } catch (e) { }
+        ov.innerHTML =
+            '<div class="law-list-box" style="max-width:560px">' +
+            '<button class="law-list-close" aria-label="닫기">✕</button>' +
+            '<h2 style="font-size:18px;margin:0 0 14px">추가 설정</h2>' +
+            '<div class="setup-sec-h">답변 모델</div>' +
+            '<div class="setup-models">' + modelBtns + '</div>' +
+            '<div class="setup-sec-h" style="margin-top:18px">근거 미리 찾기 <span style="font-weight:400;color:#94a3b8">(선택)</span></div>' +
+            '<div class="law-db-foot" style="margin:0 0 8px">물어보실 내용을 적으면, 내장 DB·법제처 API에서 관련 판례·해석례·법령을 미리 찾아 이 대화의 근거로 세팅합니다.</div>' +
+            '<textarea id="setup-draft" class="setup-draft" placeholder="예: 옥상 승강기탑이 건축물 높이·층수 산정에 포함되나요?">' + _esc(draft) + '</textarea>' +
+            '<div class="ev-actions"><button type="button" id="setup-find">🔎 근거 찾기</button></div>' +
+            '</div>';
+        ov.addEventListener('click', function (e) { if (e.target === ov) ov.remove(); });
+        ov.querySelector('.law-list-close').onclick = function () { ov.remove(); };
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') { var m = document.getElementById('setup-modal'); if (m) m.remove(); }
+        });
+        ov.querySelector('.setup-models').addEventListener('click', function (e) {
+            var b = e.target.closest && e.target.closest('.setup-model-btn');
+            if (!b) return;
+            var id = b.getAttribute('data-model');
+            chooseModel(id);   // localStorage + /provider + 우측 바 라벨 갱신
+            Array.prototype.slice.call(ov.querySelectorAll('.setup-model-btn')).forEach(function (x) {
+                var xid = x.getAttribute('data-model');
+                var on = xid === id;
+                x.classList.toggle('active', on);
+                var m = MODELS.find(function (mm) { return mm.id === xid; });
+                x.textContent = (m ? m.label : xid) + (on ? ' ✓' : '');
+            });
+        });
+        ov.querySelector('#setup-find').addEventListener('click', function () {
+            var ta = ov.querySelector('#setup-draft');
+            var d = (ta.value || '').trim();
+            if (d.length < 4) { ta.focus(); return; }
+            ov.remove();
+            showEvidenceModal(d, d, { preset: true });   // 질문 전 프리셋 모드
+        });
+        document.body.appendChild(ov);
+        ov.style.display = 'flex';
+        setTimeout(function () { var d = ov.querySelector('#setup-draft'); if (d && !d.value) d.focus(); }, 30);
+    }
+
     function buildWelcomeCards() {
         var nat = nativeStarterButtons();
         if (nat.length < 1) return;
@@ -94,7 +245,13 @@
             logo.src = 'https://www.usun.co.kr/assets/images/logo.png';
             logo.alt = 'usun';
             ov.appendChild(logo);
-            // 그 아래: 카드 그리드
+            // 로고 아래: 초기 세팅 스트립(①②③) — 예시 카드 위, 전부 선택
+            var setupWrap = document.createElement('div');
+            setupWrap.id = 'usun-setup-wrap';
+            setupWrap.className = 'usun-setup';
+            renderSetupInto(setupWrap);
+            ov.appendChild(setupWrap);
+            // 그 아래: 예시 라벨 + 카드 그리드(한 묶음)
             var grid = document.createElement('div');
             grid.className = 'usun-wc-grid';
             labels.forEach(function (label) {
@@ -129,10 +286,19 @@
                 });
                 grid.appendChild(card);
             });
-            ov.appendChild(grid);
+            var examples = document.createElement('div');
+            examples.className = 'usun-wc-examples';
+            var sug = document.createElement('div');
+            sug.className = 'usun-wc-suggest';
+            sug.innerHTML = '<span class="usun-wc-suggest-l">질문 예시 · Suggested</span>';
+            examples.appendChild(sug);
+            examples.appendChild(grid);
+            ov.appendChild(examples);
             document.body.appendChild(ov);   // body = React 트리 밖 → 크래시 안전
         }
         // 네이티브 스타터는 개별 버튼만 숨김(컨테이너·형제 불건드림) + 컴포저 하단 고정
+        // (배지 갱신은 최초 build 시 renderSetupInto + 4초 폴링이 담당 — 여기서 매 mutation마다
+        //  fetch하면 요청 폭주가 되므로 호출하지 않는다)
         nat.forEach(function (b) { b.classList.add('usun-starter-hidden'); });
         pinComposer(true);
     }
@@ -420,7 +586,7 @@
             document.querySelectorAll('textarea, [contenteditable="true"]')
         ).filter(function (t) {
             return !(t.closest && t.closest(
-                '#usun-right-bar, #law-search-modal, #law-list-modal, #upload-cache-modal'));
+                '#usun-right-bar, #law-search-modal, #law-list-modal, #upload-cache-modal, #evidence-modal, #setup-modal'));
         });
         if (all.length) return { ta: all[all.length - 1], submit: s };
         return null;
@@ -468,7 +634,13 @@
         showEvidenceModal(q + '\n\n' + lastA, q);
     }
 
-    function showEvidenceModal(ctx, lastQ) {
+    function showEvidenceModal(ctx, lastQ, opts) {
+        var preset = !!(opts && opts.preset);   // true=질문 전 프리셋(전송 안 함), false=답변 후 재생성
+        var h2 = preset ? '근거 미리 찾기 — 질문 전 근거 세팅' : '근거 더 찾기 — 법령·판례·해석례 제안';
+        var foot = preset
+            ? '입력한 내용으로 내장 DB·법제처 API에서 법령·판례·해석례를 찾습니다. 선택하면 <b>법령은 실제 캐싱</b>되고, 판례·해석례는 <b>다음 질문의 근거</b>로 세팅됩니다. (지금은 질문을 보내지 않습니다.)'
+            : '대화에서 키워드를 뽑아 법제처 API로 법령·판례·법령해석례를 검색합니다. 선택해 다시 생성하면, <b>법령은 실제로 캐싱</b>되어 본문까지 반영되고 판례·해석례는 근거로 검토됩니다.';
+        var genLabel = preset ? '선택한 근거를 세팅에 추가' : '선택한 근거로 다시 답변';
         var ov = document.getElementById('evidence-modal');
         if (ov) ov.remove();
         ov = document.createElement('div');
@@ -476,11 +648,11 @@
         ov.innerHTML =
             '<div class="law-list-box">' +
             '<button class="law-list-close" aria-label="닫기">✕</button>' +
-            '<h2 style="font-size:18px;margin:0 0 4px">근거 더 찾기 — 법령·판례·해석례 제안</h2>' +
-            '<div class="law-db-foot" style="margin:0 0 10px">대화에서 키워드를 뽑아 법제처 API로 법령·판례·법령해석례를 검색합니다. 선택해 다시 생성하면, <b>법령은 실제로 캐싱</b>되어 본문까지 반영되고 판례·해석례는 근거로 검토됩니다.</div>' +
+            '<h2 style="font-size:18px;margin:0 0 4px">' + h2 + '</h2>' +
+            '<div class="law-db-foot" style="margin:0 0 10px">' + foot + '</div>' +
             '<div id="ev-keywords" class="ev-keywords"></div>' +
             '<div id="ev-results" class="law-search-results"><div class="usun-law-hint">키워드 도출·검색 중… (몇 초 걸립니다)</div></div>' +
-            '<div class="ev-actions"><button type="button" id="ev-gen" disabled>선택한 근거로 다시 답변</button></div>' +
+            '<div class="ev-actions"><button type="button" id="ev-gen" disabled>' + genLabel + '</button></div>' +
             '</div>';
         ov.addEventListener('click', function (e) { if (e.target === ov) ov.style.display = 'none'; });
         ov.querySelector('.law-list-close').onclick = function () { ov.style.display = 'none'; };
@@ -546,15 +718,20 @@
             var evText = '[사용자가 검토를 요청한 추가 참고자료 — 법령·판례·법령해석례]\n'
                 + '아래 자료의 실제 조문·판시·회답 취지를 확인해 관련 있으면 근거로 반영하고, 관련 없으면 배제하라.\n'
                 + picks.map(function (p, i) { return (i + 1) + '. ' + p; }).join('\n');
-            // 법령 캐싱 완료 후 → 근거를 세션에 숨겨 담고 → 원 질문만 재전송
+            // 법령 캐싱 완료 후 → 근거를 세션에 숨겨 담고 →
+            //   재생성 모드: 원 질문만 재전송 / 프리셋 모드: 전송 없이 세팅만 (다음 질문에 반영)
             Promise.all(lawAdds).then(function () {
                 return fetch('/evidence-context', {
                     method: 'POST', credentials: 'same-origin',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ text: evText }),
                 });
-            }).then(function () { sendPrompt(lastQ); })
-                .catch(function () { sendPrompt(lastQ); });
+            }).then(function () {
+                if (preset) {
+                    refreshMonitor(); refreshSetupBadges();
+                    _toast('근거 ' + checked.length + '건을 세팅에 추가했습니다. 이제 질문하면 반영됩니다.');
+                } else { sendPrompt(lastQ); }
+            }).catch(function () { if (!preset) sendPrompt(lastQ); });
         });
     }
 
@@ -671,6 +848,16 @@
         return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
             return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
         });
+    }
+    // 가벼운 토스트(하단 중앙, 자동 소멸) — 프리셋 완료 등 비차단 알림용
+    function _toast(msg) {
+        var t = document.createElement('div');
+        t.className = 'usun-toast';
+        t.textContent = msg;
+        document.body.appendChild(t);
+        setTimeout(function () { t.classList.add('show'); }, 10);
+        setTimeout(function () { t.classList.remove('show'); }, 2600);
+        setTimeout(function () { t.remove(); }, 3000);
     }
     function _monGroup(title, items) {
         if (!items || !items.length) return '';
@@ -856,7 +1043,7 @@
                 .then(function (r) { return r.json(); })
                 .then(function (res2) {
                     b.textContent = (res2 && !res2.error) ? '✓ 추가됨' : '✗';
-                    if (res2 && !res2.error) { item.classList.add('added'); refreshMonitor(); }
+                    if (res2 && !res2.error) { item.classList.add('added'); refreshMonitor(); refreshSetupBadges(); }
                 })
                 .catch(function () { b.textContent = '✗'; });
         });
@@ -1050,6 +1237,7 @@
     // 4초 폴링: ①대화 전환→fresh 재스캔 ②새 답변/스트리밍 변화→병합 재스캔(자동) ③그 외 갱신
     setInterval(function () {
         if (!document.getElementById('usun-monitor')) return;
+        if (document.getElementById('usun-welcome-cards')) refreshSetupBadges();   // 웰컴이면 ① 배지 갱신
         var sig = _convSig();
         if (sig !== _lastConvSig) {
             var switched = (_lastConvSig && sig);   // A→B (둘 다 비어있지 않음 = 실제 전환)
