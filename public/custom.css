@@ -830,6 +830,10 @@ button:has(svg[class*="-moon"]) {
 }
 .setup-toggle-tx { font-weight: 600; }
 
+/* ③ 지역 저장창 — 아래 웹 검색과 간격 축소(빈 결과 div일 때 특히) */
+#setup-modal .law-search-bar { margin-bottom: 6px; }
+#setup-region-results:empty { display: none; }
+
 /* 토스트 — 하단 중앙 비차단 알림 */
 .usun-toast {
     position: fixed;

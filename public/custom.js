@@ -183,9 +183,9 @@
             '<button type="button" id="setup-region-save">저장</button>' +
             '</div>' +
             '<div id="setup-region-results" class="law-search-results"></div>' +
-            '<div class="setup-sec-h" style="margin-top:20px">웹 검색</div>' +
+            '<div class="setup-sec-h" style="margin-top:10px">웹 검색</div>' +
             '<label class="setup-toggle"><input type="checkbox" id="setup-web"' + (webOn ? ' checked' : '') + '><span class="setup-toggle-tx">웹 검색 허용</span></label>' +
-            '<div class="law-db-foot" style="margin:8px 0 0">답변 생성 시 웹 검색으로 최신 정보를 함께 참고합니다. 답변생성범위는 넓어지나, <b>허위자료가 포함될 수 있습니다.</b></div>' +
+            '<div class="law-db-foot" style="margin:8px 0 0">답변 생성 시 웹 최신정보를 함께 참고합니다. 답변생성범위는 넓어지나, <b>허위자료가 포함될 수 있습니다.</b></div>' +
             '</div>';
         ov.addEventListener('click', function (e) { if (e.target === ov) ov.remove(); });
         ov.querySelector('.law-list-close').onclick = function () { ov.remove(); };
