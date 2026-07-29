@@ -812,6 +812,24 @@ button:has(svg[class*="-moon"]) {
 }
 .setup-draft:focus { outline: none; border-color: #1565C0; }
 
+/* ③ 웹 검색 허용 토글 */
+.setup-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    color: #334155;
+    user-select: none;
+}
+.setup-toggle input {
+    width: 16px;
+    height: 16px;
+    accent-color: #1565C0;
+    cursor: pointer;
+}
+.setup-toggle-tx { font-weight: 600; }
+
 /* 토스트 — 하단 중앙 비차단 알림 */
 .usun-toast {
     position: fixed;

@@ -88,6 +88,10 @@ class VolumeStorageClient(BaseStorageClient):
 # 서버 재시작 시 비워지지만 프런트(localStorage)가 페이지 로드 때 재동기화한다.
 _PROVIDER_PREF: dict = {}
 
+# 웹 검색 허용 여부(추가 설정 토글) — anon_id별. 기본 False(법률 자문 특성상 꺼둠).
+# True면 pass2 답변 생성에 웹 검색(Gemini google_search 그라운딩 / Claude 웹검색 툴)을 붙인다.
+_WEBSEARCH_PREF: dict = {}
+
 # ── 모니터링 패널 누적 저장소 (anon_id → 이 대화에서 참조한 출처) ──────────
 # 매 답변의 검색결과(result의 law_docs/qa_docs/case_docs)를 세션별로 누적한다.
 # on_message가 anon_id(=cl.User.identifier)로 쓰고, /monitor 엔드포인트가 쿠키의
@@ -206,6 +210,19 @@ try:
         if key and p in ("gemini", "claude"):
             _PROVIDER_PREF[key] = p
         return JSONResponse({"provider": _PROVIDER_PREF.get(key, "gemini")})
+
+    # 웹 검색 허용 토글(추가 설정) — 프런트가 선택·페이지 로드 시 POST로 동기화
+    @_cl_server_app.post("/websearch")
+    async def _set_websearch(request: Request):
+        key = request.cookies.get("anon_id", "")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        on = bool((body or {}).get("enabled"))
+        if key:
+            _WEBSEARCH_PREF[key] = on
+        return JSONResponse({"enabled": _WEBSEARCH_PREF.get(key, False)})
 
     # 스타터(추천질문) 유형 메타 — 프런트 카드 그리드가 label→유형 딱지 표시에 사용.
     # _STARTER_POOL은 파일 하단에서 정의되지만 요청 시점엔 모듈 전역으로 존재한다.
@@ -613,7 +630,7 @@ try:
     # 커스텀 라우트들을 라우터 맨 앞으로 재배열.
     _MY_PATHS = {"/element-files/{object_key:path}", "/law-list", "/upload-cache",
                  "/upload-cache/delete", "/upload-cache/add", "/upload-cache/recache",
-                 "/provider", "/starters-meta", "/monitor",
+                 "/provider", "/websearch", "/starters-meta", "/monitor",
                  "/law-search", "/law-add", "/monitor-rescan", "/evidence-search",
                  "/evidence-context"}
     _front = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") in _MY_PATHS]
@@ -1600,6 +1617,11 @@ async def generate_streaming(gen, query: str, extra_context: str, session_id: st
     result_holder: list = [None]
     error_holder:  list = [None]
 
+    # 웹 검색 허용 여부(추가 설정 토글) — 이벤트 루프 컨텍스트에서 미리 읽어 worker에 캡처
+    # (worker는 별도 스레드라 cl.user_session 접근 불가). Gemma는 웹검색 미지원이라 제외.
+    web_search = provider != "gemma" and bool(
+        _WEBSEARCH_PREF.get(cl.user_session.get("upload_key", ""), False))
+
     def stream_cb(token: str):
         token_q.put(token)
 
@@ -1612,6 +1634,7 @@ async def generate_streaming(gen, query: str, extra_context: str, session_id: st
                 thread_id=thread_id,
                 carry_laws=carry_laws,
                 carry_conclusions=carry_conclusions,
+                web_search=web_search,
             )
         except Exception as e:
             error_holder[0] = e

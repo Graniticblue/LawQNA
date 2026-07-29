@@ -145,24 +145,28 @@ def get_gemini_client():
     return genai.Client(api_key=GOOGLE_API_KEY)
 
 
-def call_gemini(client, system: str, user_msg: str, temperature: float = 1.0) -> str:
+def _gemini_config(system, temperature, web_search, types):
+    """web_search=True 이면 google_search 그라운딩 도구를 config에 붙인다(pass2 답변용)."""
+    kwargs = dict(system_instruction=system, max_output_tokens=16000, temperature=temperature)
+    if web_search:
+        kwargs["tools"] = [types.Tool(google_search=types.GoogleSearch())]
+    return types.GenerateContentConfig(**kwargs)
+
+
+def call_gemini(client, system: str, user_msg: str, temperature: float = 1.0, web_search: bool = False) -> str:
     try:
         from google.genai import types
         response = client.models.generate_content(
             model=GEMINI_MODEL_NAME,
             contents=user_msg,
-            config=types.GenerateContentConfig(
-                system_instruction=system,
-                max_output_tokens=16000,
-                temperature=temperature,
-            ),
+            config=_gemini_config(system, temperature, web_search, types),
         )
         return response.text or ""
     except Exception as e:
         return f"[Gemini API 오류] {e}"
 
 
-def call_gemini_stream(client, system: str, user_msg: str, stream_callback, temperature: float = 0.2) -> str:
+def call_gemini_stream(client, system: str, user_msg: str, stream_callback, temperature: float = 0.2, web_search: bool = False) -> str:
     """Pass 2 스트리밍: 토큰을 stream_callback으로 전달하고 전체 텍스트 반환."""
     try:
         from google.genai import types
@@ -170,11 +174,7 @@ def call_gemini_stream(client, system: str, user_msg: str, stream_callback, temp
         for chunk in client.models.generate_content_stream(
             model=GEMINI_MODEL_NAME,
             contents=user_msg,
-            config=types.GenerateContentConfig(
-                system_instruction=system,
-                max_output_tokens=16000,
-                temperature=temperature,
-            ),
+            config=_gemini_config(system, temperature, web_search, types),
         ):
             if chunk.text:
                 full_text += chunk.text
@@ -199,30 +199,54 @@ def get_claude_client():
     return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 
-def call_claude(client, system: str, user_msg: str, temperature: float = 1.0) -> str:
+# Claude 웹검색 서버 툴(pass2 답변용). 계정에 웹검색이 활성돼 있어야 하며, 미활성 시
+# API가 오류를 던져 [Claude API 오류]로 안전 폴백된다.
+_CLAUDE_WEB_TOOL = {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
+
+
+def _claude_text(message) -> str:
+    """웹검색 사용 시 content가 tool_use/web_search_tool_result/text 블록 혼합이라
+    text 블록만 이어붙인다. 미사용 시에도 동일하게 동작."""
     try:
-        message = client.messages.create(
+        return "".join(getattr(b, "text", "") for b in message.content
+                       if getattr(b, "type", None) == "text") or ""
+    except Exception:
+        try:
+            return message.content[0].text
+        except Exception:
+            return ""
+
+
+def call_claude(client, system: str, user_msg: str, temperature: float = 1.0, web_search: bool = False) -> str:
+    try:
+        kwargs = dict(
             model=CLAUDE_MODEL_NAME,
             max_tokens=16000,
             temperature=temperature,
             system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": user_msg}],
         )
-        return message.content[0].text
+        if web_search:
+            kwargs["tools"] = [_CLAUDE_WEB_TOOL]
+        message = client.messages.create(**kwargs)
+        return _claude_text(message)
     except Exception as e:
         return f"[Claude API 오류] {e}"
 
 
-def call_claude_stream(client, system: str, user_msg: str, stream_callback, temperature: float = 0.2) -> str:
+def call_claude_stream(client, system: str, user_msg: str, stream_callback, temperature: float = 0.2, web_search: bool = False) -> str:
     try:
         full_text = ""
-        with client.messages.stream(
+        kwargs = dict(
             model=CLAUDE_MODEL_NAME,
             max_tokens=16000,
             temperature=temperature,
             system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": user_msg}],
-        ) as stream:
+        )
+        if web_search:
+            kwargs["tools"] = [_CLAUDE_WEB_TOOL]
+        with client.messages.stream(**kwargs) as stream:
             for text in stream.text_stream:
                 full_text += text
                 if stream_callback:
@@ -1499,7 +1523,7 @@ class Generator:
             self._retriever = mod.Retriever()
         return self._retriever
 
-    def generate(self, query: str, verbose: bool = True, extra_context: str = "", session_id: str = "", stream_callback=None, provider: str = "gemini", as_of_date: str = "", exclude_doc_codes: set = None, as_of_code: str = "", thread_id: str = "", carry_laws: list = None, carry_conclusions: list = None) -> dict:
+    def generate(self, query: str, verbose: bool = True, extra_context: str = "", session_id: str = "", stream_callback=None, provider: str = "gemini", as_of_date: str = "", exclude_doc_codes: set = None, as_of_code: str = "", thread_id: str = "", carry_laws: list = None, carry_conclusions: list = None, web_search: bool = False) -> dict:
         """
         2-pass 생성 실행.
         반환: {"query", "pass1", "context", "answer", "conclusions", ...}
@@ -1526,18 +1550,19 @@ class Generator:
         # ── provider 선택 ──────────────────────────────
         # Pass 1 (분류): temperature 0.3 — 관계유형 분류 일관성 확보
         # Pass 2 (법령해석): temperature 0.2 — 법규 해석은 결정론적 답변이 원칙
+        # web_search: pass2(답변)에만 적용 — pass1 분류는 내부 RAG 로직이라 그라운딩 제외.
         if provider == "gemma":
             _call_pass1 = lambda s, u: call_gemma(None, s, u, temperature=0.3)
             _call       = lambda s, u: call_gemma(None, s, u, temperature=0.2)
             _stream     = lambda s, u, cb: call_gemma_stream(None, s, u, cb, temperature=0.2)
         elif provider == "claude" and self._claude_client:
             _call_pass1 = lambda s, u: call_claude(self._claude_client, s, u, temperature=0.3)
-            _call       = lambda s, u: call_claude(self._claude_client, s, u, temperature=0.2)
-            _stream     = lambda s, u, cb: call_claude_stream(self._claude_client, s, u, cb, temperature=0.2)
+            _call       = lambda s, u: call_claude(self._claude_client, s, u, temperature=0.2, web_search=web_search)
+            _stream     = lambda s, u, cb: call_claude_stream(self._claude_client, s, u, cb, temperature=0.2, web_search=web_search)
         else:
             _call_pass1 = lambda s, u: call_gemini(self._gemini_client, s, u, temperature=0.3)
-            _call       = lambda s, u: call_gemini(self._gemini_client, s, u, temperature=0.2)
-            _stream     = lambda s, u, cb: call_gemini_stream(self._gemini_client, s, u, cb, temperature=0.2)
+            _call       = lambda s, u: call_gemini(self._gemini_client, s, u, temperature=0.2, web_search=web_search)
+            _stream     = lambda s, u, cb: call_gemini_stream(self._gemini_client, s, u, cb, temperature=0.2, web_search=web_search)
 
         # ── Pass 1: 쟁점 + 관계 유형 분류 ─────────────
         # 연속 질의: extra_context에 [이전 대화 맥락] 블록(chainlit이 생성)이 있으면
