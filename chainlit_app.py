@@ -290,23 +290,33 @@ try:
         q = (request.query_params.get("q", "") or "").strip()
         if len(q) < 2:
             return JSONResponse({"results": []})
+        # n = 조례 표시 개수(지역 등록 시 '해당 지자체 조례 전부'를 위해 크게 요청)
+        try:
+            ord_n = max(1, min(200, int(request.query_params.get("n", "15"))))
+        except Exception:
+            ord_n = 15
         from ingest import law_api_fetcher as laf
+        builtin = _builtin_law_names()   # 내장(이미 색인된) 법령명 세트 — in_db 표시용
         out: list = []
+
+        def _norm(s):
+            return re.sub(r"[\s·ㆍ]+", "", s or "")
 
         def _do():
             res: list = []
             try:
                 for l in (laf.search_laws(q, 15) or []):
-                    if l.get("name"):
-                        res.append({"kind": "법령", "name": l["name"]})
+                    nm = l.get("name")
+                    if nm:
+                        res.append({"kind": "법령", "name": nm, "in_db": _norm(nm) in builtin})
             except Exception:
                 pass
             try:
-                for o in (laf.search_ordinances(q, 15) or []):
+                for o in (laf.search_ordinances(q, ord_n) or []):
                     nm = (o.get("자치법규명") or o.get("자치법규명한글")
                           or o.get("법령명") or o.get("법령명한글") or "").strip()
                     if nm:
-                        res.append({"kind": "조례", "name": nm})
+                        res.append({"kind": "조례", "name": nm, "in_db": False})
             except Exception:
                 pass
             return res
@@ -322,7 +332,7 @@ try:
                 continue
             seen.add(k)
             dedup.append(r)
-        return JSONResponse({"results": dedup[:30]})
+        return JSONResponse({"results": dedup[: max(30, ord_n + 20)]})
 
     # 모니터링 수동추가 — 선택 법령/조례를 API로 패치·적재하고 모니터링에 등재
     @_cl_server_app.post("/law-add")
@@ -1173,6 +1183,19 @@ def _get_article_index() -> dict:
             idx.setdefault(key, r)
     _article_index = idx
     return idx
+
+
+_BUILTIN_LAW_NAMES: set = set()
+
+
+def _builtin_law_names() -> set:
+    """내장(색인 완료) 법령명 세트 — 공백·가운뎃점 제거 정규화. /law-search 결과의
+    in_db 표시용(이미 있는 법령은 추가 불필요). all_articles 기반, 1회 로드 후 캐시."""
+    global _BUILTIN_LAW_NAMES
+    if _BUILTIN_LAW_NAMES:
+        return _BUILTIN_LAW_NAMES
+    _BUILTIN_LAW_NAMES = {ln for (ln, _art) in _get_article_index().keys() if ln}
+    return _BUILTIN_LAW_NAMES
 
 
 _LAW_CACHE_IDX: dict = {}

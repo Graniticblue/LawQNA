@@ -130,7 +130,26 @@
         return c;
     }
 
-    // 검색 범위 카드 동적 내용 갱신 — 추가 법령 수(/monitor src=add) · 지정 지역
+    // 자료 캐싱(law-add) 진행 추적 — 모달을 닫아도 검색범위 카드에 '캐싱 중…'이 유지되게.
+    var _pendingCache = 0;
+    function cacheLaw(kind, name) {
+        _pendingCache++;
+        refreshWelcomeScope();
+        return fetch('/law-add', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kind: kind, name: name }),
+        })
+            .then(function (r) { return r.json(); })
+            .catch(function () { return { error: 'net' }; })
+            .then(function (res) {
+                _pendingCache = Math.max(0, _pendingCache - 1);
+                refreshMonitor(); refreshWelcomeScope();
+                return res;
+            });
+    }
+
+    // 검색 범위 카드 동적 내용 갱신 — 캐싱 중 · 추가 법령 수(/monitor src=add) · 지정 지역
     function refreshWelcomeScope() {
         var regEl = document.getElementById('usun-scope-region-body');
         if (regEl) {
@@ -139,17 +158,21 @@
             regEl.classList.toggle('muted', !r);
         }
         var lawEl = document.getElementById('usun-scope-law-body');
-        if (lawEl) {
-            fetch('/monitor', { credentials: 'same-origin' })
-                .then(function (r) { return r.json(); })
-                .then(function (d) {
-                    function addc(a) { return (a || []).filter(function (x) { return x.src === 'add'; }).length; }
-                    var n = addc(d.law);
-                    lawEl.textContent = n > 0 ? ('추가한 ' + n + '건을 우선 근거로 반영') : '전체 법령·조례에서 검색';
-                    lawEl.classList.toggle('muted', n === 0);
-                })
-                .catch(function () { });
+        if (!lawEl) return;
+        if (_pendingCache > 0) {   // 진행 중이면 창을 닫아도 카드에 표시
+            lawEl.textContent = '캐싱 중… (' + _pendingCache + '건)';
+            lawEl.classList.remove('muted');
+            return;
         }
+        fetch('/monitor', { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                function addc(a) { return (a || []).filter(function (x) { return x.src === 'add'; }).length; }
+                var n = addc(d.law);
+                lawEl.textContent = n > 0 ? ('추가한 ' + n + '건을 우선 근거로 반영') : '전체 법령·조례에서 검색';
+                lawEl.classList.toggle('muted', n === 0);
+            })
+            .catch(function () { });
     }
 
     // 지역 설정 모달 — 검색범위 '지역 조례' 카드 진입. 저장 시 답변 컨텍스트 주입 + 조례 캐싱 제안.
@@ -178,14 +201,15 @@
         var rin = ov.querySelector('#setup-region');
         var rsave = ov.querySelector('#setup-region-save');
         var rbox = ov.querySelector('#setup-region-results');
+        // 지역명만 등록하면 해당 지자체 조례를 '전부'(n=100) 띄우고, 선택/말거나는 사용자 몫
         function proposeOrdinances(region) {
-            rbox.innerHTML = '<div class="usun-law-hint">이 지역 조례 검색 중…</div>';
-            fetch('/law-search?q=' + encodeURIComponent(region), { credentials: 'same-origin' })
+            rbox.innerHTML = '<div class="usun-law-hint">이 지역 조례 불러오는 중…</div>';
+            fetch('/law-search?q=' + encodeURIComponent(region) + '&n=100', { credentials: 'same-origin' })
                 .then(function (r) { return r.json(); })
                 .then(function (d) {
                     var rs = ((d && d.results) || []).filter(function (it) { return it.kind === '조례'; });
-                    if (!rs.length) { rbox.innerHTML = '<div class="usun-law-hint">캐싱을 제안할 조례를 찾지 못했습니다 (지역명 확인)</div>'; return; }
-                    rbox.innerHTML = '<div class="usun-law-hint">이 지역 조례 — 캐싱하면 조문까지 반영됩니다(선택):</div>'
+                    if (!rs.length) { rbox.innerHTML = '<div class="usun-law-hint">이 지역 조례를 찾지 못했습니다 (지역명 확인)</div>'; return; }
+                    rbox.innerHTML = '<div class="usun-law-hint">이 지역 조례 ' + rs.length + '건 — 필요한 것만 캐싱하세요(선택):</div>'
                         + rs.map(function (it) {
                             return '<div class="usun-law-item" data-kind="조례" data-name="' + _esc(it.name) + '">'
                                 + '<span class="usun-law-kind usun-law-kind-ord">조례</span>'
@@ -210,19 +234,14 @@
             if (!b) return;
             var item = b.closest('.usun-law-item');
             if (!item) return;
-            b.disabled = true; b.textContent = '…';
-            fetch('/law-add', {
-                method: 'POST', credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ kind: '조례', name: item.getAttribute('data-name') }),
-            })
-                .then(function (r) { return r.json(); })
-                .then(function (res) {
-                    b.textContent = (res && !res.error) ? '✓ 추가됨' : '✗';
-                    if (res && !res.error) { item.classList.add('added'); refreshMonitor(); refreshWelcomeScope(); }
-                })
-                .catch(function () { b.textContent = '✗'; });
+            b.disabled = true; b.textContent = '캐싱 중…';
+            cacheLaw('조례', item.getAttribute('data-name')).then(function (res) {
+                b.textContent = (res && !res.error) ? '✓ 추가됨' : '✗';
+                if (res && !res.error) item.classList.add('added'); else b.disabled = false;
+            });
         });
+        // 이미 지정된 지역이면 열자마자 그 지역 조례를 바로 보여준다
+        if (getRegion()) proposeOrdinances(getRegion());
         document.body.appendChild(ov);
         ov.style.display = 'flex';
         setTimeout(function () { rin.focus(); }, 30);
@@ -1038,10 +1057,14 @@
                 if (!rs.length) { box.innerHTML = '<div class="usun-law-hint">결과 없음</div>'; return; }
                 box.innerHTML = rs.map(function (it) {
                     var k = (it.kind === '조례') ? 'ord' : 'law';
-                    return '<div class="usun-law-item" data-kind="' + _esc(it.kind) + '" data-name="' + _esc(it.name) + '">'
+                    // 이미 내장(색인)된 법령은 추가 불필요 — 버튼 대신 '이미 포함됨' 표시
+                    var tail = it.in_db
+                        ? '<span class="usun-law-indb">이미 포함됨</span>'
+                        : '<button type="button" class="usun-law-add">추가</button>';
+                    return '<div class="usun-law-item' + (it.in_db ? ' added' : '') + '" data-kind="' + _esc(it.kind) + '" data-name="' + _esc(it.name) + '">'
                         + '<span class="usun-law-kind usun-law-kind-' + k + '">' + _esc(it.kind) + '</span>'
                         + '<span class="usun-law-nm">' + _esc(it.name) + '</span>'
-                        + '<button type="button" class="usun-law-add">추가</button></div>';
+                        + tail + '</div>';
                 }).join('');
             })
             .catch(function () { box.innerHTML = '<div class="usun-law-hint">검색 실패</div>'; });
@@ -1088,21 +1111,11 @@
             if (!b) return;
             var item = b.closest('.usun-law-item');
             if (!item) return;
-            b.disabled = true; b.textContent = '…';
-            fetch('/law-add', {
-                method: 'POST', credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    kind: item.getAttribute('data-kind'),
-                    name: item.getAttribute('data-name'),
-                }),
-            })
-                .then(function (r) { return r.json(); })
-                .then(function (res2) {
-                    b.textContent = (res2 && !res2.error) ? '✓ 추가됨' : '✗';
-                    if (res2 && !res2.error) { item.classList.add('added'); refreshMonitor(); refreshWelcomeScope(); }
-                })
-                .catch(function () { b.textContent = '✗'; });
+            b.disabled = true; b.textContent = '캐싱 중…';
+            cacheLaw(item.getAttribute('data-kind'), item.getAttribute('data-name')).then(function (res2) {
+                b.textContent = (res2 && !res2.error) ? '✓ 추가됨' : '✗';
+                if (res2 && !res2.error) item.classList.add('added'); else b.disabled = false;
+            });
         });
         document.body.appendChild(ov);
         ov.style.display = 'flex';
