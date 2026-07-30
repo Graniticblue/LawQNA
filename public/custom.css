@@ -559,18 +559,19 @@ button:has(svg[class*="-moon"]) {
 #usun-welcome-cards {
     position: fixed;
     left: 320px;                 /* 좌측 대화 사이드바 폭(기본 20rem) */
-    right: var(--usun-rb-w);     /* 우측 바 폭 */
-    top: 50%;
-    transform: translateY(-50%); /* 그룹 전체를 화면 세로 중앙에 */
+    right: 0;                    /* 초기창엔 우측 바 없음 */
+    top: 0;
+    bottom: 0;
     z-index: 15;
     display: flex;
-    flex-direction: column;
-    align-items: center;         /* 로고·세팅·그리드 가로 중앙 */
-    gap: 18px;                   /* 층(로고/세팅/예시) 사이 간격 */
-    pointer-events: none;        /* 빈 영역 클릭은 통과, 버튼만 활성 */
+    align-items: center;         /* 히어로 컬럼을 화면 중앙에 */
+    justify-content: center;
+    overflow: auto;              /* 내용이 길면 스크롤(짧은 화면 대비) */
+    padding: 32px 24px;
+    box-sizing: border-box;
+    pointer-events: none;        /* 빈 영역 클릭은 통과, 히어로만 활성 */
 }
-#usun-welcome-cards .usun-wc-card,
-#usun-welcome-cards button { pointer-events: auto; }
+#usun-welcome-cards .usun-hero { pointer-events: auto; }
 
 .usun-wc-logo {
     max-height: 52px;
@@ -642,15 +643,19 @@ button:has(svg[class*="-moon"]) {
 }
 
 /* 웰컴 화면에서 입력창(컴포저)을 하단 고정 + 콘텐츠 영역 가운데 */
+/* 초기창에선 실제 chainlit 컴포저를 화면 밖으로 숨긴다(제출 기능만 유지 — 히어로 입력이
+   sendPrompt로 이 컴포저에 위임). 첫 질문 후엔 클래스가 떨어져 chainlit 기본 위치로 복귀. */
 .usun-welcome-input {
     position: fixed !important;
-    left: 320px !important;
-    right: var(--usun-rb-w) !important;
-    bottom: 28px !important;
-    margin: 0 auto !important;
-    max-width: 760px !important;
-    width: auto !important;
-    z-index: 20;
+    left: -99999px !important;
+    right: auto !important;
+    bottom: 20px !important;
+    width: 640px !important;
+    max-width: 640px !important;
+    margin: 0 !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    z-index: 0 !important;
 }
 
 /* (로고는 이제 #usun-welcome-cards 오버레이 안 .usun-wc-logo 로 렌더 —
@@ -854,3 +859,108 @@ button:has(svg[class*="-moon"]) {
     max-width: 80vw;
 }
 .usun-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ═══════════════════════════════════════════════════════════════
+   초기창(SCREEN 1) — 입력창이 주인공. 헤딩 → 입력 → 예시칩 → 검색범위 3카드.
+   우측 도구바는 초기창에서 숨긴다(검색 후 화면에서만 표시).
+   ═══════════════════════════════════════════════════════════════ */
+body.usun-welcome-mode #usun-right-bar { display: none !important; }
+body.usun-welcome-mode #root { padding-right: 0 !important; }
+
+.usun-hero { width: 100%; max-width: 720px; display: flex; flex-direction: column; }
+.usun-hero-h {
+    font-size: 27px; font-weight: 700; letter-spacing: -.02em; line-height: 1.35;
+    color: #1f2937; margin-bottom: 8px;
+}
+.usun-hero-sub { font-size: 14.5px; line-height: 1.65; color: #64748b; margin-bottom: 22px; }
+
+/* 입력창(주인공) */
+.usun-hero-input {
+    border: 1.5px solid #1565C0; border-radius: 14px; padding: 16px 16px 12px;
+    background: #fff; box-shadow: 0 2px 10px rgba(21, 101, 192, .10);
+}
+.usun-hero-ta {
+    display: block; width: 100%; border: none; outline: none; resize: none;
+    font-family: inherit; font-size: 16px; line-height: 1.6; color: #1f2937;
+    background: transparent; min-height: 28px; max-height: 160px; overflow-y: auto;
+}
+.usun-hero-ta::placeholder { color: #94a3b8; }
+.usun-hero-foot {
+    display: flex; align-items: center; gap: 9px;
+    padding-top: 10px; margin-top: 8px; border-top: 1px solid #eef2f8;
+}
+.usun-hero-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12.5px; font-weight: 500; color: #475569;
+    border: 1px solid #dbe3ee; border-radius: 8px; padding: 7px 11px;
+    background: #fff; cursor: pointer;
+}
+.usun-hero-chip:hover { border-color: #c9d9ef; }
+.usun-hero-chip.on { color: #0D47A1; border-color: #c9d9ef; background: #f2f7fe; font-weight: 600; }
+.usun-chip-caret { color: #94a3b8; }
+.usun-hero-spacer { flex: 1; }
+.usun-hero-send {
+    flex: 0 0 auto; width: 40px; height: 40px; border-radius: 10px; border: none;
+    background: #1565C0; color: #fff; font-size: 17px; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+.usun-hero-send:hover { background: #0D47A1; }
+
+/* 예시 질문(칩) */
+.usun-ex { margin-top: 16px; }
+.usun-ex-head { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; flex-wrap: wrap; }
+.usun-ex-label {
+    font-size: 12px; font-weight: 600; color: #64748b;
+    background: #eef2f7; border-radius: 5px; padding: 4px 8px;
+}
+.usun-ex-hint { font-size: 12.5px; color: #64748b; }
+.usun-ex-pills { display: flex; gap: 8px; flex-wrap: wrap; }
+.usun-ex-pill {
+    font-size: 13px; color: #475569; background: #f4f7fb;
+    border: 1px solid #e2e8f0; border-radius: 999px; padding: 8px 14px; cursor: pointer;
+}
+.usun-ex-pill:hover { border-color: #c9d9ef; background: #eef4fc; color: #0D47A1; }
+
+/* 이 질문의 검색 범위(3 카드) */
+.usun-scope { margin-top: 30px; }
+.usun-scope-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 12px; margin-bottom: 10px; flex-wrap: wrap;
+}
+.usun-scope-t { font-size: 13.5px; font-weight: 600; color: #334155; }
+.usun-scope-hint { font-size: 12.5px; color: #64748b; }
+.usun-scope-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.usun-scope-card {
+    box-sizing: border-box; display: flex; flex-direction: column; gap: 7px;
+    border-radius: 12px; padding: 14px 15px 13px; min-height: 128px;
+    border: 1.5px solid #cfd8e4; background: #fbfcfe;
+}
+.usun-scope-law    { border: 1.5px solid #c9d9ef; background: #f6faff; }
+.usun-scope-region { border: 1.5px dashed #dcc59a; background: #fffdf6; }
+.usun-scope-doc    { border: 1.5px dashed #cfd8e4; background: #fbfcfe; }
+.usun-scope-cardt { font-size: 12.5px; font-weight: 700; color: #334155; }
+.usun-scope-law .usun-scope-cardt    { color: #1565C0; }
+.usun-scope-region .usun-scope-cardt { color: #8a5a13; }
+.usun-scope-val { font-size: 14px; font-weight: 600; line-height: 1.45; color: #1f2937; }
+.usun-scope-val.muted { color: #64748b; font-weight: 500; }
+.usun-scope-hint2 { font-size: 12px; line-height: 1.55; color: #64748b; }
+.usun-scope-acts { display: flex; gap: 12px; margin-top: auto; padding-top: 6px; }
+.usun-scope-act {
+    font-size: 12.5px; font-weight: 600; color: #1565C0;
+    background: none; border: none; padding: 0; cursor: pointer;
+}
+.usun-scope-region .usun-scope-act { color: #B26A00; }
+.usun-scope-doc .usun-scope-act    { color: #334155; }
+.usun-scope-act:hover { text-decoration: underline; }
+
+/* 포커스 링 — 모든 인터랙티브 요소 */
+#usun-welcome-cards button:focus-visible,
+#usun-welcome-cards .usun-scope-card:focus-visible {
+    outline: 2px solid #1565C0; outline-offset: 2px;
+}
+.usun-hero-input:focus-within { box-shadow: 0 2px 14px rgba(21, 101, 192, .18); }
+
+/* 좁은 화면 — 검색범위·예시는 세로로 */
+@media (max-width: 720px) {
+    .usun-scope-grid { grid-template-columns: 1fr; }
+}

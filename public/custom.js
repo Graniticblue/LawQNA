@@ -76,136 +76,105 @@
         pinComposer(false);
     }
 
-    // ── 웰컴 '초기 세팅 스트립'(①자료검색 ②PDF첨부 ③추가설정) ─────────────
-    // 로고 아래·예시 카드 위. 전부 선택 사항. 접기(1회)·다시 보지 않기(영구) 지원.
-    var SETUP_HIDE_KEY = 'usun_hide_setup';
-    var _setupCollapsed = false;
-    function isSetupPermHidden() {
-        try { return localStorage.getItem(SETUP_HIDE_KEY) === '1'; } catch (e) { return false; }
+    // ══ 웰컴(초기창) 유틸 — SCREEN 1 레퍼런스: 입력창이 주인공 ══════════════
+    function _el(tag, cls, txt) {
+        var e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (txt != null) e.textContent = txt;
+        return e;
+    }
+    function _autoGrow() { this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 160) + 'px'; }
+    function modelPlainLabel(id) { return id === 'claude' ? 'Claude' : 'Gemini'; }
+
+    // 히어로 입력 → 전송(화면 밖에 숨긴 실제 컴포저로 sendPrompt 위임)
+    function heroSend(ta) {
+        var v = (ta.value || '').trim();
+        if (!v) { ta.focus(); return; }
+        sendPrompt(v);
     }
 
-    function setupStep(num, title, sub, id, handler) {
-        var b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'usun-setup-step';
-        b.dataset.step = id;
-        b.innerHTML =
-            '<span class="usun-setup-num">' + num + '</span>'
-            + '<span class="usun-setup-tx">'
-            + '<span class="usun-setup-st">' + _esc(title)
-            + '<span class="usun-setup-badge" style="display:none"></span></span>'
-            + '<span class="usun-setup-sd">' + _esc(sub) + '</span></span>';
-        b.addEventListener('click', function () { try { handler(); } catch (e) { } });
-        return b;
-    }
-
-    function renderSetupInto(wrap) {
-        wrap.innerHTML = '';
-        if (isSetupPermHidden()) return;              // 영구 숨김
-        if (_setupCollapsed) {                          // 접힘 → 미니 바
-            var mini = document.createElement('button');
-            mini.type = 'button';
-            mini.className = 'usun-setup-mini';
-            mini.textContent = '＋ 질문 전에 자료 갖추기';
-            mini.addEventListener('click', function () { _setupCollapsed = false; renderSetupInto(wrap); });
-            wrap.appendChild(mini);
-            return;
-        }
-        // 펼침 → 헤더(라벨 + 접기·다시안보기) + ①②③
-        var head = document.createElement('div');
-        head.className = 'usun-setup-head';
-        var t = document.createElement('span');
-        t.className = 'usun-setup-title';
-        t.textContent = '질문 전에, 자료를 갖춰보세요 (선택)';
-        head.appendChild(t);
-        var tg = document.createElement('span');
-        tg.className = 'usun-setup-toggles';
-        var b1 = document.createElement('button');
-        b1.type = 'button'; b1.className = 'usun-setup-tg'; b1.textContent = '접기';
-        b1.addEventListener('click', function () { _setupCollapsed = true; renderSetupInto(wrap); });
-        var b2 = document.createElement('button');
-        b2.type = 'button'; b2.className = 'usun-setup-tg'; b2.textContent = '다시 보지 않기';
-        b2.addEventListener('click', function () {
-            try { localStorage.setItem(SETUP_HIDE_KEY, '1'); } catch (e) { }
-            renderSetupInto(wrap);
+    // 검색 범위 카드 1장 (법령·조례 / 우리 지역 조례 / 내 문서) — 자료 추가 진입점
+    function scopeCard(kind) {
+        var conf = {
+            law: {
+                t: '법령·조례', bodyId: 'usun-scope-law-body', body: '전체 법령·조례에서 검색',
+                hint: '추가하면 그 자료를 우선 근거로 반영합니다.',
+                actions: [['목록 보기', showLawListModal], ['＋ 추가', showLawSearchModal]]
+            },
+            region: {
+                t: '우리 지역 조례', bodyId: 'usun-scope-region-body', body: '전국 공통 범위',
+                hint: '지자체 조례는 질문하는 중에도 지정할 수 있습니다.',
+                actions: [['지역 선택', showRegionModal]]
+            },
+            doc: {
+                t: '내 문서', bodyId: '', body: '없음',
+                hint: '지구단위계획·운영기준을 올리면 그 내용까지 인용합니다.',
+                actions: [['문서 올리기', showUploadModal]]
+            }
+        }[kind];
+        var c = _el('div', 'usun-scope-card usun-scope-' + kind);
+        var acts = conf.actions.map(function (a, i) {
+            return '<button type="button" class="usun-scope-act" data-i="' + i + '">' + _esc(a[0]) + '</button>';
+        }).join('');
+        c.innerHTML =
+            '<div class="usun-scope-cardt">' + _esc(conf.t) + '</div>'
+            + '<div class="usun-scope-val muted"' + (conf.bodyId ? (' id="' + conf.bodyId + '"') : '') + '>' + _esc(conf.body) + '</div>'
+            + '<div class="usun-scope-hint2">' + _esc(conf.hint) + '</div>'
+            + '<div class="usun-scope-acts">' + acts + '</div>';
+        c.querySelector('.usun-scope-acts').addEventListener('click', function (e) {
+            var b = e.target.closest && e.target.closest('.usun-scope-act');
+            if (!b) return;
+            var fn = conf.actions[+b.getAttribute('data-i')][1];
+            try { fn(); } catch (err) { }
         });
-        tg.appendChild(b1); tg.appendChild(b2);
-        head.appendChild(tg);
-        wrap.appendChild(head);
-
-        var steps = document.createElement('div');
-        steps.className = 'usun-setup-steps';
-        steps.appendChild(setupStep('1', '자료 검색', '법령·판례·해석례를 찾아 추가', 'search', showLawSearchModal));
-        steps.appendChild(setupStep('2', '파일 첨부', '지구단위계획·운영기준 등 파일 추가', 'attach', showUploadModal));
-        steps.appendChild(setupStep('3', '추가 설정', '모델 · 지역 · 웹 검색', 'setup', showSetupModal));
-        wrap.appendChild(steps);
-        refreshSetupBadges();
+        return c;
     }
 
-    // ① 자료 검색 배지 = 이 대화에 '추가'한 자료 수 (/monitor의 src==='add')
-    function refreshSetupBadges() {
-        var el = document.querySelector('.usun-setup-step[data-step="search"] .usun-setup-badge');
-        if (!el) return;
-        fetch('/monitor', { credentials: 'same-origin' })
-            .then(function (r) { return r.json(); })
-            .then(function (d) {
-                function addc(a) { return (a || []).filter(function (x) { return x.src === 'add'; }).length; }
-                var n = addc(d.law) + addc(d.interp) + addc(d.case);
-                if (n > 0) { el.textContent = n; el.style.display = ''; }
-                else { el.style.display = 'none'; }
-            })
-            .catch(function () { });
+    // 검색 범위 카드 동적 내용 갱신 — 추가 법령 수(/monitor src=add) · 지정 지역
+    function refreshWelcomeScope() {
+        var regEl = document.getElementById('usun-scope-region-body');
+        if (regEl) {
+            var r = getRegion();
+            regEl.textContent = r || '전국 공통 범위';
+            regEl.classList.toggle('muted', !r);
+        }
+        var lawEl = document.getElementById('usun-scope-law-body');
+        if (lawEl) {
+            fetch('/monitor', { credentials: 'same-origin' })
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                    function addc(a) { return (a || []).filter(function (x) { return x.src === 'add'; }).length; }
+                    var n = addc(d.law);
+                    lawEl.textContent = n > 0 ? ('추가한 ' + n + '건을 우선 근거로 반영') : '전체 법령·조례에서 검색';
+                    lawEl.classList.toggle('muted', n === 0);
+                })
+                .catch(function () { });
+        }
     }
 
-    // ③ 추가 설정 — 지역 입력(→조례 검색·추가) + 웹 검색 허용/불가
-    function showSetupModal() {
+    // 지역 설정 모달 — 검색범위 '지역 조례' 카드 진입. 저장 시 답변 컨텍스트 주입 + 조례 캐싱 제안.
+    function showRegionModal() {
         var ov = document.getElementById('setup-modal');
         if (ov) ov.remove();
         ov = document.createElement('div');
         ov.id = 'setup-modal';
-        var webOn = webSearchOn();
-        var curM = currentModel();
-        var modelBtns = MODELS.map(function (m) {
-            return '<button type="button" class="setup-model-btn' + (m.id === curM ? ' active' : '')
-                + '" data-model="' + m.id + '">' + _esc(m.label) + (m.id === curM ? ' ✓' : '') + '</button>';
-        }).join('');
         ov.innerHTML =
-            '<div class="law-list-box" style="max-width:560px">' +
+            '<div class="law-list-box" style="max-width:520px">' +
             '<button class="law-list-close" aria-label="닫기">✕</button>' +
-            '<h2 style="font-size:18px;margin:0 0 4px">추가 설정</h2>' +
-            '<div class="law-db-foot" style="margin:0 0 16px">모두 선택 사항입니다.</div>' +
-            '<div class="setup-sec-h">답변 모델</div>' +
-            '<div class="setup-models">' + modelBtns + '</div>' +
-            '<div class="setup-sec-h" style="margin-top:20px">지역 설정</div>' +
-            '<div class="law-db-foot" style="margin:0 0 8px">지역명을 입력·저장하면 답변 생성 시 해당 지자체를 반영합니다. 저장하면 이 지역 조례 캐싱을 제안합니다. (예: 시흥시)</div>' +
-            '<div class="law-search-bar">' +
+            '<h2 style="font-size:18px;margin:0 0 4px">지역 설정</h2>' +
+            '<div class="law-db-foot" style="margin:0 0 12px">지역명을 입력·저장하면 답변 생성 시 해당 지자체를 반영합니다. 전국 공통 범위로 두어도 답합니다. (예: 시흥시)</div>' +
+            '<div class="law-search-bar" style="margin-bottom:6px">' +
             '<input type="text" id="setup-region" placeholder="지역명 (예: 시흥시)" value="' + _esc(getRegion()) + '" />' +
             '<button type="button" id="setup-region-save">저장</button>' +
             '</div>' +
             '<div id="setup-region-results" class="law-search-results"></div>' +
-            '<div class="setup-sec-h" style="margin-top:10px">웹 검색</div>' +
-            '<label class="setup-toggle"><input type="checkbox" id="setup-web"' + (webOn ? ' checked' : '') + '><span class="setup-toggle-tx">웹 검색 허용</span></label>' +
-            '<div class="law-db-foot" style="margin:8px 0 0">답변 생성 시 웹 최신정보를 함께 참고합니다. 답변생성범위는 넓어지나, <b>허위자료가 포함될 수 있습니다.</b></div>' +
             '</div>';
         ov.addEventListener('click', function (e) { if (e.target === ov) ov.remove(); });
         ov.querySelector('.law-list-close').onclick = function () { ov.remove(); };
         document.addEventListener('keydown', function (e) {
             if (e.key === 'Escape') { var m = document.getElementById('setup-modal'); if (m) m.remove(); }
         });
-        // 답변 모델 선택 (우측 바 모델 버튼과 동일 — /provider + localStorage)
-        ov.querySelector('.setup-models').addEventListener('click', function (e) {
-            var b = e.target.closest && e.target.closest('.setup-model-btn');
-            if (!b) return;
-            var id = b.getAttribute('data-model');
-            chooseModel(id);
-            Array.prototype.slice.call(ov.querySelectorAll('.setup-model-btn')).forEach(function (x) {
-                var xid = x.getAttribute('data-model'), on = xid === id;
-                x.classList.toggle('active', on);
-                var m = MODELS.find(function (mm) { return mm.id === xid; });
-                x.textContent = (m ? m.label : xid) + (on ? ' ✓' : '');
-            });
-        });
-        // 지역 설정 — 저장(컨텍스트 주입) + 그 지역 조례 캐싱 제안(law-search→법령 아님, 조례만)
+        // 지역 설정 — 저장(컨텍스트 주입) + 그 지역 조례 캐싱 제안(law-search→조례만)
         var rin = ov.querySelector('#setup-region');
         var rsave = ov.querySelector('#setup-region-save');
         var rbox = ov.querySelector('#setup-region-results');
@@ -229,6 +198,7 @@
         function saveRegion() {
             var v = (rin.value || '').trim();
             setRegion(v);
+            refreshWelcomeScope();
             if (!v) { rbox.innerHTML = ''; _toast('지역 설정을 해제했습니다.'); return; }
             _toast("지역 '" + v + "' 설정 — 답변에 반영됩니다.");
             proposeOrdinances(v);
@@ -249,89 +219,102 @@
                 .then(function (r) { return r.json(); })
                 .then(function (res) {
                     b.textContent = (res && !res.error) ? '✓ 추가됨' : '✗';
-                    if (res && !res.error) { item.classList.add('added'); refreshMonitor(); refreshSetupBadges(); }
+                    if (res && !res.error) { item.classList.add('added'); refreshMonitor(); refreshWelcomeScope(); }
                 })
                 .catch(function () { b.textContent = '✗'; });
         });
-        // 웹 검색 토글
-        ov.querySelector('#setup-web').addEventListener('change', function (e) { setWebSearch(e.target.checked); });
         document.body.appendChild(ov);
         ov.style.display = 'flex';
         setTimeout(function () { rin.focus(); }, 30);
     }
 
+    // 초기창(SCREEN 1): 헤딩 → 입력창(주인공) → 예시 칩 → 검색범위 3카드.
+    // body 오버레이(React 밖). 실제 컴포저는 CSS로 화면 밖에 숨기고 히어로 입력이 위임.
     function buildWelcomeCards() {
         var nat = nativeStarterButtons();
-        if (nat.length < 1) return;
-        var labels = nat.map(starterLabel);
-        var sig = labels.join('|');
+        var meta = _startersMeta || {};
+        var starters = nat.map(function (b) {
+            var lbl = starterLabel(b);
+            return { label: lbl, msg: (meta[lbl] && meta[lbl].message) || lbl };
+        }).slice(0, 3);
+        var sig = 'hero|' + starters.map(function (s) { return s.label; }).join('|');
         var ov = document.getElementById('usun-welcome-cards');
         if (!(ov && ov.dataset.sig === sig)) {   // 구성이 바뀔 때만 재빌드(멱등 → 루프 없음)
             if (ov) ov.remove();
-            var meta = _startersMeta || {};
             ov = document.createElement('div');
             ov.id = 'usun-welcome-cards';
             ov.dataset.sig = sig;
-            // 그룹 상단: 회사 로고 (오버레이 안에 함께 두어 카드와 한 묶음으로 중앙 정렬)
-            var logo = document.createElement('img');
-            logo.className = 'usun-wc-logo';
-            logo.src = 'https://www.usun.co.kr/assets/images/logo.png';
-            logo.alt = 'usun';
-            ov.appendChild(logo);
-            // 로고 아래: 초기 세팅 스트립(①②③) — 예시 카드 위, 전부 선택
-            var setupWrap = document.createElement('div');
-            setupWrap.id = 'usun-setup-wrap';
-            setupWrap.className = 'usun-setup';
-            renderSetupInto(setupWrap);
-            ov.appendChild(setupWrap);
-            // 그 아래: 예시 라벨 + 카드 그리드(한 묶음)
-            var grid = document.createElement('div');
-            grid.className = 'usun-wc-grid';
-            labels.forEach(function (label) {
-                var info = meta[label] || {};
-                var t = info.type || '';
-                var msg = info.message || '';
-                var card = document.createElement('button');
-                card.type = 'button';
-                card.className = 'usun-wc-card';
-                if (t) {
-                    var chip = document.createElement('span');
-                    chip.className = 'usun-wc-chip';
-                    chip.setAttribute('data-usun-type', t);
-                    chip.textContent = t;
-                    card.appendChild(chip);
-                }
-                var title = document.createElement('span');
-                title.className = 'usun-wc-title';
-                title.textContent = label;
-                card.appendChild(title);
-                if (msg) {
-                    var desc = document.createElement('span');
-                    desc.className = 'usun-wc-desc';
-                    desc.textContent = msg;   // 클릭 시 입력될 실제 질의문
-                    card.appendChild(desc);
-                }
-                card.addEventListener('click', function () {
-                    var tgt = nativeStarterButtons().filter(function (b) {
-                        return starterLabel(b) === label;
-                    })[0];
-                    if (tgt) tgt.click();   // 전송은 chainlit 네이티브 핸들러에 위임
-                });
-                grid.appendChild(card);
+
+            var hero = _el('div', 'usun-hero');
+            hero.appendChild(_el('div', 'usun-hero-h', '무엇을 확인해 드릴까요?'));
+            hero.appendChild(_el('div', 'usun-hero-sub', '건축·인허가 법규를 조문 근거와 함께 답합니다. 바로 질문하셔도 됩니다.'));
+
+            // 입력창(주인공) — mock textarea + 푸터(모델·웹 칩 + 전송)
+            var box = _el('div', 'usun-hero-input');
+            var ta = _el('textarea', 'usun-hero-ta');
+            ta.rows = 1; ta.placeholder = '질문을 입력하세요';
+            ta.addEventListener('input', _autoGrow);
+            ta.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); heroSend(ta); }
             });
-            var examples = document.createElement('div');
-            examples.className = 'usun-wc-examples';
-            var sug = document.createElement('div');
-            sug.className = 'usun-wc-suggest';
-            sug.innerHTML = '<span class="usun-wc-suggest-l">질문 예시</span>';
-            examples.appendChild(sug);
-            examples.appendChild(grid);
-            ov.appendChild(examples);
+            box.appendChild(ta);
+            var foot = _el('div', 'usun-hero-foot');
+            var mchip = _el('button', 'usun-hero-chip'); mchip.type = 'button'; mchip.id = 'usun-hero-model';
+            mchip.innerHTML = _esc(modelPlainLabel(currentModel())) + ' <span class="usun-chip-caret">▾</span>';
+            mchip.addEventListener('click', function (e) { toggleModelMenu(e, mchip); });
+            var wchip = _el('button', 'usun-hero-chip'); wchip.type = 'button'; wchip.id = 'usun-hero-web';
+            function paintWeb() {
+                var on = webSearchOn();
+                wchip.textContent = on ? '웹 참고 켬' : '웹 참고 끔';
+                wchip.classList.toggle('on', on);
+                wchip.setAttribute('aria-pressed', on ? 'true' : 'false');
+            }
+            paintWeb();
+            wchip.addEventListener('click', function () { setWebSearch(!webSearchOn()); paintWeb(); });
+            var send = _el('button', 'usun-hero-send'); send.type = 'button'; send.textContent = '↑';
+            send.setAttribute('aria-label', '전송');
+            send.addEventListener('click', function () { heroSend(ta); });
+            foot.appendChild(mchip); foot.appendChild(wchip);
+            foot.appendChild(_el('span', 'usun-hero-spacer'));
+            foot.appendChild(send);
+            box.appendChild(foot);
+            hero.appendChild(box);
+
+            // 예시 질문(칩) — 클릭 시 입력창을 채우기만 하고 전송하지 않는다(고쳐 쓰게)
+            if (starters.length) {
+                var ex = _el('div', 'usun-ex');
+                var exh = _el('div', 'usun-ex-head');
+                exh.innerHTML = '<span class="usun-ex-label">예시 질문</span>'
+                    + '<span class="usun-ex-hint">눌러서 입력창에 넣고 고쳐 쓸 수 있습니다</span>';
+                ex.appendChild(exh);
+                var pills = _el('div', 'usun-ex-pills');
+                starters.forEach(function (s) {
+                    var p = _el('button', 'usun-ex-pill', s.label); p.type = 'button';
+                    p.addEventListener('click', function () { ta.value = s.msg; _autoGrow.call(ta); ta.focus(); });
+                    pills.appendChild(p);
+                });
+                ex.appendChild(pills);
+                hero.appendChild(ex);
+            }
+
+            // 이 질문의 검색 범위(3 카드) — 자료 추가 진입점(검색 후 우측 패널과 같은 3개·순서)
+            var scope = _el('div', 'usun-scope');
+            var sh = _el('div', 'usun-scope-head');
+            sh.innerHTML = '<span class="usun-scope-t">이 질문의 검색 범위</span>'
+                + '<span class="usun-scope-hint">미리 지정하면 근거를 더 빨리 찾습니다 · 안 해도 답합니다</span>';
+            scope.appendChild(sh);
+            var grid = _el('div', 'usun-scope-grid');
+            grid.appendChild(scopeCard('law'));
+            grid.appendChild(scopeCard('region'));
+            grid.appendChild(scopeCard('doc'));
+            scope.appendChild(grid);
+            hero.appendChild(scope);
+
+            ov.appendChild(hero);
             document.body.appendChild(ov);   // body = React 트리 밖 → 크래시 안전
+            refreshWelcomeScope();
         }
-        // 네이티브 스타터는 개별 버튼만 숨김(컨테이너·형제 불건드림) + 컴포저 하단 고정
-        // (배지 갱신은 최초 build 시 renderSetupInto + 4초 폴링이 담당 — 여기서 매 mutation마다
-        //  fetch하면 요청 폭주가 되므로 호출하지 않는다)
+        // 네이티브 스타터 숨김 + 실제 컴포저는 CSS로 화면 밖에(제출 기능만 유지)
         nat.forEach(function (b) { b.classList.add('usun-starter-hidden'); });
         pinComposer(true);
     }
@@ -621,7 +604,7 @@
             document.querySelectorAll('textarea, [contenteditable="true"]')
         ).filter(function (t) {
             return !(t.closest && t.closest(
-                '#usun-right-bar, #law-search-modal, #law-list-modal, #upload-cache-modal, #evidence-modal, #setup-modal'));
+                '#usun-right-bar, #law-search-modal, #law-list-modal, #upload-cache-modal, #evidence-modal, #setup-modal, #usun-welcome-cards'));
         });
         if (all.length) return { ta: all[all.length - 1], submit: s };
         return null;
@@ -809,14 +792,16 @@
     function chooseModel(id) {
         try { localStorage.setItem(MODEL_KEY, id); } catch (e) { }
         renderModelButton();
+        var hc = document.getElementById('usun-hero-model');   // 히어로 입력 모델 칩 동기화
+        if (hc) hc.innerHTML = _esc(modelPlainLabel(id)) + ' <span class="usun-chip-caret">▾</span>';
         pushModel(id);
         closeModelMenu();
     }
 
-    function toggleModelMenu(ev) {
+    function toggleModelMenu(ev, anchor) {
         ev.stopPropagation();
         if (document.getElementById('model-select-menu')) { closeModelMenu(); return; }
-        var btn = document.getElementById('model-select-btn');
+        var btn = anchor || document.getElementById('model-select-btn');
         if (!btn) return;
         var r = btn.getBoundingClientRect();
         var menu = document.createElement('div');
@@ -1115,7 +1100,7 @@
                 .then(function (r) { return r.json(); })
                 .then(function (res2) {
                     b.textContent = (res2 && !res2.error) ? '✓ 추가됨' : '✗';
-                    if (res2 && !res2.error) { item.classList.add('added'); refreshMonitor(); refreshSetupBadges(); }
+                    if (res2 && !res2.error) { item.classList.add('added'); refreshMonitor(); refreshWelcomeScope(); }
                 })
                 .catch(function () { b.textContent = '✗'; });
         });
@@ -1284,11 +1269,14 @@
         loadStartersMeta();
         insertRightBarButtons();
         hideReadme();
-        if (hasMessages()) {
+        var welcome = !hasMessages();
+        // 초기창(SCREEN 1)엔 우측 도구바가 없다 — body 클래스로 우측 바·실제 컴포저를 숨긴다.
+        document.body.classList.toggle('usun-welcome-mode', welcome);
+        if (!welcome) {
             removeLogo();   // 혹시 남은 구버전 로고(#usun-logo-wrap) 정리
             teardownWelcomeCards();
         } else {
-            try { buildWelcomeCards(); } catch (e) { }   // 로고+카드 묶음(오버레이) 렌더
+            try { buildWelcomeCards(); } catch (e) { }   // 히어로 오버레이 렌더
         }
         insertSidebarResizeHandle();
         killDarkMode();
@@ -1311,7 +1299,7 @@
     // 4초 폴링: ①대화 전환→fresh 재스캔 ②새 답변/스트리밍 변화→병합 재스캔(자동) ③그 외 갱신
     setInterval(function () {
         if (!document.getElementById('usun-monitor')) return;
-        if (document.getElementById('usun-welcome-cards')) refreshSetupBadges();   // 웰컴이면 ① 배지 갱신
+        if (document.getElementById('usun-welcome-cards')) refreshWelcomeScope();   // 웰컴이면 검색범위 갱신
         var sig = _convSig();
         if (sig !== _lastConvSig) {
             var switched = (_lastConvSig && sig);   // A→B (둘 다 비어있지 않음 = 실제 전환)
