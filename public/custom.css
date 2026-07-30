@@ -966,6 +966,20 @@ body.usun-welcome-mode #root { padding-right: 0 !important; }
 }
 .usun-hero-input:focus-within { box-shadow: 0 2px 14px rgba(21, 101, 192, .18); }
 
+/* 검색범위 카드 — 카드 전체가 클릭 진입점 */
+.usun-scope-card { cursor: pointer; }
+.usun-scope-card:hover { border-color: #1565C0; box-shadow: 0 4px 16px rgba(21, 101, 192, .10); }
+
+/* 지역 설정 모달 — 현재 지정 지역 상태 칩(+해제) */
+.region-status { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; min-height: 22px; }
+.region-cur { font-size: 13px; color: #334155; }
+.region-cur.muted { color: #64748b; }
+.region-clear {
+    font-size: 12px; font-weight: 600; color: #B26A00; background: none; border: none;
+    cursor: pointer; padding: 2px 4px;
+}
+.region-clear:hover { text-decoration: underline; }
+
 /* 좁은 화면 — 검색범위·예시는 세로로 */
 @media (max-width: 720px) {
     .usun-scope-grid { grid-template-columns: 1fr; }

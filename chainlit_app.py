@@ -295,6 +295,8 @@ try:
             ord_n = max(1, min(200, int(request.query_params.get("n", "15"))))
         except Exception:
             ord_n = 15
+        # kind = 'law'(법령만) | 'ord'(조례만) | ''(둘 다). 법령 추가는 법령만, 지역은 조례만.
+        kind = (request.query_params.get("kind", "") or "").strip()
         from ingest import law_api_fetcher as laf
         builtin = _builtin_law_names()   # 내장(이미 색인된) 법령명 세트 — in_db 표시용
         out: list = []
@@ -304,21 +306,23 @@ try:
 
         def _do():
             res: list = []
-            try:
-                for l in (laf.search_laws(q, 15) or []):
-                    nm = l.get("name")
-                    if nm:
-                        res.append({"kind": "법령", "name": nm, "in_db": _norm(nm) in builtin})
-            except Exception:
-                pass
-            try:
-                for o in (laf.search_ordinances(q, ord_n) or []):
-                    nm = (o.get("자치법규명") or o.get("자치법규명한글")
-                          or o.get("법령명") or o.get("법령명한글") or "").strip()
-                    if nm:
-                        res.append({"kind": "조례", "name": nm, "in_db": False})
-            except Exception:
-                pass
+            if kind != "ord":
+                try:
+                    for l in (laf.search_laws(q, 15) or []):
+                        nm = l.get("name")
+                        if nm:
+                            res.append({"kind": "법령", "name": nm, "in_db": _norm(nm) in builtin})
+                except Exception:
+                    pass
+            if kind != "law":
+                try:
+                    for o in (laf.search_ordinances(q, ord_n) or []):
+                        nm = (o.get("자치법규명") or o.get("자치법규명한글")
+                              or o.get("법령명") or o.get("법령명한글") or "").strip()
+                        if nm:
+                            res.append({"kind": "조례", "name": nm, "in_db": False})
+                except Exception:
+                    pass
             return res
 
         try:
