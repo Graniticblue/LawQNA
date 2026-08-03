@@ -285,7 +285,7 @@
 
             var hero = _el('div', 'usun-hero');
             hero.appendChild(_el('div', 'usun-hero-h', '무엇을 확인해 드릴까요?'));
-            hero.appendChild(_el('div', 'usun-hero-sub', '건축·인허가 법규를 조문 근거와 함께 답합니다. 바로 질문하셔도 됩니다.'));
+            hero.appendChild(_el('div', 'usun-hero-sub', '건축 관련 법규 질의를 조문/판례/해석례 근거와 함께 답합니다.'));
 
             // 입력창(주인공) — mock textarea + 푸터(모델·웹 칩 + 전송)
             var box = _el('div', 'usun-hero-input');
@@ -323,7 +323,7 @@
                 var ex = _el('div', 'usun-ex');
                 var exh = _el('div', 'usun-ex-head');
                 exh.innerHTML = '<span class="usun-ex-label">예시 질문</span>'
-                    + '<span class="usun-ex-hint">눌러서 입력창에 넣고 고쳐 쓸 수 있습니다</span>';
+                    + '<span class="usun-ex-hint">예시질의를 통해 모델작동을 확인해보세요.</span>';
                 ex.appendChild(exh);
                 var pills = _el('div', 'usun-ex-pills');
                 starters.forEach(function (s) {
@@ -338,8 +338,8 @@
             // 이 질문의 검색 범위(3 카드) — 자료 추가 진입점(검색 후 우측 패널과 같은 3개·순서)
             var scope = _el('div', 'usun-scope');
             var sh = _el('div', 'usun-scope-head');
-            sh.innerHTML = '<span class="usun-scope-t">이 질문의 검색 범위</span>'
-                + '<span class="usun-scope-hint">미리 지정하면 근거를 더 빨리 찾습니다 · 안 해도 답합니다</span>';
+            sh.innerHTML = '<span class="usun-scope-t">참고자료 등록</span>'
+                + '<span class="usun-scope-hint">미리 법령/지역 범위를 지정하면 답변생성성능이 개선됩니다.</span>';
             scope.appendChild(sh);
             var grid = _el('div', 'usun-scope-grid');
             grid.appendChild(scopeCard('law'));
