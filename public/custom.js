@@ -93,6 +93,11 @@
         sendPrompt(v);
     }
 
+    // 참고자료 등록 섹션 접힘 상태(localStorage 기억)
+    var SCOPE_COLLAPSE_KEY = 'usun_scope_collapsed';
+    function scopeCollapsed() { try { return localStorage.getItem(SCOPE_COLLAPSE_KEY) === '1'; } catch (e) { return false; } }
+    function setScopeCollapsed(on) { try { localStorage.setItem(SCOPE_COLLAPSE_KEY, on ? '1' : '0'); } catch (e) { } }
+
     // 검색 범위 카드 1장 (법령 / 우리 지역 조례 / 내 문서) — 카드 전체가 진입점(클릭·Enter).
     // 법령=법령만 검색(조례는 지역 카드로 분리). onBody = 카드 클릭 시 열 모달.
     function scopeCard(kind) {
@@ -341,11 +346,18 @@
                 hero.appendChild(ex);
             }
 
-            // 이 질문의 검색 범위(3 카드) — 자료 추가 진입점(검색 후 우측 패널과 같은 3개·순서)
-            var scope = _el('div', 'usun-scope');
+            // 질의 가이드 / 참고자료 등록(3 카드) — 헤더 클릭으로 접기·펴기(상태 기억)
+            var scope = _el('div', 'usun-scope' + (scopeCollapsed() ? ' collapsed' : ''));
             var sh = _el('div', 'usun-scope-head');
-            sh.innerHTML = '<span class="usun-scope-t">참고자료 등록</span>'
+            sh.setAttribute('role', 'button');
+            sh.setAttribute('tabindex', '0');
+            sh.innerHTML = '<span class="usun-scope-t"><span class="usun-scope-caret" aria-hidden="true">▾</span>질의 가이드 / 참고자료 등록</span>'
                 + '<span class="usun-scope-hint">미리 법령/지역 범위를 지정하면 답변생성성능이 개선됩니다.</span>';
+            function toggleScope() { setScopeCollapsed(scope.classList.toggle('collapsed')); }
+            sh.addEventListener('click', toggleScope);
+            sh.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleScope(); }
+            });
             scope.appendChild(sh);
             var grid = _el('div', 'usun-scope-grid');
             grid.appendChild(scopeCard('law'));
