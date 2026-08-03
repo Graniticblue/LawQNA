@@ -929,14 +929,22 @@ body.usun-welcome-mode #root { padding-right: 0 !important; }
 .usun-ex-pill:hover { border-color: #c9d9ef; background: #eef4fc; color: #0D47A1; }
 
 /* 이 질문의 검색 범위(3 카드) */
-.usun-scope { margin: 4px 0 18px; }   /* 입력창 위에 위치 — 위 여백은 sub가 담당 */
+.usun-scope { margin: 12px 0 18px; }   /* 입력창 위에 위치 */
 .usun-scope-head {
-    display: flex; align-items: baseline; justify-content: space-between;
+    display: flex; align-items: center; justify-content: space-between;
     gap: 12px; margin-bottom: 10px; flex-wrap: wrap;
     cursor: pointer; user-select: none;   /* 클릭으로 접기·펴기 */
 }
-.usun-scope-t { font-size: 13.5px; font-weight: 600; color: #334155; }
-.usun-scope-caret { display: inline-block; margin-right: 6px; color: #94a3b8; font-size: 11px; transition: transform .15s; }
+/* '질의 가이드 / 참고자료 등록' — 눈에 띄는 클릭 pill */
+.usun-scope-t {
+    display: inline-flex; align-items: center;
+    font-size: 14px; font-weight: 700; color: #0D47A1;
+    background: #EAF2FD; border: 1px solid #cfe0f7;
+    border-radius: 999px; padding: 7px 15px;
+    transition: background .15s, border-color .15s;
+}
+.usun-scope-head:hover .usun-scope-t { background: #DCEAFB; border-color: #b3d3f5; }
+.usun-scope-caret { display: inline-block; margin-right: 7px; color: #1565C0; font-size: 12px; transition: transform .15s; }
 .usun-scope-hint { font-size: 12.5px; color: #64748b; }
 .usun-scope-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 /* 접힘 — 캐럿 회전 + 카드 숨김 */

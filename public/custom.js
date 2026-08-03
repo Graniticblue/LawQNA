@@ -93,9 +93,9 @@
         sendPrompt(v);
     }
 
-    // 참고자료 등록 섹션 접힘 상태(localStorage 기억)
+    // 참고자료 등록 섹션 접힘 상태(localStorage 기억). 기본값=접힘(명시적 '0'일 때만 펼침).
     var SCOPE_COLLAPSE_KEY = 'usun_scope_collapsed';
-    function scopeCollapsed() { try { return localStorage.getItem(SCOPE_COLLAPSE_KEY) === '1'; } catch (e) { return false; } }
+    function scopeCollapsed() { try { return localStorage.getItem(SCOPE_COLLAPSE_KEY) !== '0'; } catch (e) { return true; } }
     function setScopeCollapsed(on) { try { localStorage.setItem(SCOPE_COLLAPSE_KEY, on ? '1' : '0'); } catch (e) { } }
 
     // 검색 범위 카드 1장 (법령 / 우리 지역 조례 / 내 문서) — 카드 전체가 진입점(클릭·Enter).
@@ -296,12 +296,11 @@
             logo.onerror = function () { this.style.display = 'none'; };
             hero.appendChild(logo);
             hero.appendChild(_el('div', 'usun-hero-h', '무엇을 확인해 드릴까요?'));
-            hero.appendChild(_el('div', 'usun-hero-sub', '건축 관련 법규 질의를 조문/판례/해석례 근거와 함께 답합니다.'));
 
             // 입력창(주인공) — mock textarea + 푸터(모델·웹 칩 + 전송)
             var box = _el('div', 'usun-hero-input');
             var ta = _el('textarea', 'usun-hero-ta');
-            ta.rows = 1; ta.placeholder = '질문을 입력하세요';
+            ta.rows = 1; ta.placeholder = '건축법규 관련 질의를 조문/판례/해석례 근거와 함께 답합니다';
             ta.addEventListener('input', _autoGrow);
             ta.addEventListener('keydown', function (e) {
                 if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); heroSend(ta); }
