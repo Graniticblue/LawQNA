@@ -918,12 +918,26 @@ body.usun-welcome-mode #root { padding-right: 0 !important; }
 
 /* 예시 질문(칩) */
 .usun-ex { margin-top: 16px; }
-.usun-ex-head { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; flex-wrap: wrap; }
-.usun-ex-label {
-    font-size: 12px; font-weight: 600; color: #64748b;
-    background: #eef2f7; border-radius: 5px; padding: 4px 8px;
+.usun-ex-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; margin-bottom: 10px; flex-wrap: wrap;
+    cursor: pointer; user-select: none;   /* 클릭으로 접기·펴기 */
 }
+/* '예시 질문' — 질의 가이드와 동일한 pill 토글 */
+.usun-ex-label {
+    display: inline-flex; align-items: center;
+    font-size: 14px; font-weight: 700; color: #0D47A1;
+    background: #EAF2FD; border: 1px solid #cfe0f7;
+    border-radius: 999px; padding: 7px 15px;
+    transition: background .15s, border-color .15s;
+}
+.usun-ex-head:hover .usun-ex-label { background: #DCEAFB; border-color: #b3d3f5; }
+.usun-ex-caret { display: inline-block; margin-right: 7px; color: #1565C0; font-size: 12px; transition: transform .15s; }
 .usun-ex-hint { font-size: 12.5px; color: #64748b; }
+/* 접힘 — 캐럿 회전 + 칩 숨김 */
+.usun-ex.collapsed .usun-ex-caret { transform: rotate(-90deg); }
+.usun-ex.collapsed .usun-ex-head { margin-bottom: 0; }
+.usun-ex.collapsed .usun-ex-pills { display: none; }
 .usun-ex-pills { display: flex; gap: 8px; flex-wrap: wrap; }
 .usun-ex-pill {
     font-size: 13px; color: #475569; background: #f4f7fb;

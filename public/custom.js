@@ -98,6 +98,11 @@
     function scopeCollapsed() { try { return localStorage.getItem(SCOPE_COLLAPSE_KEY) !== '0'; } catch (e) { return true; } }
     function setScopeCollapsed(on) { try { localStorage.setItem(SCOPE_COLLAPSE_KEY, on ? '1' : '0'); } catch (e) { } }
 
+    // 예시 질문 섹션 접힘 상태(localStorage 기억). 기본값=펼침(명시적 '1'일 때만 접힘).
+    var EX_COLLAPSE_KEY = 'usun_ex_collapsed';
+    function exCollapsed() { try { return localStorage.getItem(EX_COLLAPSE_KEY) === '1'; } catch (e) { return false; } }
+    function setExCollapsed(on) { try { localStorage.setItem(EX_COLLAPSE_KEY, on ? '1' : '0'); } catch (e) { } }
+
     // 검색 범위 카드 1장 (법령 / 우리 지역 조례 / 내 문서) — 카드 전체가 진입점(클릭·Enter).
     // 법령=법령만 검색(조례는 지역 카드로 분리). onBody = 카드 클릭 시 열 모달.
     function scopeCard(kind) {
@@ -327,12 +332,21 @@
             box.appendChild(foot);
             hero.appendChild(box);
 
-            // 예시 질문(칩) — 클릭 시 입력창을 채우기만 하고 전송하지 않는다(고쳐 쓰게)
+            // 예시 질문(칩) — 헤더 클릭으로 접기·펴기. 칩 클릭 시 입력창을 채우기만(고쳐 쓰게).
             if (starters.length) {
-                var ex = _el('div', 'usun-ex');
+                var ex = _el('div', 'usun-ex' + (exCollapsed() ? ' collapsed' : ''));
                 var exh = _el('div', 'usun-ex-head');
-                exh.innerHTML = '<span class="usun-ex-label">예시 질문</span>'
+                exh.setAttribute('role', 'button');
+                exh.setAttribute('tabindex', '0');
+                exh.innerHTML = '<span class="usun-ex-label"><span class="usun-ex-caret" aria-hidden="true">▾</span>예시 질문</span>'
                     + '<span class="usun-ex-hint">예시질의를 통해 모델작동을 확인해보세요.</span>';
+                (function () {
+                    function toggleEx() { setExCollapsed(ex.classList.toggle('collapsed')); }
+                    exh.addEventListener('click', toggleEx);
+                    exh.addEventListener('keydown', function (e) {
+                        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleEx(); }
+                    });
+                })();
                 ex.appendChild(exh);
                 var pills = _el('div', 'usun-ex-pills');
                 starters.forEach(function (s) {
