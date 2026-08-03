@@ -874,6 +874,7 @@ body.usun-welcome-mode #usun-right-bar { display: none !important; }
 body.usun-welcome-mode #root { padding-right: 0 !important; }
 
 .usun-hero { width: 100%; max-width: 720px; display: flex; flex-direction: column; }
+.usun-hero-logo { height: 30px; max-width: 160px; object-fit: contain; align-self: flex-start; margin-bottom: 16px; }
 .usun-hero-h {
     font-size: 27px; font-weight: 700; letter-spacing: -.02em; line-height: 1.35;
     color: #1f2937; margin-bottom: 8px;
@@ -928,7 +929,7 @@ body.usun-welcome-mode #root { padding-right: 0 !important; }
 .usun-ex-pill:hover { border-color: #c9d9ef; background: #eef4fc; color: #0D47A1; }
 
 /* 이 질문의 검색 범위(3 카드) */
-.usun-scope { margin-top: 30px; }
+.usun-scope { margin: 4px 0 18px; }   /* 입력창 위에 위치 — 위 여백은 sub가 담당 */
 .usun-scope-head {
     display: flex; align-items: baseline; justify-content: space-between;
     gap: 12px; margin-bottom: 10px; flex-wrap: wrap;

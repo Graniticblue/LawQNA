@@ -266,7 +266,7 @@
         setTimeout(function () { rin.focus(); }, 30);
     }
 
-    // 초기창(SCREEN 1): 헤딩 → 입력창(주인공) → 예시 칩 → 검색범위 3카드.
+    // 초기창(SCREEN 1): 로고 → 헤딩 → 참고자료 등록(검색범위) → 입력창 → 예시 칩.
     // body 오버레이(React 밖). 실제 컴포저는 CSS로 화면 밖에 숨기고 히어로 입력이 위임.
     function buildWelcomeCards() {
         var nat = nativeStarterButtons();
@@ -284,6 +284,12 @@
             ov.dataset.sig = sig;
 
             var hero = _el('div', 'usun-hero');
+            // 회사 로고 — 히어로 상단(작게, 왼쪽). 외부 이미지 로드 실패 시 숨김.
+            var logo = _el('img', 'usun-hero-logo');
+            logo.src = 'https://www.usun.co.kr/assets/images/logo.png';
+            logo.alt = 'usun';
+            logo.onerror = function () { this.style.display = 'none'; };
+            hero.appendChild(logo);
             hero.appendChild(_el('div', 'usun-hero-h', '무엇을 확인해 드릴까요?'));
             hero.appendChild(_el('div', 'usun-hero-sub', '건축 관련 법규 질의를 조문/판례/해석례 근거와 함께 답합니다.'));
 
@@ -346,7 +352,7 @@
             grid.appendChild(scopeCard('region'));
             grid.appendChild(scopeCard('doc'));
             scope.appendChild(grid);
-            hero.appendChild(scope);
+            hero.insertBefore(scope, box);   // 참고자료 등록을 입력창 '위'로
 
             ov.appendChild(hero);
             document.body.appendChild(ov);   // body = React 트리 밖 → 크래시 안전
