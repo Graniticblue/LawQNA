@@ -25,6 +25,10 @@ gemma_local/
 # Claude Code 로컬 설정 및 세션 데이터
 .claude/
 
+# 대화 로그 (커밋 제외 — 대화로그/ 폴더로 정리)
+대화로그/
+LawQNA_대화_*.md
+
 # 임시 출력 파일
 *.txt
 !prompt.md
