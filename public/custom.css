@@ -570,10 +570,10 @@ button:has(svg[class*="-moon"]) {
     bottom: 0;
     z-index: 15;
     display: flex;
-    align-items: flex-end;       /* 세로: 하단 앵커 */
-    justify-content: center;     /* 가로: 가운데 */
+    align-items: center;         /* 히어로 컬럼을 화면 세로 중앙에(원위치) */
+    justify-content: center;
     overflow: auto;              /* 내용이 길면 스크롤(짧은 화면 대비) */
-    padding: 32px 24px 52px;     /* 하단 여백 확보 */
+    padding: 32px 24px;
     box-sizing: border-box;
     pointer-events: none;        /* 빈 영역 클릭은 통과, 히어로만 활성 */
 }
@@ -874,7 +874,7 @@ body.usun-welcome-mode #usun-right-bar { display: none !important; }
 body.usun-welcome-mode #root { padding-right: 0 !important; }
 
 .usun-hero { width: 100%; max-width: 720px; display: flex; flex-direction: column; }
-.usun-hero-logo { height: 30px; max-width: 160px; object-fit: contain; align-self: flex-start; margin-bottom: 16px; }
+.usun-hero-logo { height: 36px; max-width: 200px; object-fit: contain; align-self: center; margin-bottom: 20px; }
 .usun-hero-h {
     font-size: 27px; font-weight: 700; letter-spacing: -.02em; line-height: 1.35;
     color: #1f2937; margin-bottom: 8px;
