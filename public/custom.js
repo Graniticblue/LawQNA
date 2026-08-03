@@ -98,17 +98,17 @@
     function scopeCard(kind) {
         var conf = {
             law: {
-                t: '법령', bodyId: 'usun-scope-law-body', body: '전체 법령에서 검색',
+                num: 1, t: '법령', bodyId: 'usun-scope-law-body', body: '전체 법령에서 검색',
                 hint: '필요한 법령을 추가하면 우선 근거로 반영합니다.',
                 onBody: showLawSearchModal, act: '＋ 법령 추가'
             },
             region: {
-                t: '우리 지역 조례', bodyId: 'usun-scope-region-body', body: '전국 공통 범위',
+                num: 2, t: '우리 지역 조례', bodyId: 'usun-scope-region-body', body: '전국 공통 범위',
                 hint: '지역을 선택하면 그 지자체 조례를 등록할 수 있습니다.',
                 onBody: showRegionModal, act: '지역 선택'
             },
             doc: {
-                t: '내 문서', bodyId: '', body: '없음',
+                num: 3, t: '내 문서', bodyId: '', body: '없음',
                 hint: '지구단위계획·운영기준을 올리면 그 내용까지 인용합니다.',
                 onBody: showUploadModal, act: '문서 올리기'
             }
@@ -117,7 +117,7 @@
         c.setAttribute('role', 'button');
         c.setAttribute('tabindex', '0');
         c.innerHTML =
-            '<div class="usun-scope-cardt">' + _esc(conf.t) + '</div>'
+            '<div class="usun-scope-cardt"><span class="usun-scope-num">' + conf.num + '</span>' + _esc(conf.t) + '</div>'
             + '<div class="usun-scope-val muted"' + (conf.bodyId ? (' id="' + conf.bodyId + '"') : '') + '>' + _esc(conf.body) + '</div>'
             + '<div class="usun-scope-hint2">' + _esc(conf.hint) + '</div>'
             + '<div class="usun-scope-acts"><span class="usun-scope-act">' + _esc(conf.act) + '</span></div>';

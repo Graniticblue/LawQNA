@@ -570,10 +570,10 @@ button:has(svg[class*="-moon"]) {
     bottom: 0;
     z-index: 15;
     display: flex;
-    align-items: center;         /* 히어로 컬럼을 화면 중앙에 */
-    justify-content: center;
+    align-items: flex-end;       /* 세로: 하단 앵커 */
+    justify-content: center;     /* 가로: 가운데 */
     overflow: auto;              /* 내용이 길면 스크롤(짧은 화면 대비) */
-    padding: 32px 24px;
+    padding: 32px 24px 52px;     /* 하단 여백 확보 */
     box-sizing: border-box;
     pointer-events: none;        /* 빈 영역 클릭은 통과, 히어로만 활성 */
 }
@@ -945,9 +945,18 @@ body.usun-welcome-mode #root { padding-right: 0 !important; }
 .usun-scope-law    { border: 1.5px solid #c9d9ef; background: #f6faff; }
 .usun-scope-region { border: 1.5px dashed #dcc59a; background: #fffdf6; }
 .usun-scope-doc    { border: 1.5px dashed #cfd8e4; background: #fbfcfe; }
-.usun-scope-cardt { font-size: 12.5px; font-weight: 700; color: #334155; }
+.usun-scope-cardt { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 700; color: #334155; }
 .usun-scope-law .usun-scope-cardt    { color: #1565C0; }
 .usun-scope-region .usun-scope-cardt { color: #8a5a13; }
+/* 순차성(①②③) — 강제 아님, 시각적 순서 안내 */
+.usun-scope-num {
+    flex: none; width: 18px; height: 18px; border-radius: 999px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; color: #fff; background: #94a3b8;
+}
+.usun-scope-law .usun-scope-num    { background: #1565C0; }
+.usun-scope-region .usun-scope-num { background: #B26A00; }
+.usun-scope-doc .usun-scope-num    { background: #94a3b8; }
 .usun-scope-val { font-size: 14px; font-weight: 600; line-height: 1.45; color: #1f2937; }
 .usun-scope-val.muted { color: #64748b; font-weight: 500; }
 .usun-scope-hint2 { font-size: 12px; line-height: 1.55; color: #64748b; }
