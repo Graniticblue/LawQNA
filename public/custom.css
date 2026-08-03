@@ -874,7 +874,10 @@ body.usun-welcome-mode #usun-right-bar { display: none !important; }
 body.usun-welcome-mode #root { padding-right: 0 !important; }
 
 .usun-hero { width: 100%; max-width: 720px; display: flex; flex-direction: column; }
-.usun-hero-logo { height: 36px; max-width: 200px; object-fit: contain; align-self: center; margin-bottom: 20px; }
+.usun-footer-logo {
+    position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%);
+    height: 32px; max-width: 180px; object-fit: contain; opacity: .9; pointer-events: none;
+}
 .usun-hero-h {
     font-size: 27px; font-weight: 700; letter-spacing: -.02em; line-height: 1.35;
     color: #1f2937; margin-bottom: 8px;

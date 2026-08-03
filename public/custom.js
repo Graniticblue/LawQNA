@@ -289,12 +289,11 @@
             ov.dataset.sig = sig;
 
             var hero = _el('div', 'usun-hero');
-            // 회사 로고 — 히어로 상단(작게, 왼쪽). 외부 이미지 로드 실패 시 숨김.
-            var logo = _el('img', 'usun-hero-logo');
+            // 회사 로고 — 화면 하단 가운데(푸터)에 배치. 외부 이미지 로드 실패 시 숨김.
+            var logo = _el('img', 'usun-footer-logo');
             logo.src = 'https://www.usun.co.kr/assets/images/logo.png';
             logo.alt = 'usun';
             logo.onerror = function () { this.style.display = 'none'; };
-            hero.appendChild(logo);
             hero.appendChild(_el('div', 'usun-hero-h', '무엇을 확인해 드릴까요?'));
 
             // 입력창(주인공) — mock textarea + 푸터(모델·웹 칩 + 전송)
@@ -366,6 +365,7 @@
             hero.insertBefore(scope, box);   // 참고자료 등록을 입력창 '위'로
 
             ov.appendChild(hero);
+            ov.appendChild(logo);   // 로고는 하단 가운데(히어로 밖, absolute)
             document.body.appendChild(ov);   // body = React 트리 밖 → 크래시 안전
             refreshWelcomeScope();
         }
