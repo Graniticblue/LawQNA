@@ -875,8 +875,8 @@ body.usun-welcome-mode #root { padding-right: 0 !important; }
 
 .usun-hero { width: 100%; max-width: 720px; display: flex; flex-direction: column; }
 .usun-footer-logo {
-    position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%);
-    height: 32px; max-width: 180px; object-fit: contain; opacity: .9; pointer-events: none;
+    position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+    height: 12px; max-width: 180px; object-fit: contain; opacity: .9; pointer-events: none;
 }
 .usun-hero-h {
     font-size: 27px; font-weight: 700; letter-spacing: -.02em; line-height: 1.35;

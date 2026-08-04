@@ -60,6 +60,14 @@
         return ((p ? p.textContent : btn.textContent) || '').trim();
     }
 
+    // 스타터 라벨 선두의 장식 이모지만 제거(표시 전용). 원본 라벨은 /starters-meta 조회 키라
+    // 그대로 두고, 화면에 뿌릴 때만 벗긴다. 서러게이트쌍 + 기호/화살표 BMP 대역 + 변이선택자·ZWJ.
+    // ①②③(U+2460-24FF)은 대역에서 제외 — 다른 UI 문구가 쓰는 글자라 같이 지워지면 안 된다.
+    var _LEAD_EMOJI = /^(?:[\uD800-\uDBFF][\uDC00-\uDFFF]|[\u2190-\u21FF\u2300-\u23FF\u2600-\u27BF\u2B00-\u2BFF]|[\uFE0E\uFE0F\u200D\u20E3])+\s*/;
+    function plainStarterLabel(label) {
+        return ((label || '').replace(_LEAD_EMOJI, '').trim()) || label;
+    }
+
     function pinComposer(on) {
         var s = document.getElementById('chat-submit');
         var box = s && s.parentElement && s.parentElement.parentElement
@@ -195,15 +203,15 @@
             '<div class="law-list-box" style="max-width:520px">' +
             '<button class="law-list-close" aria-label="닫기">✕</button>' +
             '<h2 style="font-size:18px;margin:0 0 4px">우리 지역 조례</h2>' +
-            '<div class="setup-sec-h" style="margin-top:6px">① 지역 선택 <span style="font-weight:400;color:#94a3b8">(답변에 반영)</span></div>' +
-            '<div class="law-db-foot" style="margin:0 0 8px">지역을 지정하면 답변 생성 시 해당 지자체를 반영합니다. 미지정이면 전국 공통 범위로 답합니다.</div>' +
+            '<div class="setup-sec-h" style="margin-top:6px">① 지역 선택</div>' +
+            '<div class="law-db-foot" style="margin:0 0 8px">답변 생성 시 해당 지자체 조례를 반영합니다. 미지정시 국가 법령을 기준으로 답합니다.</div>' +
             '<div id="region-status" class="region-status"></div>' +
             '<div class="law-search-bar" style="margin-bottom:0">' +
             '<input type="text" id="setup-region" placeholder="지역명 (예: 시흥시)" autocomplete="off" />' +
             '<button type="button" id="setup-region-save">지역 지정</button>' +
             '</div>' +
-            '<div class="setup-sec-h" style="margin-top:20px">② 지역 조례 등록 <span style="font-weight:400;color:#94a3b8">(선택)</span></div>' +
-            '<div class="law-db-foot" style="margin:0 0 8px">지정한 지역의 조례를 불러와 필요한 것만 캐싱합니다. 캐싱한 조례는 조문까지 근거로 반영됩니다.</div>' +
+            '<div class="setup-sec-h" style="margin-top:20px">② 조례 검색 결과</div>' +
+            '<div class="law-db-foot" style="margin:0 0 8px">검색된 조례 중 필요한 것을 선별하여 캐싱합니다.</div>' +
             '<div id="setup-region-results" class="law-search-results"></div>' +
             '</div>';
         ov.addEventListener('click', function (e) { if (e.target === ov) ov.remove(); });
@@ -237,7 +245,7 @@
                 .then(function (d) {
                     var rs = (d && d.results) || [];
                     if (!rs.length) { rbox.innerHTML = '<div class="usun-law-hint">이 지역 조례를 찾지 못했습니다 (지역명 확인)</div>'; return; }
-                    rbox.innerHTML = '<div class="usun-law-hint">' + _esc(region) + ' 조례 ' + rs.length + '건 — 필요한 것만 캐싱하세요:</div>'
+                    rbox.innerHTML = '<div class="usun-law-hint">' + _esc(region) + ' 조례 ' + rs.length + '건 — 필요한 것만 캐싱하세요: 질의 과정에서도 AI가 조례를 추천해줍니다.</div>'
                         + rs.map(function (it) {
                             return '<div class="usun-law-item" data-name="' + _esc(it.name) + '">'
                                 + '<span class="usun-law-kind usun-law-kind-ord">조례</span>'
@@ -282,8 +290,9 @@
         var nat = nativeStarterButtons();
         var meta = _startersMeta || {};
         var starters = nat.map(function (b) {
-            var lbl = starterLabel(b);
-            return { label: lbl, msg: (meta[lbl] && meta[lbl].message) || lbl };
+            var lbl = starterLabel(b);          // 원본(메타 조회 키) / plain은 칩 표시용
+            var plain = plainStarterLabel(lbl);
+            return { label: lbl, plain: plain, msg: (meta[lbl] && meta[lbl].message) || plain };
         }).slice(0, 3);
         var sig = 'hero|' + starters.map(function (s) { return s.label; }).join('|');
         var ov = document.getElementById('usun-welcome-cards');
@@ -350,7 +359,7 @@
                 ex.appendChild(exh);
                 var pills = _el('div', 'usun-ex-pills');
                 starters.forEach(function (s) {
-                    var p = _el('button', 'usun-ex-pill', s.label); p.type = 'button';
+                    var p = _el('button', 'usun-ex-pill', s.plain); p.type = 'button';
                     p.addEventListener('click', function () { ta.value = s.msg; _autoGrow.call(ta); ta.focus(); });
                     pills.appendChild(p);
                 });
