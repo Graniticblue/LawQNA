@@ -1069,18 +1069,19 @@ body.usun-welcome-mode #root { padding-right: 0 !important; }
 #setup-region-results { max-height: 34vh; overflow-y: auto; }
 /* 선택 조례 트레이(미니 모니터링) — 체크하면 여기로 슝 올라온다 */
 .ord-selected {
-    display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; padding: 8px;
-    background: #f3f7fd; border: 1px solid #dbe7f7; border-radius: 8px; max-height: 22vh; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; padding: 8px;
+    background: #f3f7fd; border: 1px solid #dbe7f7; border-radius: 8px;
+    max-height: 152px; overflow-y: auto;   /* 한 번에 ~4개 보이고 나머지는 스크롤 */
 }
 .ord-sel-chip {
-    display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
-    font-size: 12px; color: #0D47A1; background: #fff; border: 1px solid #cfe0f7;
-    border-radius: 999px; padding: 4px 6px 4px 10px;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%;
+    font-size: 12.5px; color: #0D47A1; background: #fff; border: 1px solid #cfe0f7;
+    border-radius: 8px; padding: 6px 8px 6px 12px;
     opacity: 0; transform: translateY(8px); transition: opacity .18s ease, transform .18s ease;
 }
 .ord-sel-chip.in { opacity: 1; transform: none; }   /* 슝 등장 */
-.ord-sel-nm { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ord-sel-x { border: none; background: none; color: #6b8cb5; font-size: 11px; cursor: pointer; padding: 0 2px; line-height: 1; }
+.ord-sel-nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ord-sel-x { flex: 0 0 auto; border: none; background: none; color: #6b8cb5; font-size: 13px; cursor: pointer; padding: 0 2px; line-height: 1; }
 .ord-sel-x:hover { color: #C62828; }
 /* 조례 목록 등장 애니메이션(우와아악) */
 @keyframes usunReveal { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }

@@ -256,9 +256,9 @@
             '<div id="region-suggest" class="region-suggest" style="display:none"></div>' +
             '</div>' +
             '<div class="setup-sec-h" style="margin-top:20px">② 조례 저장 <span style="font-weight:400;color:#94a3b8">(체크 후 저장)</span></div>' +
-            '<div class="law-db-foot" style="margin:0 0 8px">필요한 조례를 체크하면 위로 모입니다. 다 고른 뒤 저장하세요.</div>' +
-            '<div id="ord-selected" class="ord-selected" style="display:none"></div>' +
+            '<div class="law-db-foot" style="margin:0 0 8px">체크한 조례가 아래 트레이에 모입니다. 다 고른 뒤 저장하세요.</div>' +
             '<input type="text" id="ord-filter" class="ord-filter" placeholder="조례 키워드 필터 (예: 주차·경관·주택…)" autocomplete="off" style="display:none" />' +
+            '<div id="ord-selected" class="ord-selected" style="display:none"></div>' +
             '<div id="setup-region-results" class="law-search-results"></div>' +
             '<div id="region-save-bar" class="region-save-bar" style="display:none">' +
             '<span id="region-check-count" class="region-check-count">0건 선택</span>' +
