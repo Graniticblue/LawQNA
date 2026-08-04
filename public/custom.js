@@ -171,6 +171,11 @@
 
     // 검색 범위 카드 갱신 — ①법령카드(법령 캐싱/수) ②지역카드(조례 저장/지정 지역)
     function refreshWelcomeScope() {
+        // 캐싱 중이면 해당 카드 회색화(진행 표시)
+        var lawCard = document.querySelector('.usun-scope-law');
+        var regCard = document.querySelector('.usun-scope-region');
+        if (lawCard) lawCard.classList.toggle('caching', _pendingCache > 0);
+        if (regCard) regCard.classList.toggle('caching', _pendingRegion > 0);
         var regEl = document.getElementById('usun-scope-region-body');
         if (regEl) {
             if (_pendingRegion > 0) {
@@ -243,7 +248,7 @@
             '<div id="setup-region-results" class="law-search-results"></div>' +
             '<div id="region-save-bar" class="region-save-bar" style="display:none">' +
             '<span id="region-check-count" class="region-check-count">0건 선택</span>' +
-            '<button type="button" id="setup-region-save" disabled>법규/조례 저장</button>' +
+            '<button type="button" id="setup-region-save" disabled>지역/조례 저장</button>' +
             '</div>' +
             '</div>';
         // 배경 클릭 닫기 — mousedown·click 둘 다 배경(ov)일 때만. (자동완성 클릭 후 리플로우로
@@ -295,20 +300,22 @@
         });
         rin.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); selectRegion(rin.value); } });
 
-        function paintStatus() {
-            var r = getRegion();
-            if (r) {
-                rstat.innerHTML = '<span class="region-cur">현재 지역: <b>' + _esc(r) + '</b></span>'
-                    + '<button type="button" id="region-clear" class="region-clear">해제</button>';
-                rstat.querySelector('#region-clear').addEventListener('click', function () {
-                    setRegion(''); refreshWelcomeScope(); paintStatus();
-                    _ords = []; rbox.innerHTML = ''; rfilter.style.display = 'none'; rsavebar.style.display = 'none';
-                    rbox.innerHTML = '<div class="usun-law-hint">먼저 위에서 지역을 선택하세요.</div>';
-                    _toast('지역 지정을 해제했습니다.');
-                });
-            } else {
+        function paintStatus() {   // 복수 지역 칩(각 × 로 제거)
+            var list = getRegionList();
+            if (!list.length) {
                 rstat.innerHTML = '<span class="region-cur muted">현재: 전국 공통 범위 (미지정)</span>';
+                return;
             }
+            rstat.innerHTML = list.map(function (r) {
+                return '<span class="region-chip">' + _esc(r)
+                    + '<button type="button" class="region-chip-x" data-r="' + _esc(r) + '" aria-label="제거">✕</button></span>';
+            }).join('');
+            Array.prototype.slice.call(rstat.querySelectorAll('.region-chip-x')).forEach(function (b) {
+                b.addEventListener('click', function () {
+                    removeRegion(b.getAttribute('data-r'));
+                    refreshWelcomeScope(); paintStatus(); loadOrdinances();
+                });
+            });
         }
 
         function updateCount() {
@@ -320,9 +327,9 @@
         function renderOrds(animate) {
             var q = (rfilter.value || '').trim();
             var list = q ? _ords.filter(function (o) { return o.name.indexOf(q) !== -1; }) : _ords;
-            var region = getRegion() || '';
             var cachedN = _ords.filter(function (o) { return o.cached; }).length;
-            var head = _esc(region) + ' 조례 ' + _ords.length + '건'
+            var nreg = getRegionList().length;
+            var head = '조례 ' + _ords.length + '건' + (nreg > 1 ? (' (' + nreg + '개 지역)') : '')
                 + (cachedN ? (' · <b>저장됨 ' + cachedN + '건</b>') : '')
                 + (q ? (' · 필터 ' + list.length + '건') : '');
             if (!list.length) {
@@ -345,60 +352,68 @@
             if (animate) { rbox.classList.remove('usun-reveal'); void rbox.offsetWidth; rbox.classList.add('usun-reveal'); }   // 우와아악 등장
             updateCount();
         }
-        // 지역의 조례 전부(n=100) + 등록현황 로드 → _ords에 담고 렌더
-        function loadOrdinances(region) {
+        // 선택된 모든 지역의 조례를 합쳐 로드(+등록현황) → _ords
+        function loadOrdinances() {
+            var regions = getRegionList();
+            if (!regions.length) {
+                _ords = []; rfilter.style.display = 'none'; rsavebar.style.display = 'none';
+                rbox.innerHTML = '<div class="usun-law-hint">위에서 지역을 선택하면 조례가 표시됩니다.</div>';
+                return;
+            }
             rfilter.style.display = 'none'; rsavebar.style.display = 'none';
-            rbox.innerHTML = '<div class="usun-law-hint">' + _esc(region) + ' 조례 불러오는 중…</div>';
-            Promise.all([
-                fetch('/law-search?q=' + encodeURIComponent(region) + '&kind=ord&n=100', { credentials: 'same-origin' }).then(function (r) { return r.json(); }),
-                fetch('/monitor', { credentials: 'same-origin' }).then(function (r) { return r.json(); }).catch(function () { return {}; })
-            ]).then(function (arr) {
-                var d = arr[0] || {}, mon = arr[1] || {};
-                var rs = (d.results) || [];
+            rbox.innerHTML = '<div class="usun-law-hint">조례 불러오는 중…</div>';
+            var reqs = regions.map(function (rg) {
+                return fetch('/law-search?q=' + encodeURIComponent(rg) + '&kind=ord&n=100', { credentials: 'same-origin' })
+                    .then(function (r) { return r.json(); }).catch(function () { return {}; });
+            });
+            reqs.push(fetch('/monitor', { credentials: 'same-origin' }).then(function (r) { return r.json(); }).catch(function () { return {}; }));
+            Promise.all(reqs).then(function (arr) {
+                var mon = arr[arr.length - 1] || {};
                 var added = {};
                 ['law', 'interp', 'case'].forEach(function (k) {
                     (mon[k] || []).forEach(function (x) { if (x && x.src === 'add') added[(x.label || '').replace(/\s+/g, '')] = 1; });
                 });
-                _ords = rs.map(function (it) { return { name: it.name, cached: !!added[(it.name || '').replace(/\s+/g, '')] }; });
-                if (!_ords.length) { rbox.innerHTML = '<div class="usun-law-hint">이 지역 조례를 찾지 못했습니다 (지역명 확인)</div>'; return; }
+                var seen = {}, merged = [];
+                for (var i = 0; i < arr.length - 1; i++) {
+                    var rs = (arr[i] && arr[i].results) || [];
+                    rs.forEach(function (it) {
+                        var key = (it.name || '').replace(/\s+/g, '');
+                        if (!seen[key]) { seen[key] = 1; merged.push({ name: it.name, cached: !!added[key] }); }
+                    });
+                }
+                _ords = merged;
+                if (!_ords.length) { rbox.innerHTML = '<div class="usun-law-hint">선택한 지역의 조례를 찾지 못했습니다</div>'; return; }
                 rfilter.style.display = ''; rfilter.value = ''; rsavebar.style.display = 'flex';
                 renderOrds(true);
             }).catch(function () { rbox.innerHTML = '<div class="usun-law-hint">검색 실패</div>'; });
         }
-        // 지역 선택 확정 — 답변 컨텍스트 지정 + 조례 로드
+        // 지역 추가 — 답변 컨텍스트에 누적 + 조례(전체) 재로드
         function selectRegion(v) {
             v = (v || '').trim();
             if (!v) { rin.focus(); return; }
-            setRegion(v); refreshWelcomeScope(); paintStatus();
+            if (getRegionList().indexOf(v) === -1) addRegion(v);
+            refreshWelcomeScope(); paintStatus();
             rin.value = '';
-            _toast("지역 '" + v + "' 선택 — 답변에 반영됩니다.");
-            loadOrdinances(v);
+            _toast("'" + v + "' 추가 — 답변에 반영됩니다.");
+            loadOrdinances();
         }
 
         rfilter.addEventListener('input', function () { renderOrds(false); });   // 조례 키워드 필터
         rbox.addEventListener('change', function (e) {
             if (e.target && e.target.classList && e.target.classList.contains('ord-ck')) updateCount();
         });
-        // 저장 — 체크된(미저장) 조례를 일괄 캐싱(진행상황은 ②지역카드에 '조례 저장 중')
+        // 저장 — 체크된(미저장) 조례를 일괄 캐싱(백그라운드) → 즉시 창 닫힘 → ②지역카드에서 진행 확인
         rsave.addEventListener('click', function () {
             var cks = Array.prototype.slice.call(ov.querySelectorAll('.ord-ck:checked:not(:disabled)'));
             if (!cks.length) return;
             var names = cks.map(function (c) { return c.getAttribute('data-name'); });
-            rsave.disabled = true; rsave.textContent = '저장 중…';
-            Promise.all(names.map(function (nm) {
-                return cacheLaw('조례', nm).then(function (res) {
-                    if (res && !res.error) { var o = _ords.filter(function (x) { return x.name === nm; })[0]; if (o) o.cached = true; }
-                });
-            })).then(function () {
-                rsave.textContent = '법규/조례 저장';
-                _toast(names.length + '건 저장했습니다.');
-                renderOrds(false);   // 저장됨 표시 갱신
-            });
+            names.forEach(function (nm) { cacheLaw('조례', nm); });   // 백그라운드 저장(카드가 진행 표시)
+            _toast(names.length + '건 저장 중 — 카드에서 확인하세요.');
+            ov.remove();   // 법령처럼 바로 닫고 대시보드 카드로
         });
 
         paintStatus();
-        if (getRegion()) loadOrdinances(getRegion());
-        else rbox.innerHTML = '<div class="usun-law-hint">먼저 위에서 지역을 선택하세요.</div>';
+        loadOrdinances();   // 저장된 지역 있으면 조례 로드, 없으면 안내
         document.body.appendChild(ov);
         ov.style.display = 'flex';
         setTimeout(function () { rin.focus(); }, 30);
@@ -1068,6 +1083,17 @@
         try { localStorage.setItem(REGION_KEY, r); } catch (e) { }
         pushRegion(r);
     }
+    // 복수 지역 — region_pref에 쉼표로 합쳐 저장(백엔드는 그 문자열을 그대로 [적용 지역]에 주입)
+    function getRegionList() {
+        return getRegion().split(/\s*,\s*/).map(function (s) { return s.trim(); }).filter(Boolean);
+    }
+    function setRegionList(arr) {
+        var seen = {}, out = [];
+        (arr || []).forEach(function (r) { r = (r || '').trim(); if (r && !seen[r]) { seen[r] = 1; out.push(r); } });
+        setRegion(out.join(', '));
+    }
+    function addRegion(r) { var l = getRegionList(); l.push(r); setRegionList(l); }
+    function removeRegion(r) { setRegionList(getRegionList().filter(function (x) { return x !== r; })); }
     var regionSynced = false;
     function syncRegionOnce() {
         if (regionSynced) return;

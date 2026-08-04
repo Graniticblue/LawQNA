@@ -1012,7 +1012,16 @@ body.usun-welcome-mode #root { padding-right: 0 !important; }
 .usun-scope-card:hover { border-color: #1565C0; box-shadow: 0 4px 16px rgba(21, 101, 192, .10); }
 
 /* 지역 설정 모달 — 현재 지정 지역 상태 칩(+해제) */
-.region-status { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; min-height: 22px; }
+.region-status { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; min-height: 22px; }
+/* 복수 지역 칩 */
+.region-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 600; color: #0D47A1; background: #EAF2FD; border: 1px solid #cfe0f7; border-radius: 999px; padding: 3px 6px 3px 11px; }
+.region-chip-x { border: none; background: none; color: #6b8cb5; font-size: 11px; cursor: pointer; padding: 0 2px; line-height: 1; }
+.region-chip-x:hover { color: #0D47A1; }
+/* 캐싱 중 카드 회색화(진행 표시) */
+@keyframes usunCachePulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+.usun-scope-card.caching { background: #eef1f5 !important; border-color: #dbe1e8 !important; animation: usunCachePulse 1.2s ease-in-out infinite; }
+.usun-scope-card.caching .usun-scope-num { background: #94a3b8 !important; }
+.usun-scope-card.caching .usun-scope-cardt { color: #64748b !important; }
 .region-cur { font-size: 13px; color: #334155; }
 .region-cur.muted { color: #64748b; }
 .region-clear {
