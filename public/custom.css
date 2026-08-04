@@ -1030,6 +1030,31 @@ body.usun-welcome-mode #root { padding-right: 0 !important; }
 .region-suggest-item { padding: 8px 12px; font-size: 13.5px; color: #334155; cursor: pointer; }
 .region-suggest-item:hover { background: #eef4fc; color: #0D47A1; }
 
+/* 조례 키워드 필터 */
+.ord-filter {
+    box-sizing: border-box; width: 100%; font: inherit; font-size: 13.5px;
+    padding: 8px 12px; border: 1px solid #d5dbe3; border-radius: 8px; margin-bottom: 8px; outline: none;
+}
+.ord-filter:focus { border-color: #1565C0; }
+/* 조례 체크 행 */
+.ord-row { cursor: pointer; }
+.ord-row .ord-ck { flex: 0 0 auto; width: 16px; height: 16px; margin: 0; accent-color: #1565C0; cursor: pointer; }
+/* 저장 바 */
+.region-save-bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    margin-top: 12px; padding-top: 12px; border-top: 1px solid #eef2f7;
+}
+.region-check-count { font-size: 12.5px; color: #64748b; }
+.region-save-bar button {
+    background: #1565C0; color: #fff; border: none; border-radius: 8px;
+    padding: 9px 18px; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.region-save-bar button:disabled { opacity: .5; cursor: default; }
+.region-save-bar button:hover:not(:disabled) { background: #0D47A1; }
+/* 조례 목록 등장 애니메이션(우와아악) */
+@keyframes usunReveal { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+.usun-reveal { animation: usunReveal .28s ease; }
+
 /* 좁은 화면 — 검색범위·예시는 세로로 */
 @media (max-width: 720px) {
     .usun-scope-grid { grid-template-columns: 1fr; }
