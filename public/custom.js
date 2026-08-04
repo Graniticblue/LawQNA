@@ -261,8 +261,10 @@
             '<div id="ord-selected" class="ord-selected" style="display:none"></div>' +
             '<div id="setup-region-results" class="law-search-results"></div>' +
             '<div id="region-save-bar" class="region-save-bar" style="display:none">' +
-            '<span id="region-check-count" class="region-check-count">0건 선택</span>' +
-            '<button type="button" id="setup-region-save" disabled>지역/조례 저장</button>' +
+            '<span id="region-check-count" class="region-check-count">저장할 조례를 체크하세요</span>' +
+            '<span class="rsb-spacer"></span>' +
+            '<button type="button" id="setup-region-close" class="btn-ghost">닫기</button>' +
+            '<button type="button" id="setup-region-save" disabled>저장</button>' +
             '</div>' +
             '</div>';
         // 배경 클릭 닫기 — mousedown·click 둘 다 배경(ov)일 때만. (자동완성 클릭 후 리플로우로
@@ -281,20 +283,34 @@
         var rfilter = ov.querySelector('#ord-filter');
         var rsavebar = ov.querySelector('#region-save-bar');
         var rsave = ov.querySelector('#setup-region-save');
+        var rclose = ov.querySelector('#setup-region-close');
         var rcount = ov.querySelector('#region-check-count');
         var rtray = ov.querySelector('#ord-selected');
-        var _ords = [];   // [{name, cached}]
-        var _sel = {};     // 체크(선택)된 조례명 — 필터 재렌더에도 유지, 트레이로 표시
+        var _ords = [];    // [{name, cached}]
+        var _sel = {};     // 새로 체크(저장 대기)한 조례명 — 필터 재렌더에도 유지
+        var _saved = {};   // 이미 저장(캐싱)된 조례명 — 트레이에 '저장됨'으로 표시
 
         function findChip(name) {
             return Array.prototype.slice.call(rtray.children).filter(function (c) { return c.getAttribute('data-name') === name; })[0];
         }
-        function addSelChip(name) {   // 체크 → 트레이로 슝
-            if (findChip(name)) return;
-            var chip = _el('span', 'ord-sel-chip'); chip.setAttribute('data-name', name);
-            chip.innerHTML = '<span class="ord-sel-nm">' + _esc(name) + '</span><button type="button" class="ord-sel-x" aria-label="제거">✕</button>';
-            rtray.appendChild(chip); rtray.style.display = 'flex';
-            requestAnimationFrame(function () { chip.classList.add('in'); });
+        function setChipState(chip, saved) {   // 칩 상태(저장됨/저장 예정) 표시
+            chip.setAttribute('data-saved', saved ? '1' : '0');
+            chip.classList.toggle('saved', !!saved);
+            var tag = chip.querySelector('.ord-sel-tag');
+            if (tag) tag.textContent = saved ? '저장됨' : '저장 예정';
+        }
+        function trayChip(name, saved) {   // 체크/저장분 → 트레이로 슝(중복이면 상태만 갱신)
+            var chip = findChip(name);
+            if (!chip) {
+                chip = _el('span', 'ord-sel-chip'); chip.setAttribute('data-name', name);
+                chip.innerHTML = '<span class="ord-sel-nm">' + _esc(name) + '</span>'
+                    + '<span class="ord-sel-tag"></span>'
+                    + '<button type="button" class="ord-sel-x" aria-label="제거">✕</button>';
+                rtray.appendChild(chip); rtray.style.display = 'flex';
+                requestAnimationFrame(function () { chip.classList.add('in'); });
+            }
+            setChipState(chip, saved);
+            return chip;
         }
         function removeSelChip(name) {
             var chip = findChip(name); if (chip) chip.remove();
@@ -304,12 +320,24 @@
             var ck = Array.prototype.slice.call(ov.querySelectorAll('.ord-ck')).filter(function (c) { return c.getAttribute('data-name') === name; })[0];
             if (ck) ck.checked = false;
         }
-        rtray.addEventListener('click', function (e) {   // 트레이 X → 취소
+        rtray.addEventListener('click', function (e) {   // 트레이 X → 저장 예정은 체크 해제 / 저장분은 저장해제
             var x = e.target.closest && e.target.closest('.ord-sel-x'); if (!x) return;
             var chip = x.closest('.ord-sel-chip'); var name = chip.getAttribute('data-name');
-            delete _sel[name]; chip.remove();
+            var wasSaved = chip.getAttribute('data-saved') === '1';
+            if (wasSaved) {
+                delete _saved[name];
+                _ords.forEach(function (o) { if (o.name === name) o.cached = false; });   // 목록에서 다시 체크 가능하게
+                fetch('/monitor-remove', {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name })
+                }).catch(function () { }).then(function () { refreshMonitor(); refreshWelcomeScope(); });
+                _toast("'" + name + "' 저장을 해제했습니다.");
+            } else {
+                delete _sel[name];
+            }
+            chip.remove();
             if (!rtray.children.length) rtray.style.display = 'none';
-            uncheckInList(name); updateCount();
+            uncheckInList(name); updateCount(); renderOrds(false);
         });
 
         // 지역 자동완성 — 입력 즉시 커스텀 드롭다운(datalist '재클릭' 버그 회피). 선택 즉시 조례 로드.
@@ -362,7 +390,7 @@
 
         function updateCount() {
             var n = Object.keys(_sel).length;
-            rcount.textContent = n + '건 선택';
+            rcount.textContent = n ? (n + '건 저장 대기') : '저장할 조례를 체크하세요';
             rsave.disabled = (n === 0);
         }
         // 조례 목록 렌더 — 키워드 필터 적용, 각 항목 체크박스(이미 저장분은 disabled '저장됨')
@@ -403,7 +431,7 @@
                 return;
             }
             rfilter.style.display = 'none'; rsavebar.style.display = 'none';
-            rbox.innerHTML = '<div class="usun-law-hint">조례 불러오는 중…</div>';
+            rbox.innerHTML = '<div class="usun-loading"><span class="usun-spin"></span>' + _esc(regions.join(', ')) + ' 조례 검색 중…</div>';
             var reqs = regions.map(function (rg) {
                 return fetch('/law-search?q=' + encodeURIComponent(rg) + '&kind=ord&n=100', { credentials: 'same-origin' })
                     .then(function (r) { return r.json(); }).catch(function () { return {}; });
@@ -425,6 +453,11 @@
                 }
                 _ords = merged;
                 if (!_ords.length) { rbox.innerHTML = '<div class="usun-law-hint">선택한 지역의 조례를 찾지 못했습니다</div>'; return; }
+                // 트레이 재구성 — 이미 저장된 조례는 '저장됨'으로, 저장 대기(_sel)는 유지해 다시 슝
+                _saved = {}; rtray.innerHTML = '';
+                merged.forEach(function (o) { if (o.cached) { _saved[o.name] = 1; trayChip(o.name, true); } });
+                Object.keys(_sel).forEach(function (nm) { trayChip(nm, false); });
+                rtray.style.display = rtray.children.length ? 'flex' : 'none';
                 rfilter.style.display = ''; rfilter.value = ''; rsavebar.style.display = 'flex';
                 renderOrds(true);
             }).catch(function () { rbox.innerHTML = '<div class="usun-law-hint">검색 실패</div>'; });
@@ -445,18 +478,32 @@
             var t = e.target;
             if (!t || !t.classList || !t.classList.contains('ord-ck')) return;
             var name = t.getAttribute('data-name');
-            if (t.checked) { _sel[name] = 1; addSelChip(name); }
+            if (t.checked) { _sel[name] = 1; trayChip(name, false); }
             else { delete _sel[name]; removeSelChip(name); }
             updateCount();
         });
-        // 저장 — 선택(_sel)한 조례를 일괄 캐싱(백그라운드) → 즉시 창 닫힘 → ②지역카드에서 진행 확인
+        // 저장 — 저장 대기(_sel) 조례를 캐싱. 창은 닫지 않고 트레이를 '저장됨'으로 갱신(삭제도 가능)
         rsave.addEventListener('click', function () {
             var names = Object.keys(_sel);
             if (!names.length) return;
-            names.forEach(function (nm) { cacheLaw('조례', nm); });   // 백그라운드 저장(카드가 진행 표시)
-            _toast(names.length + '건 저장 중 — 카드에서 확인하세요.');
-            ov.remove();   // 법령처럼 바로 닫고 대시보드 카드로
+            rsave.disabled = true;
+            names.forEach(function (nm) {
+                var chip = findChip(nm);
+                if (chip) { var tg = chip.querySelector('.ord-sel-tag'); if (tg) tg.textContent = '저장 중…'; }
+                cacheLaw('조례', nm).then(function (res2) {
+                    if (res2 && !res2.error) {
+                        _saved[nm] = 1; delete _sel[nm];
+                        _ords.forEach(function (o) { if (o.name === nm) o.cached = true; });
+                        var c = findChip(nm); if (c) setChipState(c, true);
+                    } else {
+                        var c2 = findChip(nm); if (c2) { var t2 = c2.querySelector('.ord-sel-tag'); if (t2) t2.textContent = '실패'; }
+                    }
+                    updateCount(); renderOrds(false);
+                });
+            });
+            _toast(names.length + '건 저장 중…');
         });
+        rclose.addEventListener('click', function () { ov.remove(); });   // 닫기(저장과 분리)
 
         paintStatus();
         loadOrdinances();   // 저장된 지역 있으면 조례 로드, 없으면 안내
@@ -1301,79 +1348,163 @@
     }
 
     // 모니터링 수동추가 — 모달 결과창에 법령/조례 검색 결과 렌더 (추가는 클릭 위임)
-    function doLawSearch(q) {
-        var box = document.getElementById('law-search-results');
-        if (!box) return;
-        q = (q || '').trim();
-        if (q.length < 2) { box.innerHTML = '<div class="usun-law-hint">2글자 이상 입력하세요</div>'; return; }
-        box.innerHTML = '<div class="usun-law-hint">검색 중…</div>';
-        fetch('/law-search?q=' + encodeURIComponent(q) + '&kind=law', { credentials: 'same-origin' })
-            .then(function (r) { return r.json(); })
-            .then(function (d) {
-                var rs = (d && d.results) || [];
-                if (!rs.length) { box.innerHTML = '<div class="usun-law-hint">결과 없음</div>'; return; }
-                box.innerHTML = rs.map(function (it) {
-                    var k = (it.kind === '조례') ? 'ord' : 'law';
-                    // 이미 내장(색인)된 법령은 추가 불필요 — 버튼 대신 '이미 포함됨' 표시
-                    var tail = it.in_db
-                        ? '<span class="usun-law-indb">이미 포함됨</span>'
-                        : '<button type="button" class="usun-law-add">추가</button>';
-                    return '<div class="usun-law-item' + (it.in_db ? ' added' : '') + '" data-kind="' + _esc(it.kind) + '" data-name="' + _esc(it.name) + '">'
-                        + '<span class="usun-law-kind usun-law-kind-' + k + '">' + _esc(it.kind) + '</span>'
-                        + '<span class="usun-law-nm">' + _esc(it.name) + '</span>'
-                        + tail + '</div>';
-                }).join('');
-            })
-            .catch(function () { box.innerHTML = '<div class="usun-law-hint">검색 실패</div>'; });
-    }
-
-    // 법령·조례 검색·추가 모달 (우측 바 버튼 → 새 창). 내장 법령 목록 모달과 같은 껍데기 사용.
+    // 법령 추가 모달 — 지역 조례 모달과 같은 방식(검색 → 체크 → 트레이 → 저장/닫기).
+    //  저장분은 다시 열었을 때 트레이에 '저장됨'으로 복원 → 필요없는 것은 × 로 삭제 가능.
     function showLawSearchModal() {
         var ov = document.getElementById('law-search-modal');
-        if (ov) {
-            ov.style.display = 'flex';
-            var q0 = ov.querySelector('#law-search-q');
-            if (q0) setTimeout(function () { q0.focus(); }, 30);
-            return;
-        }
+        if (ov) ov.remove();
         ov = document.createElement('div');
         ov.id = 'law-search-modal';
         ov.innerHTML =
-            '<div class="law-list-box">' +
+            '<div class="law-list-box" style="max-width:560px">' +
             '<button class="law-list-close" aria-label="닫기">✕</button>' +
             '<h2 style="font-size:18px;margin:0 0 4px">법령 추가</h2>' +
-            '<div class="law-db-foot" style="margin:0 0 14px">법제처 API에서 법령을 검색해 캐싱·적재합니다. 이미 내장된 법령은 <b>이미 포함됨</b>으로 표시됩니다. (조례는 “우리 지역 조례”에서 지역별로 등록)</div>' +
-            '<div class="law-search-bar">' +
-            '<input type="text" id="law-search-q" placeholder="법령명을 입력하세요 (2글자 이상)" />' +
+            '<div class="law-db-foot" style="margin:0 0 12px">법제처 API에서 법령을 검색해 체크한 뒤 저장하면 캐싱·적재됩니다. 이미 내장된 법령은 <b>이미 포함됨</b>. (조례는 “우리 지역 조례”에서 지역별로 등록)</div>' +
+            '<div class="law-search-bar" style="margin-bottom:8px">' +
+            '<input type="text" id="law-search-q" placeholder="법령명을 입력하세요 (2글자 이상)" autocomplete="off" />' +
             '<button type="button" id="law-search-go">🔎 검색</button>' +
             '</div>' +
-            '<div id="law-search-results" class="law-search-results"></div>' +
+            '<div id="law-selected" class="ord-selected" style="display:none"></div>' +
+            '<div id="law-search-results" class="law-search-results"><div class="usun-law-hint">법령명을 검색하세요.</div></div>' +
+            '<div id="law-save-bar" class="region-save-bar">' +
+            '<span id="law-check-count" class="region-check-count">저장할 법령을 체크하세요</span>' +
+            '<span class="rsb-spacer"></span>' +
+            '<button type="button" id="law-add-close" class="btn-ghost">닫기</button>' +
+            '<button type="button" id="law-add-save" disabled>저장</button>' +
+            '</div>' +
             '</div>';
-        ov.addEventListener('click', function (e) { if (e.target === ov) ov.style.display = 'none'; });
-        ov.querySelector('.law-list-close').onclick = function () { ov.style.display = 'none'; };
+        var _downOnOv = false;
+        ov.addEventListener('mousedown', function (e) { _downOnOv = (e.target === ov); });
+        ov.addEventListener('click', function (e) { if (e.target === ov && _downOnOv) ov.remove(); });
+        ov.querySelector('.law-list-close').onclick = function () { ov.remove(); };
         document.addEventListener('keydown', function (e) {
-            if (e.key === 'Escape') { var m = document.getElementById('law-search-modal'); if (m) m.style.display = 'none'; }
+            if (e.key === 'Escape') { var m = document.getElementById('law-search-modal'); if (m) m.remove(); }
         });
         var qin = ov.querySelector('#law-search-q');
         var qgo = ov.querySelector('#law-search-go');
         var res = ov.querySelector('#law-search-results');
+        var ltray = ov.querySelector('#law-selected');
+        var lsave = ov.querySelector('#law-add-save');
+        var lclose = ov.querySelector('#law-add-close');
+        var lcount = ov.querySelector('#law-check-count');
+        var _lsel = {};     // 저장 대기(체크) 법령명
+        var _lsaved = {};   // 이미 저장된 법령명
+        function isOrdName(n) { return (n || '').indexOf('조례') >= 0; }   // 조례는 이 모달 대상 아님
+
+        function findLchip(name) {
+            return Array.prototype.slice.call(ltray.children).filter(function (c) { return c.getAttribute('data-name') === name; })[0];
+        }
+        function setLState(chip, saved) {
+            chip.setAttribute('data-saved', saved ? '1' : '0');
+            chip.classList.toggle('saved', !!saved);
+            var tag = chip.querySelector('.ord-sel-tag');
+            if (tag) tag.textContent = saved ? '저장됨' : '저장 예정';
+        }
+        function lTrayChip(name, saved) {
+            var chip = findLchip(name);
+            if (!chip) {
+                chip = _el('span', 'ord-sel-chip'); chip.setAttribute('data-name', name);
+                chip.innerHTML = '<span class="ord-sel-nm">' + _esc(name) + '</span>'
+                    + '<span class="ord-sel-tag"></span>'
+                    + '<button type="button" class="ord-sel-x" aria-label="제거">✕</button>';
+                ltray.appendChild(chip); ltray.style.display = 'flex';
+                requestAnimationFrame(function () { chip.classList.add('in'); });
+            }
+            setLState(chip, saved);
+            return chip;
+        }
+        function uncheckLInList(name) {
+            var ck = Array.prototype.slice.call(ov.querySelectorAll('.law-ck')).filter(function (c) { return c.getAttribute('data-name') === name; })[0];
+            if (ck) ck.checked = false;
+        }
+        function updateLCount() {
+            var n = Object.keys(_lsel).length;
+            lcount.textContent = n ? (n + '건 저장 대기') : '저장할 법령을 체크하세요';
+            lsave.disabled = (n === 0);
+        }
+        ltray.addEventListener('click', function (e) {
+            var x = e.target.closest && e.target.closest('.ord-sel-x'); if (!x) return;
+            var chip = x.closest('.ord-sel-chip'); var name = chip.getAttribute('data-name');
+            var wasSaved = chip.getAttribute('data-saved') === '1';
+            if (wasSaved) {
+                delete _lsaved[name];
+                fetch('/monitor-remove', {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name })
+                }).catch(function () { }).then(function () { refreshMonitor(); refreshWelcomeScope(); });
+                _toast("'" + name + "' 저장을 해제했습니다.");
+            } else { delete _lsel[name]; }
+            chip.remove();
+            if (!ltray.children.length) ltray.style.display = 'none';
+            uncheckLInList(name); updateLCount();
+        });
+
+        function doLawSearch(q) {
+            q = (q || '').trim();
+            if (q.length < 2) { res.innerHTML = '<div class="usun-law-hint">2글자 이상 입력하세요</div>'; return; }
+            res.innerHTML = '<div class="usun-loading"><span class="usun-spin"></span>' + _esc(q) + ' 검색 중…</div>';
+            fetch('/law-search?q=' + encodeURIComponent(q) + '&kind=law', { credentials: 'same-origin' })
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                    var rs = ((d && d.results) || []).filter(function (it) { return !isOrdName(it.name); });
+                    if (!rs.length) { res.innerHTML = '<div class="usun-law-hint">결과 없음</div>'; return; }
+                    res.innerHTML = rs.map(function (it) {
+                        // 내장분='이미 포함됨' / 이미 저장분='✓ 저장됨' / 그 외=체크박스
+                        var tail = it.in_db
+                            ? '<span class="usun-law-indb">이미 포함됨</span>'
+                            : (_lsaved[it.name]
+                                ? '<span class="usun-law-indb">✓ 저장됨</span>'
+                                : '<input type="checkbox" class="law-ck" data-name="' + _esc(it.name) + '"' + (_lsel[it.name] ? ' checked' : '') + '>');
+                        return '<label class="usun-law-item' + (it.in_db || _lsaved[it.name] ? ' added' : '') + '">'
+                            + '<span class="usun-law-kind usun-law-kind-law">법령</span>'
+                            + '<span class="usun-law-nm">' + _esc(it.name) + '</span>'
+                            + tail + '</label>';
+                    }).join('');
+                })
+                .catch(function () { res.innerHTML = '<div class="usun-law-hint">검색 실패</div>'; });
+        }
+
         qgo.addEventListener('click', function () { doLawSearch(qin.value); });
-        qin.addEventListener('keydown', function (e) {
-            if (e.key === 'Enter') { e.preventDefault(); doLawSearch(qin.value); }
+        qin.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); doLawSearch(qin.value); } });
+        qin.addEventListener('input', function () { if (!qin.value.trim()) res.innerHTML = '<div class="usun-law-hint">법령명을 검색하세요.</div>'; });
+        res.addEventListener('change', function (e) {   // 체크 → _lsel + 트레이 / 해제 → 제거
+            var t = e.target;
+            if (!t || !t.classList || !t.classList.contains('law-ck')) return;
+            var name = t.getAttribute('data-name');
+            if (t.checked) { _lsel[name] = 1; lTrayChip(name, false); }
+            else { delete _lsel[name]; var c = findLchip(name); if (c) c.remove(); if (!ltray.children.length) ltray.style.display = 'none'; }
+            updateLCount();
         });
-        // 백스페이스 등으로 입력을 비우면 결과도 지운다
-        qin.addEventListener('input', function () { if (!qin.value.trim()) res.innerHTML = ''; });
-        res.addEventListener('click', function (e) {
-            var b = e.target.closest && e.target.closest('.usun-law-add');
-            if (!b) return;
-            var item = b.closest('.usun-law-item');
-            if (!item) return;
-            b.disabled = true; b.textContent = '캐싱 중…';
-            cacheLaw(item.getAttribute('data-kind'), item.getAttribute('data-name')).then(function (res2) {
-                b.textContent = (res2 && !res2.error) ? '✓ 추가됨' : '✗';
-                if (res2 && !res2.error) item.classList.add('added'); else b.disabled = false;
+        lsave.addEventListener('click', function () {   // 저장 — 창은 닫지 않고 '저장됨'으로 갱신
+            var names = Object.keys(_lsel);
+            if (!names.length) return;
+            lsave.disabled = true;
+            names.forEach(function (nm) {
+                var chip = findLchip(nm);
+                if (chip) { var tg = chip.querySelector('.ord-sel-tag'); if (tg) tg.textContent = '저장 중…'; }
+                cacheLaw('법령', nm).then(function (res2) {
+                    if (res2 && !res2.error) {
+                        _lsaved[nm] = 1; delete _lsel[nm];
+                        var c = findLchip(nm); if (c) setLState(c, true);
+                        uncheckLInList(nm);
+                    } else {
+                        var c2 = findLchip(nm); if (c2) { var t2 = c2.querySelector('.ord-sel-tag'); if (t2) t2.textContent = '실패'; }
+                    }
+                    updateLCount();
+                });
             });
+            _toast(names.length + '건 저장 중…');
         });
+        lclose.addEventListener('click', function () { ov.remove(); });
+
+        // 이미 저장(추가)된 법령을 트레이에 '저장됨'으로 복원(조례 제외)
+        fetch('/monitor', { credentials: 'same-origin' }).then(function (r) { return r.json(); }).catch(function () { return {}; })
+            .then(function (mon) {
+                ((mon && mon.law) || []).forEach(function (x) {
+                    if (x && x.src === 'add' && x.label && !isOrdName(x.label)) { _lsaved[x.label] = 1; lTrayChip(x.label, true); }
+                });
+            });
+
         document.body.appendChild(ov);
         ov.style.display = 'flex';
         setTimeout(function () { qin.focus(); }, 30);

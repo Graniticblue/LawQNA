@@ -417,6 +417,33 @@ try:
                     _store[_typ] = {k: v for k, v in _store[_typ].items() if v.get("src") != "add"}
         return JSONResponse({"ok": True})
 
+    # 개별 저장해제 — 사용자가 추가(src=add)한 특정 법령/조례 1건 마커 제거
+    #  (트레이에서 필요없는 항목을 골라 지울 때. 공백·중점 무시 정규화로 매칭)
+    @_cl_server_app.post("/monitor-remove")
+    async def _monitor_remove(request: Request):
+        key = request.cookies.get("anon_id", "")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        name = ((body or {}).get("name", "") or "").strip()
+        if not (key and name):
+            return JSONResponse({"ok": False}, status_code=400)
+
+        def _norm(s):
+            return re.sub(r"[\s·ㆍ]+", "", s or "")
+
+        target = _norm(name)
+        _store = _MONITOR_REFS.get(key)
+        removed = 0
+        if _store:
+            for _typ in _store:
+                for _lab in [k for k, v in _store[_typ].items()
+                             if v.get("src") == "add" and _norm(v.get("label", "")) == target]:
+                    _store[_typ].pop(_lab, None)
+                    removed += 1
+        return JSONResponse({"ok": True, "removed": removed})
+
     # 근거 더 찾기 — 대화 맥락에서 LLM으로 키워드 도출 → 판례·해석례 API 검색 → 후보 제안
     @_cl_server_app.get("/evidence-search")
     async def _evidence_search_g():
@@ -685,8 +712,8 @@ try:
     _MY_PATHS = {"/element-files/{object_key:path}", "/law-list", "/upload-cache",
                  "/upload-cache/delete", "/upload-cache/add", "/upload-cache/recache",
                  "/provider", "/websearch", "/region", "/starters-meta", "/monitor",
-                 "/law-search", "/law-add", "/monitor-rescan", "/monitor-clear", "/evidence-search",
-                 "/evidence-context"}
+                 "/law-search", "/law-add", "/monitor-rescan", "/monitor-clear", "/monitor-remove",
+                 "/evidence-search", "/evidence-context"}
     _front = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") in _MY_PATHS]
     _rest  = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") not in _MY_PATHS]
     _cl_server_app.router.routes[:] = _front + _rest

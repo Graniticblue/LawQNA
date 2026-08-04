@@ -1037,12 +1037,19 @@ body.usun-welcome-mode #root { padding-right: 0 !important; }
 
 /* 지역 자동완성 드롭다운 */
 .region-suggest {
-    position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 20;
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 30;
     background: #fff; border: 1px solid #d5dbe3; border-radius: 8px;
-    box-shadow: 0 8px 24px rgba(21, 34, 56, .14); max-height: 240px; overflow-y: auto;
+    box-shadow: 0 8px 24px rgba(21, 34, 56, .14); max-height: 300px; overflow-y: auto;
 }
-.region-suggest-item { padding: 8px 12px; font-size: 13.5px; color: #334155; cursor: pointer; }
+.region-suggest-item { padding: 10px 14px; font-size: 14px; color: #334155; cursor: pointer; }
 .region-suggest-item:hover { background: #eef4fc; color: #0D47A1; }
+/* 지역 모달만 상자 overflow를 열어 자동완성 드롭다운이 잘리지 않게(내부 스크롤은
+   #setup-region-results·.ord-selected가 각자 담당) */
+#setup-modal .law-list-box { overflow: visible; }
+/* '조례 검색 중…' 로딩 표시(스피너) */
+.usun-loading { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #64748b; padding: 12px 4px; }
+.usun-spin { width: 15px; height: 15px; border: 2px solid #cbd5e1; border-top-color: #1565C0; border-radius: 50%; animation: usunSpin .7s linear infinite; }
+@keyframes usunSpin { to { transform: rotate(360deg); } }
 
 /* 조례 키워드 필터 */
 .ord-filter {
@@ -1065,8 +1072,9 @@ body.usun-welcome-mode #root { padding-right: 0 !important; }
 }
 .region-save-bar button:disabled { opacity: .5; cursor: default; }
 .region-save-bar button:hover:not(:disabled) { background: #0D47A1; }
-/* 조례 목록은 내부 스크롤 → '지역/조례 저장' 버튼이 항상 보이게(모달 전체 스크롤 방지) */
+/* 조례·법령 목록은 내부 스크롤 → 저장/닫기 버튼이 항상 보이게(모달 전체 스크롤 방지) */
 #setup-region-results { max-height: 34vh; overflow-y: auto; }
+#law-search-modal #law-search-results { max-height: 40vh; overflow-y: auto; }
 /* 선택 조례 트레이(미니 모니터링) — 체크하면 여기로 슝 올라온다 */
 .ord-selected {
     display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; padding: 8px;
@@ -1081,8 +1089,16 @@ body.usun-welcome-mode #root { padding-right: 0 !important; }
 }
 .ord-sel-chip.in { opacity: 1; transform: none; }   /* 슝 등장 */
 .ord-sel-nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ord-sel-tag { flex: 0 0 auto; font-size: 10.5px; font-weight: 700; color: #1565C0; background: #e7f0fb; border-radius: 6px; padding: 2px 7px; white-space: nowrap; }
 .ord-sel-x { flex: 0 0 auto; border: none; background: none; color: #6b8cb5; font-size: 13px; cursor: pointer; padding: 0 2px; line-height: 1; }
 .ord-sel-x:hover { color: #C62828; }
+/* 저장 완료된 조례 칩 — 초록 톤 + '저장됨' */
+.ord-sel-chip.saved { border-color: #cfe8d6; background: #f4fbf6; }
+.ord-sel-chip.saved .ord-sel-tag { color: #2e7d32; background: #e3f5e9; }
+/* 닫기(고스트) 버튼 — 저장 버튼과 구분 */
+.region-save-bar .btn-ghost { background: #fff; color: #475569; border: 1px solid #cbd5e1; }
+.region-save-bar .btn-ghost:hover:not(:disabled) { background: #f1f5f9; }
+.region-save-bar .rsb-spacer { flex: 1 1 auto; }
 /* 조례 목록 등장 애니메이션(우와아악) */
 @keyframes usunReveal { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
 .usun-reveal { animation: usunReveal .28s ease; }
