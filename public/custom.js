@@ -192,6 +192,25 @@
             .catch(function () { });
     }
 
+    // 지역 자동완성용 지자체 목록(광역시도 + 시/군). 입력하면 datalist로 제안된다.
+    // (자치구는 미포함 — 필요 시 직접 입력. 중복 지명은 dedupe.)
+    var REGIONS = (function () {
+        var s = '서울특별시 부산광역시 대구광역시 인천광역시 광주광역시 대전광역시 울산광역시 세종특별자치시 '
+            + '경기도 강원특별자치도 충청북도 충청남도 전북특별자치도 전라남도 경상북도 경상남도 제주특별자치도 '
+            + '수원시 성남시 고양시 용인시 부천시 안산시 안양시 남양주시 화성시 평택시 의정부시 시흥시 파주시 김포시 광명시 광주시 군포시 오산시 이천시 양주시 안성시 구리시 포천시 의왕시 하남시 여주시 동두천시 과천시 가평군 양평군 연천군 '
+            + '춘천시 원주시 강릉시 동해시 태백시 속초시 삼척시 홍천군 횡성군 영월군 평창군 정선군 철원군 화천군 양구군 인제군 고성군 양양군 '
+            + '청주시 충주시 제천시 보은군 옥천군 영동군 증평군 진천군 괴산군 음성군 단양군 '
+            + '천안시 공주시 보령시 아산시 서산시 논산시 계룡시 당진시 금산군 부여군 서천군 청양군 홍성군 예산군 태안군 '
+            + '전주시 군산시 익산시 정읍시 남원시 김제시 완주군 진안군 무주군 장수군 임실군 순창군 고창군 부안군 '
+            + '목포시 여수시 순천시 나주시 광양시 담양군 곡성군 구례군 고흥군 보성군 화순군 장흥군 강진군 해남군 영암군 무안군 함평군 영광군 장성군 완도군 진도군 신안군 '
+            + '포항시 경주시 김천시 안동시 구미시 영주시 영천시 상주시 문경시 경산시 의성군 청송군 영양군 영덕군 청도군 고령군 성주군 칠곡군 예천군 봉화군 울진군 울릉군 '
+            + '창원시 진주시 통영시 사천시 김해시 밀양시 거제시 양산시 의령군 함안군 창녕군 남해군 하동군 산청군 함양군 거창군 합천군 '
+            + '제주시 서귀포시';
+        var seen = {}, out = [];
+        s.split(/\s+/).forEach(function (r) { if (r && !seen[r]) { seen[r] = 1; out.push(r); } });
+        return out;
+    })();
+
     // 지역 설정 모달 — ①지역 선택(답변 반영·지속) 과 ②지역 조례 등록(선택·캐싱)을 명확히 분리.
     // 입력창은 항상 빈칸으로 시작(새로고침해도 텍스트가 남지 않게). 지정된 지역은 상태 칩으로.
     function showRegionModal() {
@@ -199,6 +218,7 @@
         if (ov) ov.remove();
         ov = document.createElement('div');
         ov.id = 'setup-modal';
+        var regionOpts = REGIONS.map(function (r) { return '<option value="' + r + '">'; }).join('');
         ov.innerHTML =
             '<div class="law-list-box" style="max-width:520px">' +
             '<button class="law-list-close" aria-label="닫기">✕</button>' +
@@ -207,7 +227,8 @@
             '<div class="law-db-foot" style="margin:0 0 8px">답변 생성 시 해당 지자체 조례를 반영합니다. 미지정시 국가 법령을 기준으로 답합니다.</div>' +
             '<div id="region-status" class="region-status"></div>' +
             '<div class="law-search-bar" style="margin-bottom:0">' +
-            '<input type="text" id="setup-region" placeholder="지역명 (예: 시흥시)" autocomplete="off" />' +
+            '<input type="text" id="setup-region" list="usun-region-list" placeholder="지역명 입력 (예: 서 → 서울·서산…)" autocomplete="off" />' +
+            '<datalist id="usun-region-list">' + regionOpts + '</datalist>' +
             '<button type="button" id="setup-region-save">지역 지정</button>' +
             '</div>' +
             '<div class="setup-sec-h" style="margin-top:20px">② 조례 검색 결과</div>' +
@@ -240,20 +261,37 @@
         // ② 지정 지역의 조례 전부(n=100) 로드 — 선택/말거나는 사용자 몫
         function loadOrdinances(region) {
             rbox.innerHTML = '<div class="usun-law-hint">이 지역 조례 불러오는 중…</div>';
-            fetch('/law-search?q=' + encodeURIComponent(region) + '&kind=ord&n=100', { credentials: 'same-origin' })
-                .then(function (r) { return r.json(); })
-                .then(function (d) {
-                    var rs = (d && d.results) || [];
-                    if (!rs.length) { rbox.innerHTML = '<div class="usun-law-hint">이 지역 조례를 찾지 못했습니다 (지역명 확인)</div>'; return; }
-                    rbox.innerHTML = '<div class="usun-law-hint">' + _esc(region) + ' 조례 ' + rs.length + '건 — 필요한 것만 캐싱하세요: 질의 과정에서도 AI가 조례를 추천해줍니다.</div>'
-                        + rs.map(function (it) {
-                            return '<div class="usun-law-item" data-name="' + _esc(it.name) + '">'
-                                + '<span class="usun-law-kind usun-law-kind-ord">조례</span>'
-                                + '<span class="usun-law-nm">' + _esc(it.name) + '</span>'
-                                + '<button type="button" class="usun-law-add">캐싱</button></div>';
-                        }).join('');
-                })
-                .catch(function () { rbox.innerHTML = '<div class="usun-law-hint">검색 실패</div>'; });
+            // 조례 목록 + 현재 등록(캐싱)된 자료를 함께 조회 → 이미 등록된 건 '✓ 등록됨'으로 표시.
+            // (창을 껐다 다시 켜도 무엇이 등록됐는지·진행 중인지 확인 가능)
+            Promise.all([
+                fetch('/law-search?q=' + encodeURIComponent(region) + '&kind=ord&n=100', { credentials: 'same-origin' }).then(function (r) { return r.json(); }),
+                fetch('/monitor', { credentials: 'same-origin' }).then(function (r) { return r.json(); }).catch(function () { return {}; })
+            ]).then(function (arr) {
+                var d = arr[0] || {}, mon = arr[1] || {};
+                var rs = (d.results) || [];
+                var added = {};   // 등록된 자료 라벨(공백 제거) 집합
+                ['law', 'interp', 'case'].forEach(function (k) {
+                    (mon[k] || []).forEach(function (x) { if (x && x.src === 'add') added[(x.label || '').replace(/\s+/g, '')] = 1; });
+                });
+                function isCached(nm) { return !!added[(nm || '').replace(/\s+/g, '')]; }
+                if (!rs.length) { rbox.innerHTML = '<div class="usun-law-hint">이 지역 조례를 찾지 못했습니다 (지역명 확인)</div>'; return; }
+                var cachedN = rs.filter(function (it) { return isCached(it.name); }).length;
+                var head = _esc(region) + ' 조례 ' + rs.length + '건'
+                    + (cachedN ? (' · <b>등록됨 ' + cachedN + '건</b>') : '')
+                    + (_pendingCache ? (' · 캐싱 중 ' + _pendingCache + '건…') : '')
+                    + ' — 필요한 것만 캐싱하세요. 질의 중에도 AI가 조례를 추천합니다.';
+                rbox.innerHTML = '<div class="usun-law-hint">' + head + '</div>'
+                    + rs.map(function (it) {
+                        var cached = isCached(it.name);
+                        var tail = cached
+                            ? '<span class="usun-law-indb">✓ 등록됨</span>'
+                            : '<button type="button" class="usun-law-add">캐싱</button>';
+                        return '<div class="usun-law-item' + (cached ? ' added' : '') + '" data-name="' + _esc(it.name) + '">'
+                            + '<span class="usun-law-kind usun-law-kind-ord">조례</span>'
+                            + '<span class="usun-law-nm">' + _esc(it.name) + '</span>'
+                            + tail + '</div>';
+                    }).join('');
+            }).catch(function () { rbox.innerHTML = '<div class="usun-law-hint">검색 실패</div>'; });
         }
         function pickRegion() {
             var v = (rin.value || '').trim();
@@ -1337,6 +1375,18 @@
         } catch (e) { /* 다음 mutation에 재시도 */ }
     }
 
+    // 웰컴 오버레이 좌측을 실제 사이드바 폭에 맞춘다 — 사이드바 접힘/리사이즈 시 콘텐츠 재중앙.
+    // (CSS의 left:320px는 기본값, 여기서 실측 폭으로 덮어씀)
+    function syncWelcomeLeft() {
+        var ov = document.getElementById('usun-welcome-cards');
+        if (!ov) return;
+        var inner = document.querySelector('[data-sidebar="sidebar"]');
+        var panel = inner && inner.parentElement;
+        var w = panel ? Math.round(panel.getBoundingClientRect().width) : 0;
+        var px = w + 'px';
+        if (ov.style.left !== px) ov.style.left = px;
+    }
+
     function update() {
         loadStartersMeta();
         insertRightBarButtons();
@@ -1349,6 +1399,7 @@
             teardownWelcomeCards();
         } else {
             try { buildWelcomeCards(); } catch (e) { }   // 히어로 오버레이 렌더
+            syncWelcomeLeft();   // 좌측 사이드바 폭/접힘에 맞춰 히어로 재중앙
         }
         insertSidebarResizeHandle();
         killDarkMode();

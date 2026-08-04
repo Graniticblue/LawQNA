@@ -934,8 +934,8 @@ body.usun-welcome-mode #root { padding-right: 0 !important; }
 .usun-ex-head:hover .usun-ex-label { background: #DCEAFB; border-color: #b3d3f5; }
 .usun-ex-caret { display: inline-block; margin-right: 7px; color: #1565C0; font-size: 12px; transition: transform .15s; }
 .usun-ex-hint { font-size: 12.5px; color: #64748b; }
-/* 접힘 — 캐럿 회전 + 칩 숨김 */
-.usun-ex.collapsed .usun-ex-caret { transform: rotate(-90deg); }
+/* 접힘=▾(아래, 열기) / 열림=▴(위, 닫기) — 아코디언 방향 */
+.usun-ex:not(.collapsed) .usun-ex-caret { transform: rotate(180deg); }
 .usun-ex.collapsed .usun-ex-head { margin-bottom: 0; }
 .usun-ex.collapsed .usun-ex-pills { display: none; }
 .usun-ex-pills { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -964,8 +964,8 @@ body.usun-welcome-mode #root { padding-right: 0 !important; }
 .usun-scope-caret { display: inline-block; margin-right: 7px; color: #1565C0; font-size: 12px; transition: transform .15s; }
 .usun-scope-hint { font-size: 12.5px; color: #64748b; }
 .usun-scope-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-/* 접힘 — 캐럿 회전 + 카드 숨김 */
-.usun-scope.collapsed .usun-scope-caret { transform: rotate(-90deg); }
+/* 접힘=▾(아래, 열기) / 열림=▴(위, 닫기) — 아코디언 방향 */
+.usun-scope:not(.collapsed) .usun-scope-caret { transform: rotate(180deg); }
 .usun-scope.collapsed .usun-scope-head { margin-bottom: 0; }
 .usun-scope.collapsed .usun-scope-grid { display: none; }
 .usun-scope-card {
