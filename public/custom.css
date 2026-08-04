@@ -1113,6 +1113,21 @@ body.usun-welcome-mode #root { padding-right: 0 !important; }
 @keyframes usunReveal { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
 .usun-reveal { animation: usunReveal .28s ease; }
 
+/* 참고자료 요약 테이블 */
+#summary-body { display: flex; flex-direction: column; gap: 18px; max-height: 66vh; overflow-y: auto; }
+.sum-sec-h { font-size: 14.5px; font-weight: 800; color: #0D47A1; margin: 0 0 8px; }
+.sum-regions { display: flex; flex-wrap: wrap; gap: 6px; }
+.sum-grp-h { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; }
+.sum-grp-t { font-size: 12.5px; font-weight: 700; color: #334155; }
+.sum-grp-n { flex: 0 0 auto; min-width: 20px; text-align: center; font-size: 11px; font-weight: 700; color: #1565C0; background: #e7f0fb; border-radius: 999px; padding: 1px 7px; }
+.sum-grp-hint { font-size: 11px; color: #94a3b8; }
+.sum-empty { font-size: 12px; color: #b0b8c4; padding: 3px 4px 6px; }
+.sum-list { list-style: none; margin: 0; padding: 0; border: 1px solid #eef2f7; border-radius: 8px; overflow: hidden; }
+.sum-list li { display: flex; align-items: center; gap: 10px; padding: 7px 12px; font-size: 13px; color: #1f2937; border-top: 1px solid #f1f5f9; }
+.sum-list li:first-child { border-top: none; }
+.sum-nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sum-n { flex: 0 0 auto; font-size: 11.5px; font-weight: 700; color: #64748b; }
+
 /* 좁은 화면 — 검색범위·예시는 세로로 */
 @media (max-width: 720px) {
     .usun-scope-grid { grid-template-columns: 1fr; }

@@ -1514,6 +1514,67 @@
         setTimeout(function () { qin.focus(); }, 30);
     }
 
+    // 참고자료 요약 테이블 — 출처별 분류(내장 DB / 검색과정 인용 / 사전등록) + 적용 지역
+    function renderSummary(box, d) {
+        if (!box) return;
+        if (!d) { box.innerHTML = '<div class="usun-law-hint">요약을 불러오지 못했습니다.</div>'; return; }
+        var regions = (d.regions && d.regions.length) ? d.regions : getRegionList();
+        function grp(title, items, hint) {
+            var head = '<div class="sum-grp-h"><span class="sum-grp-t">' + _esc(title) + '</span>'
+                + '<span class="sum-grp-n">' + items.length + '</span>'
+                + (hint ? '<span class="sum-grp-hint">' + _esc(hint) + '</span>' : '') + '</div>';
+            if (!items.length) return head + '<div class="sum-empty">없음</div>';
+            return head + '<ul class="sum-list">' + items.map(function (it) {
+                return '<li><span class="sum-nm">' + _esc(it.label) + '</span>'
+                    + '<span class="sum-n">×' + it.n + '</span></li>';
+            }).join('') + '</ul>';
+        }
+        var law = d.law || { builtin: [], cited_ext: [], added: [] };
+        var interp = d.interp || { cited: [], added: [] };
+        var cas = d.case || { cited: [], added: [] };
+        var html = '';
+        html += '<div class="sum-sec"><div class="sum-sec-h">📍 적용 지역</div>'
+            + (regions.length
+                ? '<div class="sum-regions">' + regions.map(function (r) { return '<span class="region-chip">' + _esc(r) + '</span>'; }).join('') + '</div>'
+                : '<div class="sum-empty">전국 공통 범위 (미지정)</div>') + '</div>';
+        html += '<div class="sum-sec"><div class="sum-sec-h">📘 법령</div>'
+            + grp('내장 DB', law.builtin, '앱에 색인된 법령')
+            + grp('검색과정 인용', law.cited_ext, '답변 중 인용된 비내장 법령')
+            + grp('사전등록 (API 추가)', law.added, '질의 전 API로 추가') + '</div>';
+        html += '<div class="sum-sec"><div class="sum-sec-h">📄 해석례</div>'
+            + grp('DB 인용', interp.cited, '답변에 인용된 해석례')
+            + grp('사전등록 (추가)', interp.added, '수동 추가') + '</div>';
+        html += '<div class="sum-sec"><div class="sum-sec-h">⚖️ 판례</div>'
+            + grp('DB 인용', cas.cited, '답변에 인용된 판례')
+            + grp('사전등록 (추가)', cas.added, '수동 추가') + '</div>';
+        box.innerHTML = html;
+    }
+    function showSummaryModal() {
+        var ov = document.getElementById('summary-modal');
+        if (ov) ov.remove();
+        ov = document.createElement('div');
+        ov.id = 'summary-modal';
+        ov.innerHTML =
+            '<div class="law-list-box" style="max-width:640px">' +
+            '<button class="law-list-close" aria-label="닫기">✕</button>' +
+            '<h2 style="font-size:18px;margin:0 0 4px">참고자료 요약</h2>' +
+            '<div class="law-db-foot" style="margin:0 0 14px">이 대화에 첨부된 법령·해석례·판례를 출처별로 정리합니다.</div>' +
+            '<div id="summary-body"><div class="usun-loading"><span class="usun-spin"></span>불러오는 중…</div></div>' +
+            '</div>';
+        var _downOnOv = false;
+        ov.addEventListener('mousedown', function (e) { _downOnOv = (e.target === ov); });
+        ov.addEventListener('click', function (e) { if (e.target === ov && _downOnOv) ov.remove(); });
+        ov.querySelector('.law-list-close').onclick = function () { ov.remove(); };
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') { var m = document.getElementById('summary-modal'); if (m) m.remove(); }
+        });
+        document.body.appendChild(ov);
+        ov.style.display = 'flex';
+        fetch('/monitor-summary', { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); }).catch(function () { return null; })
+            .then(function (d) { renderSummary(ov.querySelector('#summary-body'), d); });
+    }
+
     // ── 오른쪽 고정 바: 상단 헤더에 있던 액션 버튼들을 이리로 이동 ──────────
     function ensureRightBar() {
         var bar = document.getElementById('usun-right-bar');
@@ -1581,6 +1642,7 @@
             sec('모니터링');
             mk('law-search-btn', '＋ 참고자료 추가', showLawSearchModal);   // 클릭 → 검색·추가 모달
             mk('rescan-btn', '🔃 인용자료 스캔', function () { rescanCitations(true, false); });   // 수동=fresh 재구성
+            mk('summary-btn', '🧾 요약 테이블', showSummaryModal);   // 출처별 분류 + 적용 지역
             // 누적 현황
             var mon = document.createElement('div');
             mon.id = 'usun-monitor';

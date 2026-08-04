@@ -444,6 +444,53 @@ try:
                     removed += 1
         return JSONResponse({"ok": True, "removed": removed})
 
+    # 요약 테이블 — 모니터링 항목을 출처별로 분류(내장 DB / 검색과정 인용 / 사전등록) + 적용 지역
+    @_cl_server_app.get("/monitor-summary")
+    async def _monitor_summary(request: Request):
+        key = request.cookies.get("anon_id", "")
+        data = _MONITOR_REFS.get(key) or {}
+        builtin = _builtin_law_names()
+
+        def _norm(s):
+            return re.sub(r"[\s·ㆍ]+", "", s or "")
+
+        def _law_name(label):
+            # "건축법 시행령 제80조의2" → "건축법 시행령" (조번호 이하 절단)
+            return re.sub(r"\s*제\d+조(?:의\d+)?.*$", "", label or "").strip()
+
+        def _fmt(items):
+            items = list(items)
+            items.sort(key=lambda e: (-e.get("n", 0), e.get("label", "")))
+            return [{"label": e.get("label", ""), "n": e.get("n", 1)} for e in items]
+
+        # 법령 3분류: 내장 DB / 검색과정 인용(비내장) / 사전등록(API 추가)
+        law_builtin, law_cited_ext, law_added = [], [], []
+        for e in list((data.get("law") or {}).values()):
+            if e.get("src") == "add":
+                law_added.append(e)
+            elif _norm(_law_name(e.get("label", ""))) in builtin:
+                law_builtin.append(e)
+            else:
+                law_cited_ext.append(e)
+
+        # 해석례·판례 2분류: DB 인용 / 사전등록(추가)
+        def _split(bucket):
+            vals = list((bucket or {}).values())
+            return {
+                "cited": _fmt([e for e in vals if e.get("src") != "add"]),
+                "added": _fmt([e for e in vals if e.get("src") == "add"]),
+            }
+
+        region = (_REGION_PREF.get(key, "") or "").strip()
+        regions = [r.strip() for r in region.split(",") if r.strip()]
+
+        return JSONResponse({
+            "regions": regions,
+            "law": {"builtin": _fmt(law_builtin), "cited_ext": _fmt(law_cited_ext), "added": _fmt(law_added)},
+            "interp": _split(data.get("interp")),
+            "case": _split(data.get("case")),
+        })
+
     # 근거 더 찾기 — 대화 맥락에서 LLM으로 키워드 도출 → 판례·해석례 API 검색 → 후보 제안
     @_cl_server_app.get("/evidence-search")
     async def _evidence_search_g():
@@ -713,7 +760,7 @@ try:
                  "/upload-cache/delete", "/upload-cache/add", "/upload-cache/recache",
                  "/provider", "/websearch", "/region", "/starters-meta", "/monitor",
                  "/law-search", "/law-add", "/monitor-rescan", "/monitor-clear", "/monitor-remove",
-                 "/evidence-search", "/evidence-context"}
+                 "/monitor-summary", "/evidence-search", "/evidence-context"}
     _front = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") in _MY_PATHS]
     _rest  = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") not in _MY_PATHS]
     _cl_server_app.router.routes[:] = _front + _rest
