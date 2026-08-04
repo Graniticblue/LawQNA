@@ -1368,15 +1368,30 @@ def build_citation_elements(answer: str, result: dict) -> tuple[str, list]:
         if kp:
             content += f"\n\n**핵심 취지**\n{kp}"
 
-        pat = re.compile(rf"\[?\s*입법요지\s*{i}\s*(?:참조)?\s*\]?")
+        # (?!\d): '입법요지1'이 '입법요지14'의 앞자리를 삼켜 뒤에 '4'를 흘리는 것 방지
+        pat = re.compile(rf"\[?\s*입법요지\s*{i}(?!\d)\s*(?:참조)?\s*\]?")
         if pat.search(answer):
             answer = pat.sub(label, answer)
             if label not in seen_names:
                 seen_names.add(label)
                 elements.append(cl.Text(name=label, content=content, display="side"))
-        # 부록 형식 "공포번호 개정이유"도 동일 팝업으로 (본문 header의 공포번호와 안 헷갈리게 '개정이유' 필수)
+        # 부록/입법요지 푸터의 "…개정이유"도 동일 팝업으로.
         if prom:
+            # (a) '○○법 공포번호 개정이유' 전체(법령명 포함)를 하나의 클릭 태그로 — 입법요지 푸터
+            full_re = re.compile(
+                r"([가-힣][가-힣·\s]*?(?:법|령|규칙|규정))\s+" + re.escape(prom) + r"\s*개정이유"
+            )
+            covered: list = []
+            for m in full_re.finditer(answer):
+                rn = re.sub(r"\s+", " ", m.group(0).strip())
+                covered.append((m.start(), m.end()))
+                if rn not in seen_names:
+                    seen_names.add(rn)
+                    elements.append(cl.Text(name=rn, content=content, display="side"))
+            # (b) 법령명이 안 붙은 본문 인용은 '공포번호 개정이유'로 (전체 태그에 덮이지 않은 것만)
             for m in re.finditer(re.escape(prom) + r"\s*개정이유", answer):
+                if any(s <= m.start() and m.end() <= e for (s, e) in covered):
+                    continue
                 rn = m.group(0).strip()
                 if rn in seen_names:
                     continue
