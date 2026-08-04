@@ -218,7 +218,6 @@
         if (ov) ov.remove();
         ov = document.createElement('div');
         ov.id = 'setup-modal';
-        var regionOpts = REGIONS.map(function (r) { return '<option value="' + r + '">'; }).join('');
         ov.innerHTML =
             '<div class="law-list-box" style="max-width:520px">' +
             '<button class="law-list-close" aria-label="닫기">✕</button>' +
@@ -226,10 +225,10 @@
             '<div class="setup-sec-h" style="margin-top:6px">① 지역 선택</div>' +
             '<div class="law-db-foot" style="margin:0 0 8px">답변 생성 시 해당 지자체 조례를 반영합니다. 미지정시 국가 법령을 기준으로 답합니다.</div>' +
             '<div id="region-status" class="region-status"></div>' +
-            '<div class="law-search-bar" style="margin-bottom:0">' +
-            '<input type="text" id="setup-region" list="usun-region-list" placeholder="지역명 입력 (예: 서 → 서울·서산…)" autocomplete="off" />' +
-            '<datalist id="usun-region-list">' + regionOpts + '</datalist>' +
+            '<div class="law-search-bar" style="margin-bottom:0;position:relative">' +
+            '<input type="text" id="setup-region" placeholder="지역명 입력 (예: 서 → 서울·서산…)" autocomplete="off" />' +
             '<button type="button" id="setup-region-save">지역 지정</button>' +
+            '<div id="region-suggest" class="region-suggest" style="display:none"></div>' +
             '</div>' +
             '<div class="setup-sec-h" style="margin-top:20px">② 조례 검색 결과</div>' +
             '<div class="law-db-foot" style="margin:0 0 8px">검색된 조례 중 필요한 것을 선별하여 캐싱합니다.</div>' +
@@ -244,6 +243,37 @@
         var rsave = ov.querySelector('#setup-region-save');
         var rbox = ov.querySelector('#setup-region-results');
         var rstat = ov.querySelector('#region-status');
+        var rsug = ov.querySelector('#region-suggest');
+
+        // 지역 자동완성 — 입력 즉시 커스텀 드롭다운(datalist의 '재클릭 필요' 버그 회피)
+        function regionMatches(q) {
+            q = (q || '').trim();
+            if (!q) return [];
+            var starts = [], has = [];
+            for (var i = 0; i < REGIONS.length; i++) {
+                var idx = REGIONS[i].indexOf(q);
+                if (idx === 0) starts.push(REGIONS[i]);
+                else if (idx > 0) has.push(REGIONS[i]);
+            }
+            return starts.concat(has).slice(0, 12);
+        }
+        function renderSuggest() {
+            var ms = regionMatches(rin.value);
+            if (!ms.length) { rsug.style.display = 'none'; rsug.innerHTML = ''; return; }
+            rsug.innerHTML = ms.map(function (r) { return '<div class="region-suggest-item" data-r="' + _esc(r) + '">' + _esc(r) + '</div>'; }).join('');
+            rsug.style.display = 'block';
+        }
+        rin.addEventListener('input', renderSuggest);
+        rin.addEventListener('focus', renderSuggest);
+        rin.addEventListener('blur', function () { setTimeout(function () { rsug.style.display = 'none'; }, 150); });
+        rsug.addEventListener('mousedown', function (e) {   // mousedown: blur보다 먼저 처리
+            var it = e.target.closest && e.target.closest('.region-suggest-item');
+            if (!it) return;
+            e.preventDefault();
+            rin.value = it.getAttribute('data-r');
+            rsug.style.display = 'none';
+            rin.focus();
+        });
 
         function paintStatus() {   // 현재 지정 지역 표시(+ 해제) — 지속 상태를 눈에 보이게
             var r = getRegion();
@@ -1382,9 +1412,19 @@
         if (!ov) return;
         var inner = document.querySelector('[data-sidebar="sidebar"]');
         var panel = inner && inner.parentElement;
-        var w = panel ? Math.round(panel.getBoundingClientRect().width) : 0;
-        var px = w + 'px';
+        var left = 0;
+        if (panel) {
+            var r = panel.getBoundingClientRect();
+            // 접힘이 폭 축소(아이콘 레일)든 슬라이드 아웃(transform)이든 '오른쪽 끝'이 콘텐츠 시작점
+            left = Math.max(0, Math.round(r.right));
+        }
+        var px = left + 'px';
         if (ov.style.left !== px) ov.style.left = px;
+    }
+    // 사이드바 접힘/펼침은 어트리뷰트 변화(옵저버 미감지) + 애니메이션이라 여러 번 재측정
+    function syncWelcomeLeftSoon() {
+        syncWelcomeLeft();
+        [60, 180, 320, 500].forEach(function (t) { setTimeout(syncWelcomeLeft, t); });
     }
 
     function update() {
@@ -1407,6 +1447,9 @@
 
     const observer = new MutationObserver(update);
     observer.observe(document.documentElement, { childList: true, subtree: true });
+    // 사이드바 토글/리사이즈 → 웰컴 히어로 재중앙(옵저버가 못 잡는 어트리뷰트 변화 대응)
+    document.addEventListener('click', syncWelcomeLeftSoon, true);
+    window.addEventListener('resize', syncWelcomeLeft);
 
     // 대화 전환 감지(첫 사용자 메시지) + 답변 변화 감지(어시스턴트 수·마지막 길이)
     var _lastConvSig = '', _lastAnsSig = '';
@@ -1422,7 +1465,7 @@
     // 4초 폴링: ①대화 전환→fresh 재스캔 ②새 답변/스트리밍 변화→병합 재스캔(자동) ③그 외 갱신
     setInterval(function () {
         if (!document.getElementById('usun-monitor')) return;
-        if (document.getElementById('usun-welcome-cards')) refreshWelcomeScope();   // 웰컴이면 검색범위 갱신
+        if (document.getElementById('usun-welcome-cards')) { refreshWelcomeScope(); syncWelcomeLeft(); }   // 웰컴이면 검색범위·좌측정렬 갱신
         var sig = _convSig();
         if (sig !== _lastConvSig) {
             var switched = (_lastConvSig && sig);   // A→B (둘 다 비어있지 않음 = 실제 전환)

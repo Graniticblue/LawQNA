@@ -77,9 +77,9 @@ cot = "hidden"
 
 # ?v=N — 프런트 자산 캐시 무효화 버전. custom.css/js 수정 시 올려서
 # 사용자 브라우저가 강력 새로고침 없이도 새 파일을 받게 한다.
-custom_css = "/public/custom.css?v=43"
+custom_css = "/public/custom.css?v=44"
 
-custom_js = "/public/custom.js?v=43"
+custom_js = "/public/custom.js?v=44"
 
 [UI.theme]
 
