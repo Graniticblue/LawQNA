@@ -246,7 +246,11 @@
             '<button type="button" id="setup-region-save" disabled>법규/조례 저장</button>' +
             '</div>' +
             '</div>';
-        ov.addEventListener('click', function (e) { if (e.target === ov) ov.remove(); });
+        // 배경 클릭 닫기 — mousedown·click 둘 다 배경(ov)일 때만. (자동완성 클릭 후 리플로우로
+        //  mouseup이 배경에 떨어져 창이 닫히던 버그 방지)
+        var _downOnOv = false;
+        ov.addEventListener('mousedown', function (e) { _downOnOv = (e.target === ov); });
+        ov.addEventListener('click', function (e) { if (e.target === ov && _downOnOv) ov.remove(); });
         ov.querySelector('.law-list-close').onclick = function () { ov.remove(); };
         document.addEventListener('keydown', function (e) {
             if (e.key === 'Escape') { var m = document.getElementById('setup-modal'); if (m) m.remove(); }
@@ -328,11 +332,14 @@
             }
             rbox.innerHTML = '<div class="usun-law-hint">' + head + '</div>'
                 + list.map(function (o) {
+                    // 체크박스(또는 '저장됨' 태그)는 맨 오른쪽
+                    var tail = o.cached
+                        ? '<span class="usun-law-indb">✓ 저장됨</span>'
+                        : '<input type="checkbox" class="ord-ck" data-name="' + _esc(o.name) + '">';
                     return '<label class="usun-law-item ord-row' + (o.cached ? ' added' : '') + '">'
-                        + '<input type="checkbox" class="ord-ck" data-name="' + _esc(o.name) + '"' + (o.cached ? ' checked disabled' : '') + '>'
                         + '<span class="usun-law-kind usun-law-kind-ord">조례</span>'
                         + '<span class="usun-law-nm">' + _esc(o.name) + '</span>'
-                        + (o.cached ? '<span class="usun-law-indb">✓ 저장됨</span>' : '')
+                        + tail
                         + '</label>';
                 }).join('');
             if (animate) { rbox.classList.remove('usun-reveal'); void rbox.offsetWidth; rbox.classList.add('usun-reveal'); }   // 우와아악 등장

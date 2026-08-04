@@ -1051,6 +1051,8 @@ body.usun-welcome-mode #root { padding-right: 0 !important; }
 }
 .region-save-bar button:disabled { opacity: .5; cursor: default; }
 .region-save-bar button:hover:not(:disabled) { background: #0D47A1; }
+/* 조례 목록은 내부 스크롤 → '법규/조례 저장' 버튼이 항상 보이게(모달 전체 스크롤 방지) */
+#setup-region-results { max-height: 38vh; overflow-y: auto; }
 /* 조례 목록 등장 애니메이션(우와아악) */
 @keyframes usunReveal { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
 .usun-reveal { animation: usunReveal .28s ease; }
