@@ -505,10 +505,20 @@ button:has(svg[class*="-moon"]) {
 .usun-law-add:disabled { opacity: .7; cursor: default; }
 /* 이미 내장(색인)된 법령 — 추가 버튼 대신 표시 */
 .usun-law-indb {
-    flex: 0 0 auto; font-size: 11.5px; font-weight: 600; color: #64748b;
-    background: #eef2f7; border: 1px solid #e2e8f0; border-radius: 7px; padding: 4px 10px;
+    flex: 0 0 auto; min-width: 84px; text-align: center;
+    font-size: 11.5px; font-weight: 600; color: #64748b;
+    background: #eef2f7; border: 1px solid #e2e8f0; border-radius: 7px; padding: 5px 10px;
     white-space: nowrap;
 }
+/* 조례·법령 선택 토글 — '이미 포함됨'과 같은 폭의 버튼(체크박스 대체) */
+.usun-law-pick {
+    flex: 0 0 auto; min-width: 84px; text-align: center;
+    font-size: 11.5px; font-weight: 700; color: #1565C0; cursor: pointer;
+    background: #eaf2fd; border: 1px solid #cfe0f7; border-radius: 7px; padding: 5px 12px;
+    white-space: nowrap; transition: background .12s, border-color .12s, color .12s;
+}
+.usun-law-pick:hover { background: #dbeafe; }
+.usun-law-pick.on { color: #fff; background: #1565C0; border-color: #1565C0; }
 
 /* 근거 더 찾기 — 제안 모달 */
 .ev-keywords { margin: 0 0 10px; font-size: 12.5px; line-height: 1.7; }

@@ -317,8 +317,8 @@
             if (!rtray.children.length) rtray.style.display = 'none';
         }
         function uncheckInList(name) {
-            var ck = Array.prototype.slice.call(ov.querySelectorAll('.ord-ck')).filter(function (c) { return c.getAttribute('data-name') === name; })[0];
-            if (ck) ck.checked = false;
+            var b = Array.prototype.slice.call(ov.querySelectorAll('.usun-law-pick')).filter(function (c) { return c.getAttribute('data-name') === name; })[0];
+            if (b) { b.classList.remove('on'); b.textContent = '선택'; }
         }
         rtray.addEventListener('click', function (e) {   // 트레이 X → 저장 예정은 체크 해제 / 저장분은 저장해제
             var x = e.target.closest && e.target.closest('.ord-sel-x'); if (!x) return;
@@ -409,15 +409,15 @@
             }
             rbox.innerHTML = '<div class="usun-law-hint">' + head + '</div>'
                 + list.map(function (o) {
-                    // 체크박스(또는 '저장됨' 태그)는 맨 오른쪽
+                    // 선택 토글 버튼(또는 '저장됨' 태그)은 맨 오른쪽 — '이미 포함됨'과 같은 폭
                     var tail = o.cached
                         ? '<span class="usun-law-indb">✓ 저장됨</span>'
-                        : '<input type="checkbox" class="ord-ck" data-name="' + _esc(o.name) + '"' + (_sel[o.name] ? ' checked' : '') + '>';
-                    return '<label class="usun-law-item ord-row' + (o.cached ? ' added' : '') + '">'
+                        : '<button type="button" class="usun-law-pick' + (_sel[o.name] ? ' on' : '') + '" data-name="' + _esc(o.name) + '">' + (_sel[o.name] ? '✓ 선택됨' : '선택') + '</button>';
+                    return '<div class="usun-law-item ord-row' + (o.cached ? ' added' : '') + '">'
                         + '<span class="usun-law-kind usun-law-kind-ord">조례</span>'
                         + '<span class="usun-law-nm">' + _esc(o.name) + '</span>'
                         + tail
-                        + '</label>';
+                        + '</div>';
                 }).join('');
             if (animate) { rbox.classList.remove('usun-reveal'); void rbox.offsetWidth; rbox.classList.add('usun-reveal'); }   // 우와아악 등장
             updateCount();
@@ -474,12 +474,14 @@
         }
 
         rfilter.addEventListener('input', function () { renderOrds(false); });   // 조례 키워드 필터
-        rbox.addEventListener('change', function (e) {   // 체크 → _sel + 트레이로 슝 / 해제 → 제거
-            var t = e.target;
-            if (!t || !t.classList || !t.classList.contains('ord-ck')) return;
-            var name = t.getAttribute('data-name');
-            if (t.checked) { _sel[name] = 1; trayChip(name, false); }
+        rbox.addEventListener('click', function (e) {   // 선택 버튼 → _sel + 트레이로 슝 / 다시 → 제거
+            var b = e.target.closest && e.target.closest('.usun-law-pick'); if (!b) return;
+            e.preventDefault();
+            var name = b.getAttribute('data-name');
+            var on = !_sel[name];
+            if (on) { _sel[name] = 1; trayChip(name, false); }
             else { delete _sel[name]; removeSelChip(name); }
+            b.classList.toggle('on', on); b.textContent = on ? '✓ 선택됨' : '선택';
             updateCount();
         });
         // 저장 — 저장 대기(_sel) 조례를 캐싱. 창은 닫지 않고 트레이를 '저장됨'으로 갱신(삭제도 가능)
@@ -1414,8 +1416,8 @@
             return chip;
         }
         function uncheckLInList(name) {
-            var ck = Array.prototype.slice.call(ov.querySelectorAll('.law-ck')).filter(function (c) { return c.getAttribute('data-name') === name; })[0];
-            if (ck) ck.checked = false;
+            var b = Array.prototype.slice.call(ov.querySelectorAll('.usun-law-pick')).filter(function (c) { return c.getAttribute('data-name') === name; })[0];
+            if (b) { b.classList.remove('on'); b.textContent = '선택'; }
         }
         function updateLCount() {
             var n = Object.keys(_lsel).length;
@@ -1449,16 +1451,16 @@
                     var rs = ((d && d.results) || []).filter(function (it) { return !isOrdName(it.name); });
                     if (!rs.length) { res.innerHTML = '<div class="usun-law-hint">결과 없음</div>'; return; }
                     res.innerHTML = rs.map(function (it) {
-                        // 내장분='이미 포함됨' / 이미 저장분='✓ 저장됨' / 그 외=체크박스
+                        // 내장분='이미 포함됨' / 이미 저장분='✓ 저장됨' / 그 외=선택 토글 버튼
                         var tail = it.in_db
                             ? '<span class="usun-law-indb">이미 포함됨</span>'
                             : (_lsaved[it.name]
                                 ? '<span class="usun-law-indb">✓ 저장됨</span>'
-                                : '<input type="checkbox" class="law-ck" data-name="' + _esc(it.name) + '"' + (_lsel[it.name] ? ' checked' : '') + '>');
-                        return '<label class="usun-law-item' + (it.in_db || _lsaved[it.name] ? ' added' : '') + '">'
+                                : '<button type="button" class="usun-law-pick' + (_lsel[it.name] ? ' on' : '') + '" data-name="' + _esc(it.name) + '">' + (_lsel[it.name] ? '✓ 선택됨' : '선택') + '</button>');
+                        return '<div class="usun-law-item' + (it.in_db || _lsaved[it.name] ? ' added' : '') + '">'
                             + '<span class="usun-law-kind usun-law-kind-law">법령</span>'
                             + '<span class="usun-law-nm">' + _esc(it.name) + '</span>'
-                            + tail + '</label>';
+                            + tail + '</div>';
                     }).join('');
                 })
                 .catch(function () { res.innerHTML = '<div class="usun-law-hint">검색 실패</div>'; });
@@ -1467,12 +1469,14 @@
         qgo.addEventListener('click', function () { doLawSearch(qin.value); });
         qin.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); doLawSearch(qin.value); } });
         qin.addEventListener('input', function () { if (!qin.value.trim()) res.innerHTML = '<div class="usun-law-hint">법령명을 검색하세요.</div>'; });
-        res.addEventListener('change', function (e) {   // 체크 → _lsel + 트레이 / 해제 → 제거
-            var t = e.target;
-            if (!t || !t.classList || !t.classList.contains('law-ck')) return;
-            var name = t.getAttribute('data-name');
-            if (t.checked) { _lsel[name] = 1; lTrayChip(name, false); }
+        res.addEventListener('click', function (e) {   // 선택 버튼 → _lsel + 트레이 / 다시 → 제거
+            var b = e.target.closest && e.target.closest('.usun-law-pick'); if (!b) return;
+            e.preventDefault();
+            var name = b.getAttribute('data-name');
+            var on = !_lsel[name];
+            if (on) { _lsel[name] = 1; lTrayChip(name, false); }
             else { delete _lsel[name]; var c = findLchip(name); if (c) c.remove(); if (!ltray.children.length) ltray.style.display = 'none'; }
+            b.classList.toggle('on', on); b.textContent = on ? '✓ 선택됨' : '선택';
             updateLCount();
         });
         lsave.addEventListener('click', function () {   // 저장 — 창은 닫지 않고 '저장됨'으로 갱신
