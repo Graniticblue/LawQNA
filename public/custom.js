@@ -205,6 +205,19 @@
             .catch(function () { });
     }
 
+    // 설정 초기화 — 지역·웹참고 해제 + 추가한 법령·조례(src=add) 제거 → 카드 리셋
+    function doResetSettings() {
+        setRegion('');
+        try { localStorage.setItem('web_search_enabled', '0'); } catch (e) { }
+        pushWebSearch(false);
+        var wc = document.getElementById('usun-hero-web');
+        if (wc) { wc.textContent = '웹 참고 끔'; wc.classList.remove('on'); wc.setAttribute('aria-pressed', 'false'); }
+        fetch('/monitor-clear', { method: 'POST', credentials: 'same-origin' })
+            .catch(function () { })
+            .then(function () { refreshMonitor(); refreshWelcomeScope(); });
+        _toast('설정을 초기화했습니다.');
+    }
+
     // 지역 자동완성용 지자체 목록(광역시도 + 시/군). 입력하면 datalist로 제안된다.
     // (자치구는 미포함 — 필요 시 직접 입력. 중복 지명은 dedupe.)
     var REGIONS = (function () {
@@ -243,7 +256,8 @@
             '<div id="region-suggest" class="region-suggest" style="display:none"></div>' +
             '</div>' +
             '<div class="setup-sec-h" style="margin-top:20px">② 조례 저장 <span style="font-weight:400;color:#94a3b8">(체크 후 저장)</span></div>' +
-            '<div class="law-db-foot" style="margin:0 0 8px">필요한 조례를 체크하고 저장하세요. 저장한 조례는 조문까지 근거로 반영됩니다.</div>' +
+            '<div class="law-db-foot" style="margin:0 0 8px">필요한 조례를 체크하면 위로 모입니다. 다 고른 뒤 저장하세요.</div>' +
+            '<div id="ord-selected" class="ord-selected" style="display:none"></div>' +
             '<input type="text" id="ord-filter" class="ord-filter" placeholder="조례 키워드 필터 (예: 주차·경관·주택…)" autocomplete="off" style="display:none" />' +
             '<div id="setup-region-results" class="law-search-results"></div>' +
             '<div id="region-save-bar" class="region-save-bar" style="display:none">' +
@@ -268,7 +282,35 @@
         var rsavebar = ov.querySelector('#region-save-bar');
         var rsave = ov.querySelector('#setup-region-save');
         var rcount = ov.querySelector('#region-check-count');
+        var rtray = ov.querySelector('#ord-selected');
         var _ords = [];   // [{name, cached}]
+        var _sel = {};     // 체크(선택)된 조례명 — 필터 재렌더에도 유지, 트레이로 표시
+
+        function findChip(name) {
+            return Array.prototype.slice.call(rtray.children).filter(function (c) { return c.getAttribute('data-name') === name; })[0];
+        }
+        function addSelChip(name) {   // 체크 → 트레이로 슝
+            if (findChip(name)) return;
+            var chip = _el('span', 'ord-sel-chip'); chip.setAttribute('data-name', name);
+            chip.innerHTML = '<span class="ord-sel-nm">' + _esc(name) + '</span><button type="button" class="ord-sel-x" aria-label="제거">✕</button>';
+            rtray.appendChild(chip); rtray.style.display = 'flex';
+            requestAnimationFrame(function () { chip.classList.add('in'); });
+        }
+        function removeSelChip(name) {
+            var chip = findChip(name); if (chip) chip.remove();
+            if (!rtray.children.length) rtray.style.display = 'none';
+        }
+        function uncheckInList(name) {
+            var ck = Array.prototype.slice.call(ov.querySelectorAll('.ord-ck')).filter(function (c) { return c.getAttribute('data-name') === name; })[0];
+            if (ck) ck.checked = false;
+        }
+        rtray.addEventListener('click', function (e) {   // 트레이 X → 취소
+            var x = e.target.closest && e.target.closest('.ord-sel-x'); if (!x) return;
+            var chip = x.closest('.ord-sel-chip'); var name = chip.getAttribute('data-name');
+            delete _sel[name]; chip.remove();
+            if (!rtray.children.length) rtray.style.display = 'none';
+            uncheckInList(name); updateCount();
+        });
 
         // 지역 자동완성 — 입력 즉시 커스텀 드롭다운(datalist '재클릭' 버그 회피). 선택 즉시 조례 로드.
         function regionMatches(q) {
@@ -319,7 +361,7 @@
         }
 
         function updateCount() {
-            var n = ov.querySelectorAll('.ord-ck:checked:not(:disabled)').length;
+            var n = Object.keys(_sel).length;
             rcount.textContent = n + '건 선택';
             rsave.disabled = (n === 0);
         }
@@ -342,7 +384,7 @@
                     // 체크박스(또는 '저장됨' 태그)는 맨 오른쪽
                     var tail = o.cached
                         ? '<span class="usun-law-indb">✓ 저장됨</span>'
-                        : '<input type="checkbox" class="ord-ck" data-name="' + _esc(o.name) + '">';
+                        : '<input type="checkbox" class="ord-ck" data-name="' + _esc(o.name) + '"' + (_sel[o.name] ? ' checked' : '') + '>';
                     return '<label class="usun-law-item ord-row' + (o.cached ? ' added' : '') + '">'
                         + '<span class="usun-law-kind usun-law-kind-ord">조례</span>'
                         + '<span class="usun-law-nm">' + _esc(o.name) + '</span>'
@@ -399,14 +441,18 @@
         }
 
         rfilter.addEventListener('input', function () { renderOrds(false); });   // 조례 키워드 필터
-        rbox.addEventListener('change', function (e) {
-            if (e.target && e.target.classList && e.target.classList.contains('ord-ck')) updateCount();
+        rbox.addEventListener('change', function (e) {   // 체크 → _sel + 트레이로 슝 / 해제 → 제거
+            var t = e.target;
+            if (!t || !t.classList || !t.classList.contains('ord-ck')) return;
+            var name = t.getAttribute('data-name');
+            if (t.checked) { _sel[name] = 1; addSelChip(name); }
+            else { delete _sel[name]; removeSelChip(name); }
+            updateCount();
         });
-        // 저장 — 체크된(미저장) 조례를 일괄 캐싱(백그라운드) → 즉시 창 닫힘 → ②지역카드에서 진행 확인
+        // 저장 — 선택(_sel)한 조례를 일괄 캐싱(백그라운드) → 즉시 창 닫힘 → ②지역카드에서 진행 확인
         rsave.addEventListener('click', function () {
-            var cks = Array.prototype.slice.call(ov.querySelectorAll('.ord-ck:checked:not(:disabled)'));
-            if (!cks.length) return;
-            var names = cks.map(function (c) { return c.getAttribute('data-name'); });
+            var names = Object.keys(_sel);
+            if (!names.length) return;
             names.forEach(function (nm) { cacheLaw('조례', nm); });   // 백그라운드 저장(카드가 진행 표시)
             _toast(names.length + '건 저장 중 — 카드에서 확인하세요.');
             ov.remove();   // 법령처럼 바로 닫고 대시보드 카드로
@@ -507,12 +553,18 @@
             var sh = _el('div', 'usun-scope-head');
             sh.setAttribute('role', 'button');
             sh.setAttribute('tabindex', '0');
+            // 접힘: 오른쪽에 안내문 / 펼침: 오른쪽에 '설정 초기화' 버튼(CSS로 토글)
             sh.innerHTML = '<span class="usun-scope-t"><span class="usun-scope-caret" aria-hidden="true">▾</span>질의 가이드 / 참고자료 등록</span>'
-                + '<span class="usun-scope-hint">미리 법령/지역 범위를 지정하면 답변생성성능이 개선됩니다.</span>';
+                + '<span class="usun-scope-hint">미리 법령/지역 범위를 지정하면 답변생성성능이 개선됩니다.</span>'
+                + '<button type="button" class="usun-scope-reset">설정 초기화</button>';
             function toggleScope() { setScopeCollapsed(scope.classList.toggle('collapsed')); }
             sh.addEventListener('click', toggleScope);
             sh.addEventListener('keydown', function (e) {
                 if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleScope(); }
+            });
+            sh.querySelector('.usun-scope-reset').addEventListener('click', function (e) {
+                e.stopPropagation();   // 토글 방지
+                doResetSettings();
             });
             scope.appendChild(sh);
             var grid = _el('div', 'usun-scope-grid');

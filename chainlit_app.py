@@ -406,6 +406,17 @@ try:
         added = _monitor_scan_texts([str(t) for t in texts][:200], key)
         return JSONResponse({"added": added})
 
+    # 설정 초기화 — 사용자가 추가(src=add)한 법령·조례 마커 제거(인용 스캔분은 보존)
+    @_cl_server_app.post("/monitor-clear")
+    async def _monitor_clear(request: Request):
+        key = request.cookies.get("anon_id", "")
+        if key:
+            _store = _MONITOR_REFS.get(key)
+            if _store:
+                for _typ in _store:
+                    _store[_typ] = {k: v for k, v in _store[_typ].items() if v.get("src") != "add"}
+        return JSONResponse({"ok": True})
+
     # 근거 더 찾기 — 대화 맥락에서 LLM으로 키워드 도출 → 판례·해석례 API 검색 → 후보 제안
     @_cl_server_app.get("/evidence-search")
     async def _evidence_search_g():
@@ -674,7 +685,7 @@ try:
     _MY_PATHS = {"/element-files/{object_key:path}", "/law-list", "/upload-cache",
                  "/upload-cache/delete", "/upload-cache/add", "/upload-cache/recache",
                  "/provider", "/websearch", "/region", "/starters-meta", "/monitor",
-                 "/law-search", "/law-add", "/monitor-rescan", "/evidence-search",
+                 "/law-search", "/law-add", "/monitor-rescan", "/monitor-clear", "/evidence-search",
                  "/evidence-context"}
     _front = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") in _MY_PATHS]
     _rest  = [r for r in _cl_server_app.router.routes if getattr(r, "path", "") not in _MY_PATHS]
