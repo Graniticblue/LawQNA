@@ -155,6 +155,36 @@ def cleanup_uploads(days: int = 30):
         print(f"[startup] 업로드 정리 생략(앱 계속): {e}")
 
 
+def vacuum_chroma():
+    """VACUUM_DB=1 일 때만: chroma.sqlite3의 빈 페이지를 회수한다.
+
+    delete_collection·FORCE_REINDEX를 반복해도 sqlite는 파일을 줄이지 않고 빈 페이지로
+    들고 있는다(측정 시점 533MB 중 95MB·17.8%가 빈 페이지). 볼륨 요금과 페이지 캐시를
+    그만큼 낭비하므로 가끔 한 번 돌린다. VACUUM 중에는 원본 크기만큼 임시 공간이
+    더 필요하니 볼륨 여유를 확인하고 켤 것. 완료 후 변수 제거.
+    """
+    if os.environ.get("VACUUM_DB", "").strip().lower() not in ("1", "true", "yes"):
+        return
+    sqlite_path = CHROMA_DIR / "chroma.sqlite3"
+    if not sqlite_path.exists():
+        print("[startup] VACUUM_DB 설정됐지만 chroma.sqlite3 없음 — 생략")
+        return
+    try:
+        import sqlite3
+        before = sqlite_path.stat().st_size
+        con = sqlite3.connect(str(sqlite_path))
+        free = con.execute("pragma freelist_count").fetchone()[0]
+        page = con.execute("pragma page_size").fetchone()[0]
+        print(f"[startup] VACUUM 시작 — 현재 {before/1e6:.1f}MB, 빈 페이지 {free*page/1e6:.1f}MB")
+        con.execute("VACUUM")
+        con.close()
+        after = sqlite_path.stat().st_size
+        print(f"[startup] VACUUM 완료 — {before/1e6:.1f}MB → {after/1e6:.1f}MB "
+              f"({(before-after)/1e6:.1f}MB 회수)")
+    except Exception as e:
+        print(f"[startup] VACUUM 실패(앱은 계속): {e}")
+
+
 def _split_article_hangs(article_no: str, content: str) -> list:
     """조 텍스트를 항 단위로 분할 — chainlit chunk_law_pdf와 동일 규칙.
     다항 조문이 한 청크로 임베딩되면 max_seq_length에 뒷항이 잘려 검색 누락되므로.
@@ -275,8 +305,9 @@ def index_region_packs():
             "region_ordinances",
             metadata={"hnsw:space": "cosine", "pack_sig": pack_sig})
 
-        from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-        embed = HuggingFaceEmbedding(model_name="jhgan/ko-sroberta-multitask")
+        sys.path.insert(0, str(BASE_DIR))
+        from embedder import get_embedder
+        embed = get_embedder()
 
         for p in packs:
             region = p["region"]
@@ -306,7 +337,7 @@ def index_region_packs():
                         })
             B = 64
             for s in range(0, len(ids), B):
-                embs = [embed.get_text_embedding(t) for t in texts[s:s + B]]
+                embs = embed.get_text_embedding_batch(texts[s:s + B])
                 col.add(ids=ids[s:s + B], embeddings=embs,
                         documents=texts[s:s + B], metadatas=metas[s:s + B])
             print(f"[startup] 지역 조례 팩 '{region}': 법규 {len(p['laws'])}건, 청크 {len(ids)}개 인덱싱 완료")
@@ -353,6 +384,7 @@ def ensure_court_cases():
 if __name__ == "__main__":
     ensure_chat_history_schema()
     cleanup_uploads()
+    vacuum_chroma()
     # FORCE_REINDEX=1 이면 기존 DB가 있어도 삭제 후 재빌드한다.
     # (임베딩 방식 변경 등으로 영구 볼륨의 DB를 갱신해야 할 때 사용.
     #  재빌드 후에는 이 변수를 제거해야 재시작마다 재빌드되지 않는다.)

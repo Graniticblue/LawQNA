@@ -25,11 +25,16 @@ pdfplumber==0.11.4
 google-genai>=1.16.0
 anthropic>=0.40.0
 chromadb==1.5.4
-sentence-transformers==5.2.3
-transformers==4.57.6
+# 임베딩은 onnxruntime 경로. torch·transformers·sentence-transformers·llama-index는
+# 런타임에서 제거했다 — 상주 1,164MB → 490MB (실측, embedder.py 주석 참조).
+# ONNX 자산은 Docker 1단계(embed-builder)가 만들어 /app/models 로 넣는다.
+# 로컬에서 자산 없이 돌리면 embedder.py가 torch 백엔드로 폴백하므로,
+# 그 경우에만 아래를 따로 설치할 것:
+#   pip install sentence-transformers==5.2.3 llama-index-embeddings-huggingface==0.6.1
+onnxruntime==1.24.3
+tokenizers==0.22.2
+numpy>=1.26
 python-dotenv==1.2.1
-huggingface-hub==0.36.2
-llama-index-embeddings-huggingface==0.6.1
 requests
 sqlalchemy>=2.0.0
 asyncpg>=0.29.0

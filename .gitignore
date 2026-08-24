@@ -7,6 +7,9 @@
 # ChromaDB 바이너리 (재생성 가능)
 data/chroma_db/
 
+# ONNX 임베딩 자산 (443MB, scripts/export_onnx_embedder.py로 재생성 — Docker 빌드 1단계가 생성)
+models/
+
 # 대용량 원본 데이터 (Git LFS 또는 별도 관리)
 seoul_reasoning_v6_with_original.jsonl
 data/qa_report.pdf

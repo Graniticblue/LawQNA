@@ -29,6 +29,18 @@
 - 스키마 self-test: `python scripts/curate_lib.py` → "신규 스키마 위반 0" 확인 후 커밋
 - 시제 게이트: `python scripts/check_temporal_drift.py --code XX-XXXX` (exit 2 = 커밋 금지)
 - 검수 보고서: `python scripts/make_ingest_report.py --code XX-XXXX` / `--case 사건번호`
+- ONNX 임베딩 자산(로컬 1회): `python scripts/export_onnx_embedder.py` → `models/`에 생성 + torch 대조 검증.
+  없으면 `embedder.py`가 torch로 폴백하므로 동작은 하지만 상주 메모리가 3배가 된다.
+- sqlite 빈 페이지 회수: `VACUUM_DB=1 python startup.py` (완료 후 변수 제거)
+
+## 임베딩 백엔드
+
+검색·인덱싱의 모든 임베딩은 `embedder.py`의 `get_embedder()` 하나를 지난다.
+ONNX Runtime 우선, 자산 없으면 torch 폴백 — **두 경로의 벡터는 동일**(코사인 1.00000000,
+최대 절대오차 1.5e-7)하므로 백엔드가 섞여도 재인덱싱이 필요 없고 eval 기준선도 그대로다.
+새 호출부를 만들 때 `HuggingFaceEmbedding`을 직접 부르지 말 것 — 컨테이너에는 torch가 없다.
+모델을 e5 계열 등으로 바꾸려면 prefix 지원을 `embedder.py`에 먼저 넣어야 한다
+(02_Indexer가 그 경우 실행을 중단시킨다).
 
 ## 커밋
 

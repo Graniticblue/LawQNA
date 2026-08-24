@@ -211,11 +211,13 @@ def save_manifest(manifest: dict) -> None:
 
 def index_chunks(all_chunks: list[dict], reset: bool = False) -> int:
     """청크 리스트를 precedents_2026_april에 직접 임베딩+저장"""
+    import sys
     import chromadb
-    from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from embedder import get_embedder
 
     print(f"임베딩 모델 로드: {EMBED_MODEL_NAME}")
-    embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL_NAME)
+    embed_model = get_embedder()
 
     CHROMA_DIR.mkdir(parents=True, exist_ok=True)
     client = chromadb.PersistentClient(path=str(CHROMA_DIR))

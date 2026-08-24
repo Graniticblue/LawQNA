@@ -62,8 +62,9 @@ def main():
     print(f"  → {len(records)}건 로드 완료")
 
     print(f"\n임베딩 모델 로드 중: {EMBED_MODEL_NAME}")
-    from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-    embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL_NAME)
+    sys.path.insert(0, str(BASE_DIR))
+    from embedder import get_embedder
+    embed_model = get_embedder()
     print("  → 임베딩 모델 로드 완료")
 
     print(f"\nChromaDB 연결 중: {CHROMA_DIR}")

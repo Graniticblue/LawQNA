@@ -388,12 +388,12 @@ def build_index(
     added = 0
     for i in range(0, len(new_docs), BATCH):
         batch = new_docs[i: i + BATCH]
-        ids, embeddings, texts, metas = [], [], [], []
-        for doc in batch:
-            ids.append(doc["id"])
-            embeddings.append(embed_model.get_text_embedding(doc["text"]))
-            texts.append(doc["text"])
-            metas.append(doc["meta"])
+        ids   = [doc["id"] for doc in batch]
+        texts = [doc["text"] for doc in batch]
+        metas = [doc["meta"] for doc in batch]
+        # 배치 임베딩 — 한 건씩 부르는 것과 벡터는 같고(마스크 가중 평균이라 패딩 무관)
+        # 배치당 세션 호출이 1회로 줄어 빌드 시간이 크게 짧아진다.
+        embeddings = embed_model.get_text_embedding_batch(texts)
         col.add(ids=ids, embeddings=embeddings, documents=texts, metadatas=metas)
         added += len(batch)
         print(f"    {added}/{len(new_docs)} 완료", end="\r")
@@ -454,13 +454,15 @@ def main() -> None:
     print("패키지 임포트 중...")
     try:
         import chromadb
-        from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+        sys.path.insert(0, str(BASE_DIR))
+        from embedder import get_embedder
     except ImportError as e:
         print(f"\n[ERROR] 필요한 패키지가 없습니다: {e}")
         print(
             "\n아래 명령어로 설치하세요:\n"
-            "pip install llama-index-embeddings-huggingface "
-            "chromadb sentence-transformers"
+            "pip install chromadb onnxruntime tokenizers\n"
+            "  (ONNX 자산이 없는 환경이면 추가로: "
+            "pip install llama-index-embeddings-huggingface sentence-transformers)"
         )
         sys.exit(1)
 
@@ -469,13 +471,13 @@ def main() -> None:
     print("  (처음 실행 시 HuggingFace Hub에서 모델 다운로드 -- 수분 소요)")
 
     if USE_E5_PREFIX:
-        embed_model = HuggingFaceEmbedding(
-            model_name=EMBED_MODEL_NAME,
-            query_instruction="query: ",
-            text_instruction="passage: ",
+        # e5 계열로 갈아탈 때만 걸리는 가지. ONNX 임베더는 prefix 개념이 없어
+        # 벡터가 조용히 달라지므로, 그때는 embedder.py에 prefix 지원을 먼저 넣을 것.
+        raise SystemExit(
+            f"[ERROR] {EMBED_MODEL_NAME}는 query/passage prefix가 필요한데 "
+            "embedder.py가 아직 prefix를 지원하지 않는다. embedder.py를 먼저 확장할 것."
         )
-    else:
-        embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL_NAME)
+    embed_model = get_embedder()
 
     print("  임베딩 모델 로드 완료")
 

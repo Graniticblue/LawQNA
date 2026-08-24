@@ -9,3 +9,6 @@ data/chroma_db/
 신구대조표_인쇄본/
 판례/
 tmp/
+# ONNX 자산은 빌드 1단계(embed-builder)가 컨테이너 안에서 만든다.
+# 로컬 models/(443MB)를 빌드 컨텍스트로 올리면 배포마다 그만큼 업로드된다.
+models/

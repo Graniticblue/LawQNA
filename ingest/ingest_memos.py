@@ -13,9 +13,10 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
 
 import chromadb
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
 BASE_DIR   = Path(__file__).parent.parent
+sys.path.insert(0, str(BASE_DIR))
+from embedder import get_embedder
 DATA_DIR   = BASE_DIR / "data"
 CHROMA_DIR = Path(os.environ.get("CHROMA_DB_PATH", str(DATA_DIR / "chroma_db")))
 MEMOS_PATH = DATA_DIR / "memos.jsonl"
@@ -31,7 +32,7 @@ def main():
 
     # ── 임베딩 모델 로드 ──────────────────────────────────────
     print(f"임베딩 모델 로드: {EMBED_MODEL_NAME}")
-    embed = HuggingFaceEmbedding(model_name=EMBED_MODEL_NAME)
+    embed = get_embedder()
 
     # ── ChromaDB 클라이언트 ───────────────────────────────────
     client = chromadb.PersistentClient(path=str(CHROMA_DIR))

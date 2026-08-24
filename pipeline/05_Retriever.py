@@ -30,12 +30,16 @@ from pathlib import Path
 from typing import Optional
 
 import chromadb
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
 # ============================================================
 # 경로 설정
 # ============================================================
 BASE_DIR        = Path(__file__).parent.parent
+
+import sys as _sys
+if str(BASE_DIR) not in _sys.path:
+    _sys.path.insert(0, str(BASE_DIR))
+from embedder import get_embedder   # ONNX 우선 / torch 폴백 (벡터 동일)
 DATA_DIR        = BASE_DIR / "data"
 CHROMA_DIR      = Path(os.environ.get("CHROMA_DB_PATH", str(DATA_DIR / "chroma_db")))
 MAP_PATH        = DATA_DIR / "keyword_law_map.json"
@@ -2353,7 +2357,7 @@ class Retriever:
 
     def _init_searcher(self) -> HybridSearcher:
         print("임베딩 모델 로드 중...")
-        embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL_NAME)
+        embed_model = get_embedder()
         print("Chroma DB 연결 중...")
         chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR))
         return HybridSearcher(chroma_client, embed_model)
